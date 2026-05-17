@@ -890,7 +890,7 @@ function renderProcessos(){
 
 function renderProcessoDetalhe(p){
   const custo=tc(p); const lucro=(p.cambioReais||0)-custo;
-  const docItems=[['invoice','📄 Invoice'],['contrato','📃 Contrato'],['packingList','📦 Packing List'],['bl','🚢 BL'],['due','🏛️ DU-E'],['nfe','🧾 NF-e'],['comprovantes','🖨️ Comprovantes'],['certOrigem','🌐 Cert. Origem']];
+  const docItems=[['invoice','📄 Invoice'],['contrato','📃 Contrato'],['packingList','📦 Packing List'],['bl','🚢 BL - Bill of Lading'],['due','🏛️ DU-E'],['nfe','🧾 NF-e'],['comprovantes','🖨️ Comprovantes Câmbio'],['certOrigem','🌐 Cert. Origem'],['proforma','📋 Proforma Invoice'],['seguro','🛡️ Seguro de Carga'],['pesagem','⚖️ Laudo de Pesagem'],['outros','📁 Outros Documentos']];
   return `
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap">
     <button class="btn btn-secondary btn-sm" onclick="goBack()"><span style="font-size:15px">←</span> Voltar</button>
@@ -973,12 +973,21 @@ function renderProcessoDetalhe(p){
     <div class="card-title"><div class="card-title-left">📂 Documentos</div><span style="color:var(--muted);font-size:10px">Clique para anexar (link Google Drive)</span></div>
     <div class="doc-grid">
       ${docItems.map(([k,l])=>`
-        <div class="doc-chip ${p.docs&&p.docs[k]?'has-doc':''}" onclick="anexarDoc('${p.id}','${k}')">
-          ${p.docs&&p.docs[k]?'✅':'📎'} ${l}
+        <div style="position:relative">
+          <div class="doc-chip ${p.docs&&p.docs[k]?'has-doc':''}" onclick="anexarDoc('${p.id}','${k}')">
+            ${p.docs&&p.docs[k]?'✅':'📎'} ${l}
+          </div>
+          ${p.docs&&p.docs[k]?`<a href="${sanitizeUrl(p.docs[k])}" target="_blank" rel="noopener noreferrer"
+            style="position:absolute;top:2px;right:4px;font-size:9px;color:var(--accent2);text-decoration:none"
+            onclick="event.stopPropagation()" title="Abrir no Drive">↗</a>`:''}
         </div>`).join('')}
     </div>
-    <div style="margin-top:12px;padding:10px;background:var(--bg);border-radius:8px;font-size:11px;color:var(--muted)">
-      💡 Cole o link do Google Drive ao clicar em cada documento. O arquivo fica salvo na sua nuvem.
+    <div style="margin-top:12px;padding:10px;background:var(--bg);border-radius:8px;font-size:11px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <span>💡 Clique em cada documento para colar o link do Google Drive.</span>
+      <button onclick="abrirPastaProcesso(p)"
+        style="background:var(--accent2);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">
+        📂 ${p.docs&&p.docs._folderUrl ? 'Abrir Pasta do Processo' : 'Criar Pasta no Drive'}
+      </button>
     </div>
   </div>`;
 }
@@ -2449,7 +2458,7 @@ function anexarDoc(processId,docKey){
     +'<div style="color:var(--muted2);font-size:12px;margin-bottom:16px"><strong style="color:var(--accent)">'+label+'</strong> — Processo '+processId+'</div>'
     +'<div class="ig"><label class="lbl">Link do Google Drive</label>'
     +'<input type="url" id="modal-link" placeholder="Cole aqui o link do Google Drive..." style="font-size:13px"/></div>'
-    +'<div style="color:var(--muted);font-size:11px;margin-bottom:16px">💡 No Google Drive: clique com botão direito → Compartilhar → Copiar link</div>'
+    +'<div style="color:var(--muted);font-size:11px;margin-bottom:16px">💡 Abra a pasta do processo no Drive, faça upload do arquivo e copie o link de compartilhamento.</div>'
     +'<div style="display:flex;gap:8px;justify-content:flex-end">'
     +'<button class="btn btn-secondary" id="modal-cancel-btn">Cancelar</button>'
     +'<button class="btn btn-primary" onclick="confirmarDoc()">✅ Salvar Link</button>'
@@ -2581,7 +2590,14 @@ function attachEvents(){
     else S.processos.push({...obj,docs:{}});
     S.sub=S.processos.find(p=>p.id===obj.id);
     S.editMode=false; S.createMode=false;
-    showToast(); render(); updateSB();
+    showToast(); scheduleAutoSave(); render();
+    // Auto-create Drive folder for new/existing process
+    setTimeout(()=>{
+      const savedP = S.processos.find(x=>x.id===obj.id);
+      if(savedP && !savedP?.docs?._folderId && window._sheetsToken){
+        criarPastaProcesso(savedP).then(()=>render());
+      }
+    }, 500); updateSB();
   });
 }
 
@@ -2610,7 +2626,7 @@ function getAccessToken() {
     }
     const client = google.accounts.oauth2.initTokenClient({
       client_id: '69223242564-l80vfi8s0i58tf4b6jumrbvt82mdjlik.apps.googleusercontent.com',
-      scope: 'https://www.googleapis.com/auth/spreadsheets',
+      scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive',
       callback: (resp) => {
         if (resp.error) { reject(resp.error); return; }
         window._sheetsToken = resp.access_token;
@@ -2782,6 +2798,116 @@ function showSyncIndicator(msg='Sincronizando...') {
 function hideSyncIndicator() {
   const el = document.getElementById('sync-indicator');
   if (el) el.style.display = 'none';
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// GOOGLE DRIVE INTEGRATION
+// ═══════════════════════════════════════════════════════════
+const DRIVE_API = 'https://www.googleapis.com/drive/v3';
+const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
+const ROOT_FOLDER_NAME = 'Fu Song ERP';
+
+async function driveAPI(method, endpoint, body=null, params='') {
+  const token = await getAccessToken();
+  const opts = {
+    method,
+    headers: {
+      'Authorization': 'Bearer ' + token,
+      'Content-Type': 'application/json'
+    }
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const url = DRIVE_API + endpoint + (params ? '?' + params : '');
+  const res = await fetch(url, opts);
+  if (!res.ok) {
+    const err = await res.json().catch(()=>({}));
+    throw new Error(err.error?.message || 'Drive API error ' + res.status);
+  }
+  return res.json();
+}
+
+// Get or create a folder by name inside a parent
+async function getOrCreateFolder(name, parentId=null) {
+  // Search for existing folder
+  const q = `mimeType='application/vnd.google-apps.folder' and name='${name}' and trashed=false`
+    + (parentId ? ` and '${parentId}' in parents` : '');
+  const search = await driveAPI('GET', '/files', null,
+    `q=${encodeURIComponent(q)}&fields=files(id,name)&spaces=drive`);
+  if (search.files && search.files.length > 0) {
+    return search.files[0].id;
+  }
+  // Create folder
+  const meta = { name, mimeType: 'application/vnd.google-apps.folder' };
+  if (parentId) meta.parents = [parentId];
+  const created = await driveAPI('POST', '/files', meta);
+  return created.id;
+}
+
+// Ensure root folder exists, cache ID
+async function getRootFolderId() {
+  if (window._rootFolderId) return window._rootFolderId;
+  const id = await getOrCreateFolder(ROOT_FOLDER_NAME);
+  window._rootFolderId = id;
+  // Save to CONFIG sheet
+  saveConfig('drive_root_folder_id', id);
+  return id;
+}
+
+// Create process folder structure
+async function criarPastaProcesso(processo) {
+  try {
+    showSyncIndicator('Criando pasta no Drive...');
+    const rootId = await getRootFolderId();
+    // Folder name: FS260096 — Cliente
+    const clienteShort = (processo.cliente||'').split(' ').slice(0,3).join(' ');
+    const folderName = `${processo.id}${clienteShort ? ' — ' + clienteShort : ''}`;
+    const folderId = await getOrCreateFolder(folderName, rootId);
+    const folderUrl = `https://drive.google.com/drive/folders/${folderId}`;
+
+    // Save folder ID and URL to processo
+    const p = S.processos.find(x => x.id === processo.id);
+    if (p) {
+      if (!p.docs) p.docs = {};
+      p.docs._folderId = folderId;
+      p.docs._folderUrl = folderUrl;
+    }
+
+    hideSyncIndicator();
+    scheduleAutoSave();
+    return { folderId, folderUrl };
+  } catch(e) {
+    hideSyncIndicator();
+    console.warn('Erro ao criar pasta:', e.message);
+    showToast('⚠️ Não foi possível criar pasta no Drive');
+    return null;
+  }
+}
+
+// Save config value to CONFIG sheet
+async function saveConfig(key, value) {
+  try {
+    const token = await getAccessToken();
+    // Append to CONFIG sheet
+    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/CONFIG!A:B:append?valueInputOption=RAW`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values: [[key, value]] })
+    });
+  } catch(e) {}
+}
+
+// Open process Drive folder
+function abrirPastaProcesso(p) {
+  const url = p.docs?._folderUrl;
+  if (url) {
+    window.open(sanitizeUrl(url), '_blank', 'noopener,noreferrer');
+  } else {
+    // Create folder first then open
+    criarPastaProcesso(p).then(result => {
+      if (result) window.open(sanitizeUrl(result.folderUrl), '_blank', 'noopener,noreferrer');
+    });
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
