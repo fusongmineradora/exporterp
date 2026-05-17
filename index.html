@@ -678,6 +678,7 @@ function render(){
   if(mainEl2) mainEl2.style.display = 'block';
   if(fn) document.getElementById('main').innerHTML=fn();
   attachEvents();
+  makeFabDraggable();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2560,6 +2561,67 @@ function calcularTotalCustos(){
   if(el) el.textContent = 'R$ '+total.toLocaleString('pt-BR',{minimumFractionDigits:2});
 }
 
+function makeFabDraggable() {
+  const fab = document.getElementById('dash-fab');
+  if (!fab || fab._draggable) return;
+  fab._draggable = true;
+  let dragging = false, startX, startY, origX, origY;
+
+  const onDown = (e) => {
+    dragging = false;
+    const touch = e.touches ? e.touches[0] : e;
+    startX = touch.clientX; startY = touch.clientY;
+    const rect = fab.getBoundingClientRect();
+    origX = rect.left; origY = rect.top;
+    fab.style.transition = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('touchmove', onMove, {passive:false});
+    document.addEventListener('touchend', onUp);
+  };
+
+  const onMove = (e) => {
+    const touch = e.touches ? e.touches[0] : e;
+    const dx = touch.clientX - startX;
+    const dy = touch.clientY - startY;
+    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+      dragging = true;
+      if (e.cancelable) e.preventDefault();
+    }
+    if (!dragging) return;
+    const newX = Math.max(0, Math.min(window.innerWidth - fab.offsetWidth, origX + dx));
+    const newY = Math.max(0, Math.min(window.innerHeight - fab.offsetHeight, origY + dy));
+    fab.style.position = 'fixed';
+    fab.style.left = newX + 'px';
+    fab.style.top = newY + 'px';
+    fab.style.bottom = 'auto';
+    localStorage.setItem('fab-pos', JSON.stringify({left: newX, top: newY}));
+  };
+
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend', onUp);
+    fab.style.transition = '';
+    if (!dragging) nav('dashboard');
+  };
+
+  fab.addEventListener('mousedown', onDown);
+  fab.addEventListener('touchstart', onDown, {passive:true});
+
+  // Restore saved position
+  try {
+    const saved = JSON.parse(localStorage.getItem('fab-pos'));
+    if (saved) {
+      fab.style.position = 'fixed';
+      fab.style.left = saved.left + 'px';
+      fab.style.top = saved.top + 'px';
+      fab.style.bottom = 'auto';
+    }
+  } catch(e) {}
+}
+
 function attachEvents(){
   // Salvar câmbio
   const saveCambio = document.getElementById('btn-salvar-cambio');
@@ -2711,7 +2773,7 @@ async function setupSheets() {
     }
 
     // Write headers for each sheet
-    const headerData = {"PROCESSOS": ["id", "embarque", "status", "cliente", "usci", "clienteTel", "clienteEmail", "clienteAdd", "produto", "ncm", "moeda", "pol", "pod", "origem", "destino", "incoterm", "pagamento", "peso", "companhia", "booking", "qtdContainer", "containers", "saida", "deadlineCarga", "deadlineDraft", "logCidade", "logTransportadora", "logEmbarque", "logChegada", "logArmazem", "logModalidade", "logVazio", "logPorto", "logEnd", "custoMaritimo", "custoMaritimo_status", "custoFrete", "custoFrete_status", "custoCertificado", "custoCertificado_status", "custoArmazem", "custoArmazem_status", "custoPorto", "custoPorto_status", "custoDespachante", "custoDespachante_status", "custoServTerceiros", "custoServTerceiros_status", "custoImpostos", "custoImpostos_status", "custoProduto", "custoProduto_status", "cambioInvoice", "cambioTaxa", "cambioReais", "cambioIOF", "cambioSpread", "cambioRecebido", "cambioFechamento", "cambioRecebimento", "cambioBanco", "cambioStatus", "dueNumero", "dueChave", "invoiceNum", "contratoNum"], "CLIENTES": ["id", "nome", "usci", "tel", "email", "end"], "FORNECEDORES": ["id", "tipo", "nome", "cnpj", "ie", "cep", "email", "end", "banco", "agencia", "conta", "pix"], "LANCAMENTOS": ["id", "data", "tipo", "descricao", "valor", "empresa", "processo", "comprovante", "nfe", "obs"], "CUSTOS_FIXOS": ["id", "mes", "ano", "contador", "aluguel", "software", "internet", "telefone", "impostos", "outros"], "CONFIG": ["chave", "valor"]};
+    const headerData = {"PROCESSOS": ["id", "embarque", "status", "cliente", "usci", "clienteTel", "clienteEmail", "clienteAdd", "produto", "ncm", "moeda", "pol", "pod", "origem", "destino", "incoterm", "pagamento", "peso", "companhia", "booking", "qtdContainer", "containers", "saida", "deadlineCarga", "deadlineDraft", "logCidade", "logTransportadora", "logEmbarque", "logChegada", "logArmazem", "logModalidade", "logVazio", "logPorto", "logEnd", "custoMaritimo", "custoMaritimo_status", "custoFrete", "custoFrete_status", "custoCertificado", "custoCertificado_status", "custoArmazem", "custoArmazem_status", "custoPorto", "custoPorto_status", "custoDespachante", "custoDespachante_status", "custoServTerceiros", "custoServTerceiros_status", "custoImpostos", "custoImpostos_status", "custoProduto", "custoProduto_status", "cambioInvoice", "cambioTaxa", "cambioReais", "cambioIOF", "cambioSpread", "cambioRecebido", "cambioFechamento", "cambioRecebimento", "cambioBanco", "cambioStatus", "dueNumero", "dueChave", "invoiceNum", "contratoNum", "docs"], "CLIENTES": ["id", "nome", "usci", "tel", "email", "end"], "FORNECEDORES": ["id", "tipo", "nome", "cnpj", "ie", "cep", "email", "end", "banco", "agencia", "conta", "pix"], "LANCAMENTOS": ["id", "data", "tipo", "descricao", "valor", "empresa", "processo", "comprovante", "nfe", "obs"], "CUSTOS_FIXOS": ["id", "mes", "ano", "contador", "aluguel", "software", "internet", "telefone", "impostos", "outros"], "CONFIG": ["chave", "valor"]};
     const updates = Object.entries(headerData).map(([sheet, cols]) => ({
       range: `${sheet}!A1`,
       values: [cols]
@@ -2753,6 +2815,9 @@ async function loadFromSheets() {
       if (p.containers && typeof p.containers === 'string') {
         try { p.containers = JSON.parse(p.containers); } catch(e) { p.containers = [p.container||'']; }
       }
+      if (p.docs && typeof p.docs === 'string') {
+        try { p.docs = JSON.parse(p.docs); } catch(e) { p.docs = {}; }
+      } else if (!p.docs) { p.docs = {}; }
     });
     lanc.forEach(l => { l.valor = parseFloat(l.valor) || 0; });
     fixos.forEach(m => {
@@ -2779,10 +2844,11 @@ async function saveToSheets() {
     const toRow = (obj, headers) => headers.map(h => {
       const v = obj[h];
       if (h === 'containers' && Array.isArray(v)) return JSON.stringify(v);
+      if (h === 'docs' && typeof v === 'object' && v !== null) return JSON.stringify(v);
       return v === null || v === undefined ? '' : String(v);
     });
 
-    const headerData = {"PROCESSOS": ["id", "embarque", "status", "cliente", "usci", "clienteTel", "clienteEmail", "clienteAdd", "produto", "ncm", "moeda", "pol", "pod", "origem", "destino", "incoterm", "pagamento", "peso", "companhia", "booking", "qtdContainer", "containers", "saida", "deadlineCarga", "deadlineDraft", "logCidade", "logTransportadora", "logEmbarque", "logChegada", "logArmazem", "logModalidade", "logVazio", "logPorto", "logEnd", "custoMaritimo", "custoMaritimo_status", "custoFrete", "custoFrete_status", "custoCertificado", "custoCertificado_status", "custoArmazem", "custoArmazem_status", "custoPorto", "custoPorto_status", "custoDespachante", "custoDespachante_status", "custoServTerceiros", "custoServTerceiros_status", "custoImpostos", "custoImpostos_status", "custoProduto", "custoProduto_status", "cambioInvoice", "cambioTaxa", "cambioReais", "cambioIOF", "cambioSpread", "cambioRecebido", "cambioFechamento", "cambioRecebimento", "cambioBanco", "cambioStatus", "dueNumero", "dueChave", "invoiceNum", "contratoNum"], "CLIENTES": ["id", "nome", "usci", "tel", "email", "end"], "FORNECEDORES": ["id", "tipo", "nome", "cnpj", "ie", "cep", "email", "end", "banco", "agencia", "conta", "pix"], "LANCAMENTOS": ["id", "data", "tipo", "descricao", "valor", "empresa", "processo", "comprovante", "nfe", "obs"], "CUSTOS_FIXOS": ["id", "mes", "ano", "contador", "aluguel", "software", "internet", "telefone", "impostos", "outros"], "CONFIG": ["chave", "valor"]};
+    const headerData = {"PROCESSOS": ["id", "embarque", "status", "cliente", "usci", "clienteTel", "clienteEmail", "clienteAdd", "produto", "ncm", "moeda", "pol", "pod", "origem", "destino", "incoterm", "pagamento", "peso", "companhia", "booking", "qtdContainer", "containers", "saida", "deadlineCarga", "deadlineDraft", "logCidade", "logTransportadora", "logEmbarque", "logChegada", "logArmazem", "logModalidade", "logVazio", "logPorto", "logEnd", "custoMaritimo", "custoMaritimo_status", "custoFrete", "custoFrete_status", "custoCertificado", "custoCertificado_status", "custoArmazem", "custoArmazem_status", "custoPorto", "custoPorto_status", "custoDespachante", "custoDespachante_status", "custoServTerceiros", "custoServTerceiros_status", "custoImpostos", "custoImpostos_status", "custoProduto", "custoProduto_status", "cambioInvoice", "cambioTaxa", "cambioReais", "cambioIOF", "cambioSpread", "cambioRecebido", "cambioFechamento", "cambioRecebimento", "cambioBanco", "cambioStatus", "dueNumero", "dueChave", "invoiceNum", "contratoNum", "docs"], "CLIENTES": ["id", "nome", "usci", "tel", "email", "end"], "FORNECEDORES": ["id", "tipo", "nome", "cnpj", "ie", "cep", "email", "end", "banco", "agencia", "conta", "pix"], "LANCAMENTOS": ["id", "data", "tipo", "descricao", "valor", "empresa", "processo", "comprovante", "nfe", "obs"], "CUSTOS_FIXOS": ["id", "mes", "ano", "contador", "aluguel", "software", "internet", "telefone", "impostos", "outros"], "CONFIG": ["chave", "valor"]};
     const data = [
       { sheet: 'PROCESSOS', items: S.processos },
       { sheet: 'CLIENTES', items: S.clientes },
@@ -2938,9 +3004,16 @@ async function saveConfig(key, value) {
 
 // Open process Drive folder
 async function abrirPastaProcesso(p) {
-  // If we already have the folder URL, just open it
+  // If we have folder URL, open it
   if (p.docs && p.docs._folderUrl) {
     window.open(sanitizeUrl(p.docs._folderUrl), '_blank', 'noopener,noreferrer');
+    return;
+  }
+  // If we have folderId, construct URL
+  if (p.docs && p.docs._folderId) {
+    const url = 'https://drive.google.com/drive/folders/' + p.docs._folderId;
+    if (!p.docs._folderUrl) { p.docs._folderUrl = url; scheduleAutoSave(); }
+    window.open(sanitizeUrl(url), '_blank', 'noopener,noreferrer');
     return;
   }
   // Try to create/find folder then open
