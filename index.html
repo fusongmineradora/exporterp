@@ -246,6 +246,7 @@ select option{background:var(--bg2);}
 /* ── TRACK ROW ENHANCED ── */
 .status-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:4px;}
 
+@keyframes spin{to{transform:rotate(360deg)}}
 /* ── LOGIN SCREEN ── */
 #login-screen{
   position:fixed;inset:0;background:#07101f;z-index:9999;
@@ -336,6 +337,9 @@ select option{background:var(--bg2);}
   <div class="nav-section">Gestão</div>
   <button class="nav-btn" onclick="nav('cadastro')" id="nav-cadastro"><span class="nav-icon">🗂️</span><span>Cadastro</span></button>
   <button class="nav-btn" onclick="nav('relatorios')" id="nav-relatorios"><span class="nav-icon">📑</span><span>Relatórios</span></button>
+  <button onclick="saveToSheets()" style="width:100%;margin-bottom:6px;background:transparent;border:1px solid var(--accent2);border-radius:8px;padding:7px;color:var(--accent2);font-size:11px;cursor:pointer;font-family:'Inter',sans-serif">
+    ☁️ Salvar agora
+  </button>
   <button onclick="logoutUser()" style="width:100%;margin-bottom:6px;background:transparent;border:1px solid var(--border);border-radius:8px;padding:7px;color:var(--muted);font-size:11px;cursor:pointer;font-family:'Inter',sans-serif" onmouseover="this.style.color='var(--red)';this.style.borderColor='var(--red)'" onmouseout="this.style.color='var(--muted)';this.style.borderColor='var(--border)'">
     🚪 Sair
   </button>
@@ -519,6 +523,16 @@ function handleGoogleLogin(response) {
     // Init ERP
     applyTheme();
     nav('dashboard');
+
+    // Setup and load from Google Sheets
+    setTimeout(async () => {
+      try {
+        await setupSheets();
+        await loadFromSheets();
+      } catch(e) {
+        console.warn('Sheets init:', e);
+      }
+    }, 1000);
 
   } catch(e) {
     // Login error handled silently
@@ -1678,6 +1692,7 @@ function salvarCadastro(){
 
   modal.remove();
   showToast();
+  scheduleAutoSave();
   render();
 }
 
@@ -2521,7 +2536,7 @@ function attachEvents(){
         Object.assign(S.processos[0],obj);
       }
       S.cambioTab='lista';
-      showToast(); render();
+      showToast(); scheduleAutoSave(); render();
     });
   }
 
@@ -2574,6 +2589,199 @@ function logoutUser(){
   sessionStorage.removeItem('erp-user');
   document.getElementById('main').style.display='none';
   document.getElementById('login-screen').style.display='flex';
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// GOOGLE SHEETS INTEGRATION
+// ═══════════════════════════════════════════════════════════
+const SHEET_ID = '1-Or9ewLhLkunUHP8GgOw9rZWd2k2bhMS8_93Ie1znXY';
+const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
+
+// Get current OAuth token from Google Identity Services
+function getAccessToken() {
+  return new Promise((resolve, reject) => {
+    const user = sessionStorage.getItem('erp-user');
+    if (!user) { reject('Not logged in'); return; }
+    // Use GIS token client for Sheets scope
+    if (window._sheetsToken && window._sheetsTokenExpiry > Date.now()) {
+      resolve(window._sheetsToken);
+      return;
+    }
+    const client = google.accounts.oauth2.initTokenClient({
+      client_id: '69223242564-l80vfi8s0i58tf4b6jumrbvt82mdjlik.apps.googleusercontent.com',
+      scope: 'https://www.googleapis.com/auth/spreadsheets',
+      callback: (resp) => {
+        if (resp.error) { reject(resp.error); return; }
+        window._sheetsToken = resp.access_token;
+        window._sheetsTokenExpiry = Date.now() + (resp.expires_in * 1000) - 60000;
+        resolve(resp.access_token);
+      },
+    });
+    client.requestAccessToken({prompt: ''});
+  });
+}
+
+// Generic Sheets API call
+async function sheetsAPI(method, endpoint, body=null) {
+  const token = await getAccessToken();
+  const opts = {
+    method,
+    headers: {
+      'Authorization': 'Bearer ' + token,
+      'Content-Type': 'application/json'
+    }
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(SHEETS_API + endpoint, opts);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error?.message || 'Sheets API error');
+  }
+  return res.json();
+}
+
+// ── SETUP: Create sheets if they don't exist ──────────────
+async function setupSheets() {
+  try {
+    const info = await sheetsAPI('GET', `/${SHEET_ID}?fields=sheets.properties.title`);
+    const existing = info.sheets.map(s => s.properties.title);
+    const needed = ['PROCESSOS', 'CLIENTES', 'FORNECEDORES', 'LANCAMENTOS', 'CUSTOS_FIXOS', 'CONFIG'];
+    const toCreate = needed.filter(n => !existing.includes(n));
+
+    if (toCreate.length > 0) {
+      await sheetsAPI('POST', `/${SHEET_ID}:batchUpdate`, {
+        requests: toCreate.map(title => ({addSheet: {properties: {title}}}))
+      });
+    }
+
+    // Write headers for each sheet
+    const headerData = {"PROCESSOS": ["id", "embarque", "status", "cliente", "usci", "clienteTel", "clienteEmail", "clienteAdd", "produto", "ncm", "moeda", "pol", "pod", "origem", "destino", "incoterm", "pagamento", "peso", "companhia", "booking", "qtdContainer", "containers", "saida", "deadlineCarga", "deadlineDraft", "logCidade", "logTransportadora", "logEmbarque", "logChegada", "logArmazem", "logModalidade", "logVazio", "logPorto", "logEnd", "custoMaritimo", "custoMaritimo_status", "custoFrete", "custoFrete_status", "custoCertificado", "custoCertificado_status", "custoArmazem", "custoArmazem_status", "custoPorto", "custoPorto_status", "custoDespachante", "custoDespachante_status", "custoServTerceiros", "custoServTerceiros_status", "custoImpostos", "custoImpostos_status", "custoProduto", "custoProduto_status", "cambioInvoice", "cambioTaxa", "cambioReais", "cambioIOF", "cambioSpread", "cambioRecebido", "cambioFechamento", "cambioRecebimento", "cambioBanco", "cambioStatus", "dueNumero", "dueChave", "invoiceNum", "contratoNum"], "CLIENTES": ["id", "nome", "usci", "tel", "email", "end"], "FORNECEDORES": ["id", "tipo", "nome", "cnpj", "ie", "cep", "email", "end", "banco", "agencia", "conta", "pix"], "LANCAMENTOS": ["id", "data", "tipo", "descricao", "valor", "empresa", "processo", "comprovante", "nfe", "obs"], "CUSTOS_FIXOS": ["id", "mes", "ano", "contador", "aluguel", "software", "internet", "telefone", "impostos", "outros"], "CONFIG": ["chave", "valor"]};
+    const updates = Object.entries(headerData).map(([sheet, cols]) => ({
+      range: `${sheet}!A1`,
+      values: [cols]
+    }));
+    await sheetsAPI('PUT', `/${SHEET_ID}/values:batchUpdate`, {
+      valueInputOption: 'RAW',
+      data: updates
+    });
+    console.log('Sheets setup complete');
+  } catch(e) {
+    console.warn('Setup sheets error:', e.message);
+  }
+}
+
+// ── LOAD: Read all data from Sheets ──────────────────────
+async function loadFromSheets() {
+  try {
+    showSyncIndicator('Carregando dados...');
+    const ranges = ['PROCESSOS', 'CLIENTES', 'FORNECEDORES', 'LANCAMENTOS', 'CUSTOS_FIXOS'];
+    const res = await sheetsAPI('GET',
+      `/${SHEET_ID}/values:batchGet?ranges=${ranges.join('&ranges=')}&majorDimension=ROWS`
+    );
+    const parse = (vr) => {
+      if (!vr?.values || vr.values.length < 2) return [];
+      const headers = vr.values[0];
+      return vr.values.slice(1).map(row => {
+        const obj = {};
+        headers.forEach((h, i) => { obj[h] = row[i] || ''; });
+        return obj;
+      });
+    };
+    const [proc, cli, forn, lanc, fixos] = res.valueRanges.map(parse);
+    // Parse numeric fields in processos
+    proc.forEach(p => {
+      ['custoMaritimo','custoFrete','custoCertificado','custoArmazem','custoPorto',
+       'custoDespachante','custoServTerceiros','custoImpostos','custoProduto',
+       'cambioInvoice','cambioTaxa','cambioReais','cambioIOF','cambioSpread','cambioRecebido'
+      ].forEach(k => { p[k] = parseFloat(p[k]) || 0; });
+      if (p.containers && typeof p.containers === 'string') {
+        try { p.containers = JSON.parse(p.containers); } catch(e) { p.containers = [p.container||'']; }
+      }
+    });
+    lanc.forEach(l => { l.valor = parseFloat(l.valor) || 0; });
+    fixos.forEach(m => {
+      ['contador','aluguel','software','internet','telefone','impostos','outros'
+      ].forEach(k => { m[k] = parseFloat(m[k]) || 0; });
+    });
+    if (proc.length > 0) S.processos = proc;
+    if (cli.length > 0) S.clientes = cli;
+    if (forn.length > 0) S.fornecedores = forn;
+    if (lanc.length > 0) S.lancamentos = lanc;
+    if (fixos.length > 0) S.custosMensais = fixos;
+    hideSyncIndicator();
+    render();
+  } catch(e) {
+    hideSyncIndicator();
+    console.warn('Load error:', e.message);
+  }
+}
+
+// ── SAVE: Write data to Sheets ────────────────────────────
+async function saveToSheets() {
+  try {
+    showSyncIndicator('Salvando...');
+    const toRow = (obj, headers) => headers.map(h => {
+      const v = obj[h];
+      if (h === 'containers' && Array.isArray(v)) return JSON.stringify(v);
+      return v === null || v === undefined ? '' : String(v);
+    });
+
+    const headerData = {"PROCESSOS": ["id", "embarque", "status", "cliente", "usci", "clienteTel", "clienteEmail", "clienteAdd", "produto", "ncm", "moeda", "pol", "pod", "origem", "destino", "incoterm", "pagamento", "peso", "companhia", "booking", "qtdContainer", "containers", "saida", "deadlineCarga", "deadlineDraft", "logCidade", "logTransportadora", "logEmbarque", "logChegada", "logArmazem", "logModalidade", "logVazio", "logPorto", "logEnd", "custoMaritimo", "custoMaritimo_status", "custoFrete", "custoFrete_status", "custoCertificado", "custoCertificado_status", "custoArmazem", "custoArmazem_status", "custoPorto", "custoPorto_status", "custoDespachante", "custoDespachante_status", "custoServTerceiros", "custoServTerceiros_status", "custoImpostos", "custoImpostos_status", "custoProduto", "custoProduto_status", "cambioInvoice", "cambioTaxa", "cambioReais", "cambioIOF", "cambioSpread", "cambioRecebido", "cambioFechamento", "cambioRecebimento", "cambioBanco", "cambioStatus", "dueNumero", "dueChave", "invoiceNum", "contratoNum"], "CLIENTES": ["id", "nome", "usci", "tel", "email", "end"], "FORNECEDORES": ["id", "tipo", "nome", "cnpj", "ie", "cep", "email", "end", "banco", "agencia", "conta", "pix"], "LANCAMENTOS": ["id", "data", "tipo", "descricao", "valor", "empresa", "processo", "comprovante", "nfe", "obs"], "CUSTOS_FIXOS": ["id", "mes", "ano", "contador", "aluguel", "software", "internet", "telefone", "impostos", "outros"], "CONFIG": ["chave", "valor"]};
+    const data = [
+      { sheet: 'PROCESSOS', items: S.processos },
+      { sheet: 'CLIENTES', items: S.clientes },
+      { sheet: 'FORNECEDORES', items: S.fornecedores },
+      { sheet: 'LANCAMENTOS', items: S.lancamentos || [] },
+      { sheet: 'CUSTOS_FIXOS', items: S.custosMensais || [] },
+    ];
+
+    const updates = data.map(({sheet, items}) => {
+      const headers = headerData[sheet];
+      const rows = [headers, ...items.map(item => toRow(item, headers))];
+      return { range: `${sheet}!A1`, values: rows };
+    });
+
+    await sheetsAPI('PUT', `/${SHEET_ID}/values:batchUpdate`, {
+      valueInputOption: 'RAW',
+      data: updates
+    });
+    hideSyncIndicator();
+    showToast('✅ Dados salvos no Google Sheets');
+  } catch(e) {
+    hideSyncIndicator();
+    showToast('⚠️ Erro ao salvar: ' + e.message);
+  }
+}
+
+// ── AUTO-SAVE: Save after every state change ──────────────
+let _saveTimer = null;
+function scheduleAutoSave() {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
+    if (sessionStorage.getItem('erp-user') && window._sheetsToken) {
+      saveToSheets();
+    }
+  }, 2000); // 2 second debounce
+}
+
+// ── SYNC INDICATOR ────────────────────────────────────────
+function showSyncIndicator(msg='Sincronizando...') {
+  let el = document.getElementById('sync-indicator');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'sync-indicator';
+    el.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#0EA5E9;color:#fff;'
+      + 'padding:8px 16px;border-radius:20px;font-size:12px;font-family:Inter,sans-serif;'
+      + 'z-index:9998;display:flex;align-items:center;gap:8px;box-shadow:0 4px 12px rgba(0,0,0,0.3)';
+    document.body.appendChild(el);
+  }
+  el.innerHTML = '<div style="width:10px;height:10px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite"></div>' + msg;
+  el.style.display = 'flex';
+}
+function hideSyncIndicator() {
+  const el = document.getElementById('sync-indicator');
+  if (el) el.style.display = 'none';
 }
 
 // ═══════════════════════════════════════════════════════════
