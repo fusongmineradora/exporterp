@@ -7,11 +7,11 @@
 <meta http-equiv="X-Frame-Options" content="DENY">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <meta http-equiv="Permissions-Policy" content="camera=(), microphone=(), geolocation=(), payment=()">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com https://cdnjs.cloudflare.com https://www.maersk.com https://elines.coscoshipping.com https://accounts.google.com https://apis.google.com https://oauth2.googleapis.com https://sheets.googleapis.com https://www.googleapis.com https://drive.googleapis.com https://www.googleapis.com/upload; img-src 'self' data: https: blob:; frame-src https://accounts.google.com; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com https://fonts.googleapis.com https://cdnjs.cloudflare.com; worker-src blob:; child-src blob:;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' blob: https://fonts.googleapis.com https://fonts.gstatic.com https://cdnjs.cloudflare.com https://www.maersk.com https://elines.coscoshipping.com https://accounts.google.com https://apis.google.com https://oauth2.googleapis.com https://sheets.googleapis.com https://www.googleapis.com https://drive.googleapis.com https://www.googleapis.com/upload; img-src 'self' data: https: blob:; frame-src https://accounts.google.com; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com https://fonts.googleapis.com https://cdnjs.cloudflare.com; worker-src blob:; child-src blob:;">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Gestão de Exportação · Fu Song</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" integrity="sha512-qZvrmS2ekKPF2mSznTQsxqPgnpkI4DNTlrdUmTzrDgektczlKNRRhy5X5AAOnx5S09ydFYWWNSfYzoVQba28A==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" crossorigin="anonymous"></script>
 <style>
 /* ── DARK THEME (default) ── */
 :root {
@@ -2168,6 +2168,10 @@ function renderRelatorios(){
 // PDF GENERATORS
 // ═══════════════════════════════════════════════════════════
 function initPDF(){
+  if(!window.jspdf){
+    showToast('⚠️ Biblioteca PDF não carregou. Recarregue a página.');
+    throw new Error('jsPDF not loaded');
+  }
   const {jsPDF}=window.jspdf;
   const doc=new jsPDF();
   // White background for readability
@@ -2696,7 +2700,7 @@ async function setupSheets() {
       range: `${sheet}!A1`,
       values: [cols]
     }));
-    await sheetsAPI('PUT', `/${SHEET_ID}/values:batchUpdate`, {
+    await sheetsAPI('POST', `/${SHEET_ID}/values:batchUpdate`, {
       valueInputOption: 'RAW',
       data: updates
     });
@@ -2777,7 +2781,7 @@ async function saveToSheets() {
       return { range: `${sheet}!A1`, values: rows };
     });
 
-    await sheetsAPI('PUT', `/${SHEET_ID}/values:batchUpdate`, {
+    await sheetsAPI('POST', `/${SHEET_ID}/values:batchUpdate`, {
       valueInputOption: 'RAW',
       data: updates
     });
