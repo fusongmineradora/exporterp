@@ -2155,13 +2155,29 @@ function renderRelatorios(){
               ${r.preview}
             </div>
           </div>
-          <button class="btn btn-secondary btn-sm" onclick="${r.fn}"
+          <button class="btn btn-secondary btn-sm" 
+            onclick="gerarPDF('${r.id}')"
             style="flex-shrink:0;white-space:nowrap">
             📄 Gerar PDF
           </button>
         </div>
       </div>`).join('')}
   </div>`;
+}
+
+// PDF dispatcher
+function gerarPDF(id) {
+  const map = {
+    'embarque':       gerarRelatorioEmbarque,
+    'mensal':         gerarRelatorioMensal,
+    'financeiro':     gerarRelatorioFinanceiro,
+    'cambio':         gerarExtratoCambio,
+    'contabilidade':  gerarRelatorioContabilidade,
+  };
+  const fn = map[id];
+  if (!fn) { showToast('⚠️ Relatório não encontrado'); return; }
+  if (!window.jspdf) { showToast('⚠️ Biblioteca PDF não carregou. Recarregue a página.'); return; }
+  try { fn(); } catch(e) { showToast('⚠️ Erro ao gerar PDF: ' + e.message); }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2921,15 +2937,27 @@ async function saveConfig(key, value) {
 }
 
 // Open process Drive folder
-function abrirPastaProcesso(p) {
-  const url = p.docs?._folderUrl;
-  if (url) {
-    window.open(sanitizeUrl(url), '_blank', 'noopener,noreferrer');
-  } else {
-    // Create folder first then open
-    criarPastaProcesso(p).then(result => {
-      if (result) window.open(sanitizeUrl(result.folderUrl), '_blank', 'noopener,noreferrer');
-    });
+async function abrirPastaProcesso(p) {
+  // If we already have the folder URL, just open it
+  if (p.docs && p.docs._folderUrl) {
+    window.open(sanitizeUrl(p.docs._folderUrl), '_blank', 'noopener,noreferrer');
+    return;
+  }
+  // Try to create/find folder then open
+  showToast('📂 Criando pasta no Drive...');
+  try {
+    const result = await criarPastaProcesso(p);
+    if (result && result.folderUrl) {
+      window.open(sanitizeUrl(result.folderUrl), '_blank', 'noopener,noreferrer');
+      scheduleAutoSave();
+      render();
+    } else {
+      // Fallback: open Drive root folder search
+      window.open('https://drive.google.com/drive/search?q=' + encodeURIComponent(p.id), '_blank', 'noopener,noreferrer');
+    }
+  } catch(e) {
+    // Fallback: open Drive search for this process
+    window.open('https://drive.google.com/drive/search?q=' + encodeURIComponent(p.id), '_blank', 'noopener,noreferrer');
   }
 }
 
