@@ -3,11 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com https://cdnjs.cloudflare.com https://www.maersk.com https://elines.coscoshipping.com https://accounts.google.com https://apis.google.com https://oauth2.googleapis.com; img-src 'self' data: https:; frame-src https://accounts.google.com; script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com https://fonts.googleapis.com https://cdnjs.cloudflare.com;">
+<meta http-equiv="X-Content-Type-Options" content="nosniff">
+<meta http-equiv="X-Frame-Options" content="DENY">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta http-equiv="Permissions-Policy" content="camera=(), microphone=(), geolocation=(), payment=()">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com https://cdnjs.cloudflare.com https://www.maersk.com https://elines.coscoshipping.com https://accounts.google.com https://apis.google.com https://oauth2.googleapis.com; img-src 'self' data: https:; frame-src https://accounts.google.com; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com https://fonts.googleapis.com https://cdnjs.cloudflare.com;">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ExportERP Pro · Fu Song</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" integrity="sha512-qZvrmS2ekKPF2mSznTQsxqPgnpkI4DNTlrdUmTzrDgektczlKNRRhy5X5AAOnx5S09ydFYWWNSfYzoVQba28A==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
 /* ── DARK THEME (default) ── */
 :root {
@@ -469,7 +473,7 @@ const IG=(l,k,v,type='text',opts=null,ph='')=>{
   if(opts) return `<div class="ig"><label class="lbl">${l}</label><select id="f_${k}">${opts.map(o=>`<option${o===v?' selected':''}>${o}</option>`).join('')}</select></div>`;
   return `<div class="ig"><label class="lbl">${l}</label><input type="${type}" id="f_${k}" value="${v||''}" placeholder="${ph}"/></div>`;
 };
-const showToast=()=>{const t=document.getElementById('toast');t.style.display='block';setTimeout(()=>t.style.display='none',2200);};
+const showToast=(msg='')=>{const t=document.getElementById('toast');if(msg){const span=t.querySelector('span')||t;span.textContent=msg;}t.style.display='block';setTimeout(()=>t.style.display='none',2200);};
 // ── INPUT SANITIZATION ──
 const sanitize=s=>String(s||'').replace(/[<>"'`]/g,'').trim();
 const sanitizeUrl=s=>{
@@ -487,7 +491,22 @@ const updateSB=()=>{
 // ═══════════════════════════════════════════════════════════
 const ALLOWED_EMAILS = ['klismann.lai@gmail.com', 'lai@fusongmineradora.com'];
 
+// Login attempt rate limiting
+let _loginAttempts = 0;
+let _loginBlockedUntil = 0;
+
 function handleGoogleLogin(response) {
+  // Rate limit: max 5 attempts per 5 minutes
+  if(Date.now() < _loginBlockedUntil) {
+    document.getElementById('login-error').textContent = '⏳ Muitas tentativas. Aguarde alguns minutos.';
+    document.getElementById('login-error').style.display = 'block';
+    return;
+  }
+  _loginAttempts++;
+  if(_loginAttempts > 5) {
+    _loginBlockedUntil = Date.now() + (5 * 60 * 1000);
+    _loginAttempts = 0;
+  }
   try {
     // Decode JWT token from Google
     const payload = JSON.parse(atob(response.credential.split('.')[1]));
@@ -2034,7 +2053,7 @@ function abrirDocLanc(idx, docKey){
   const l = S.lancamentos[idx];
   if(!l) return;
   const hasDoc = l.docs && l.docs[docKey] && l.docs[docKey].length>0;
-  if(hasDoc){ window.open(l.docs[docKey],'_blank'); return; }
+  if(hasDoc){ window.open(sanitizeUrl(l.docs&&l.docs[docKey]?l.docs[docKey]:''),'_blank'); return; }
   abrirModalLancamento(idx);
 }
 
@@ -2539,10 +2558,10 @@ function attachEvents(){
         cambioRecebido:gn('nc_recebido'), cambioIOF:gn('nc_iof'),
         cambioSpread:gn('nc_spread'), cambioReais:gn('nc_reais'),
       };
-      if(p){ Object.assign(p,obj); }
+      if(p){ Object.assign(p, JSON.parse(JSON.stringify(obj))); }
       else if(S.processos.length>0){
         // Link to first processo as fallback only if explicitly chosen
-        Object.assign(S.processos[0],obj);
+        if(S.processos.length>0) Object.assign(S.processos[0],obj);
       }
       S.cambioTab='lista';
       showToast(); scheduleAutoSave(); render();
@@ -2914,6 +2933,11 @@ function abrirPastaProcesso(p) {
 // INIT
 // ═══════════════════════════════════════════════════════════
 // Check if already logged in
+// Security: prevent clickjacking via JS
+if(window.top !== window.self){
+  window.top.location = window.self.location;
+}
+
 // Security: warn if not HTTPS (only in production)
 if(location.protocol === 'file:' === false && location.protocol !== 'https:' && location.hostname !== 'localhost'){
   console.warn('ERP should be served over HTTPS');
