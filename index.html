@@ -1594,50 +1594,85 @@ function renderCustos(){
       }];
     }
     if (!S.fixoMesAtivo) S.fixoMesAtivo = String(S.custosMensais[0].id || 0);
-
-    // Localiza o mês selecionado
-    let mIdx = S.custosMensais.findIndex(x => String(x.id) === S.fixoMesAtivo);
-    if (mIdx < 0) { mIdx = 0; S.fixoMesAtivo = String(S.custosMensais[0].id); }
-    const m = S.custosMensais[mIdx];
-    const total = tcm(m);
+    if (!S.mesExpanded) S.mesExpanded = new Set();
+    // Garante que o mês mais recente está expandido por padrão na primeira visualização
+    if (S.mesExpanded.size === 0 && S.custosMensais.length > 0) {
+      S.mesExpanded.add(String(S.custosMensais[0].id));
+    }
 
     return `
     ${backBtn()}
     <div class="page-header">
       <div class="page-title">Custos Fixos</div>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-secondary btn-sm" onclick="novoMesFixo()" title="Criar próximo mês baseado no atual">📅 Novo Mês</button>
+        <button class="btn btn-secondary btn-sm" onclick="toggleAllMeses()" title="Expandir ou retrair todos os meses">📂 Expandir/Retrair tudo</button>
         <button class="btn btn-success btn-sm" onclick="gerarRelatorioMensal()">📑 PDF</button>
       </div>
     </div>
     ${tabsHtml}
 
-    <div class="card" style="margin-bottom:14px">
-      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-        <div style="flex:1;min-width:180px">
-          <div style="color:var(--muted);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px">Mês de referência</div>
-          <select onchange="S.fixoMesAtivo=this.value;render()" style="font-size:13px;padding:8px 10px">
-            ${S.custosMensais.map(x => `<option value="${x.id}" ${String(x.id)===S.fixoMesAtivo?'selected':''}>${escHtml(x.mes||'—')}${x.ano?'/'+x.ano:''}</option>`).join('')}
-          </select>
-        </div>
-        <button class="btn btn-secondary btn-sm" onclick="editarMesFixo('${m.id}')" style="white-space:nowrap">✏️ Renomear mês</button>
-        ${S.custosMensais.length > 1 ? `<button class="btn btn-danger btn-sm" onclick="excluirMesFixo('${m.id}')" style="white-space:nowrap">🗑️ Excluir mês</button>` : ''}
-      </div>
-      <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--bg);border-radius:8px">
-        <span style="font-size:11px;color:var(--muted);letter-spacing:1.2px;text-transform:uppercase">Total do Mês</span>
-        <span style="font-family:'Outfit',sans-serif;font-weight:800;font-size:18px;color:var(--yellow)">R$ ${fmt(total)}</span>
-      </div>
-    </div>
-
-    ${(() => {
+    ${S.custosMensais.map(m => {
       const entries = buildAllEntries({ filtroMesFixoId: m.id });
-      if (entries.length === 0) {
-        return `<div class="card" style="text-align:center;padding:30px;color:var(--muted);font-size:12px">
-          Nenhum custo fixo neste mês. Use ✏️ em cada item para preencher os valores.
-        </div>`;
-      }
-      return entries.map(l => renderLancCard(l)).join('');
-    })()}`;
+      const totalCustos = entries.filter(e => e.tipo==='Despesa').reduce((a,e)=>a+(e.valor||0), 0);
+      const totalPagos = entries.filter(e => e.tipo==='Despesa' && e.status==='Pago').length;
+      const totalAberto = entries.filter(e => e.tipo==='Despesa' && e.status==='Em Aberto').reduce((a,e)=>a+(e.valor||0), 0);
+      const totalPago = entries.filter(e => e.tipo==='Despesa' && e.status==='Pago').reduce((a,e)=>a+(e.valor||0), 0);
+      const totalItens = entries.filter(e => e.tipo==='Despesa').length;
+      const expanded = S.mesExpanded.has(String(m.id));
+      const mesNome = (m.mes||'—') + (m.ano?'/'+m.ano:'');
+
+      return `
+      <div class="proc-grouper" style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;margin-bottom:14px;overflow:hidden;box-shadow:var(--card-shadow)">
+        <!-- HEADER (clicável) -->
+        <div style="padding:14px 18px;background:linear-gradient(135deg,rgba(245,158,11,0.06),rgba(251,146,60,0.06));border-bottom:1px solid var(--border);cursor:pointer"
+          onclick="toggleMesExpand('${escHtml(String(m.id))}')">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px">
+                <span style="font-size:18px;color:var(--muted);transition:transform 0.2s;display:inline-block;transform:rotate(${expanded?'90':'0'}deg);user-select:none">▶</span>
+                <span style="font-size:20px">📅</span>
+                <span style="font-family:'Outfit',sans-serif;font-weight:800;font-size:17px;color:var(--text)">${escHtml(mesNome)}</span>
+                <span style="font-size:9px;color:var(--accent2);background:rgba(34,197,160,0.1);padding:2px 7px;border-radius:4px;font-weight:600">FIXO MENSAL</span>
+              </div>
+              <div style="font-size:11px;color:var(--muted);padding-left:38px">
+                ${totalItens} ${totalItens===1?'item':'itens'} · ${totalPagos} pago${totalPagos===1?'':'s'}
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;flex-shrink:0" onclick="event.stopPropagation()">
+              <button class="btn btn-secondary btn-xs" onclick="editarMesFixo('${escHtml(String(m.id))}')" title="Renomear mês" style="padding:5px 10px">✏️</button>
+              ${S.custosMensais.length > 1 ? `<button class="btn btn-danger btn-xs" onclick="excluirMesFixo('${escHtml(String(m.id))}')" title="Excluir mês" style="padding:5px 10px">🗑️</button>` : ''}
+            </div>
+          </div>
+        </div>
+
+        <!-- KPI ROW (3 KPIs: Total | Em Aberto | Pago) -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;background:var(--bg);border-bottom:${expanded?'1px solid var(--border)':'none'}">
+          <div style="padding:12px 14px;border-right:1px solid var(--border)">
+            <div style="font-size:9.5px;color:var(--muted);letter-spacing:1.3px;text-transform:uppercase;font-weight:600;margin-bottom:4px">💸 Total do mês</div>
+            <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:16px;color:var(--red)">R$ ${fmt(totalCustos)}</div>
+          </div>
+          <div style="padding:12px 14px;border-right:1px solid var(--border)">
+            <div style="font-size:9.5px;color:var(--muted);letter-spacing:1.3px;text-transform:uppercase;font-weight:600;margin-bottom:4px">🟡 Em Aberto</div>
+            <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:16px;color:var(--yellow)">R$ ${fmt(totalAberto)}</div>
+          </div>
+          <div style="padding:12px 14px">
+            <div style="font-size:9.5px;color:var(--muted);letter-spacing:1.3px;text-transform:uppercase;font-weight:600;margin-bottom:4px">🟢 Pago</div>
+            <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:16px;color:var(--green)">R$ ${fmt(totalPago)}</div>
+          </div>
+        </div>
+
+        <!-- LANÇAMENTOS (expandido) -->
+        ${expanded ? `
+          <div style="padding:12px 14px">
+            <div style="font-size:10px;color:var(--muted);letter-spacing:1.4px;text-transform:uppercase;font-weight:600;margin-bottom:8px">📋 Custos fixos do mês</div>
+            ${entries.length===0
+              ? `<div style="padding:18px;text-align:center;color:var(--muted);font-size:12px;background:var(--bg);border-radius:8px">Nenhum custo fixo neste mês. Use ✏️ em cada item para preencher os valores.</div>`
+              : entries.map(l => renderLancCard(l)).join('')}
+          </div>
+        ` : ''}
+      </div>`;
+    }).join('')}`;
   }
 
   if(tab==='consolidado'){
@@ -1669,14 +1704,19 @@ function renderCustos(){
 
   if(tab==='lancamentos') return renderLancamentos(backBtn(),tabsHtml);
 
-  // ── ABA "POR PROCESSO" ──
-  // Mostra cards no mesmo formato do Extrato, agrupados por processo.
-  // Editar/excluir/anexar funciona igual ao extrato (sincroniza com o processo).
+  // ── ABA "POR PROCESSO" — Layout accordion ──
+  // Cada processo é um card colapsável com mini-dashboard (Receita/Custo/Lucro).
+  // Clique no header expande/retrai os lançamentos. Estado salvo em S.procExpanded (Set).
+  if (!S.procExpanded) S.procExpanded = new Set();
+
   return `
   ${backBtn()}
   <div class="page-header">
     <div class="page-title">Custos</div>
-    <button class="btn btn-success btn-sm" onclick="gerarRelatorioMensal()">📑 PDF Mensal</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-secondary btn-sm" onclick="toggleAllProcs()" title="Expandir ou retrair todos">📂 Expandir/Retrair tudo</button>
+      <button class="btn btn-success btn-sm" onclick="gerarRelatorioMensal()">📑 PDF Mensal</button>
+    </div>
   </div>
   ${tabsHtml}
   ${ps.length===0 ? `<div class="card" style="text-align:center;padding:40px;color:var(--muted)">
@@ -1684,27 +1724,154 @@ function renderCustos(){
     <div>Nenhum processo cadastrado.</div>
     <button class="btn btn-primary" style="margin-top:16px" onclick="nav('processos')">+ Novo Processo</button>
   </div>` : ''}
-  ${ps.map(p=>{
+  ${ps.map(p => {
     const entries = buildAllEntries({ filtroProcessoId: p.id });
-    const totalCustos = entries.filter(e => e.tipo==='Despesa').reduce((a,e)=>a+(e.valor||0), 0);
     const totalReceitas = entries.filter(e => e.tipo==='Receita').reduce((a,e)=>a+(e.valor||0), 0);
+    const totalCustos = entries.filter(e => e.tipo==='Despesa').reduce((a,e)=>a+(e.valor||0), 0);
+    const lucro = totalReceitas - totalCustos;
+    const totalPagos = entries.filter(e => e.tipo==='Despesa' && e.status==='Pago').length;
+    const totalDespesas = entries.filter(e => e.tipo==='Despesa').length;
+    const expanded = S.procExpanded.has(p.id);
+
+    // Linha de subtítulo do header
+    const rota = [p.pol||p.origem, p.pod||p.destino].filter(Boolean).join(' → ');
+    const subInfo = [
+      p.cliente ? '🏢 ' + p.cliente : '',
+      p.companhia ? '🛳️ ' + p.companhia : '',
+      rota,
+      p.saida ? 'Saída ' + p.saida : ''
+    ].filter(Boolean).join(' · ');
+
     return `
-    <div class="card" style="padding:14px;margin-bottom:14px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:10px">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <span style="font-family:'Outfit',sans-serif;font-weight:800;font-size:15px;color:var(--text)">💸 ${escHtml(p.id)}</span>
-          <span style="color:var(--muted2);font-size:13px">— ${escHtml(p.produto||'')}</span>
-          ${badge(p.status)}
-        </div>
-        <div style="display:flex;gap:14px;align-items:center;font-size:11px">
-          <div><span style="color:var(--muted)">Receita: </span><span style="color:var(--green);font-weight:700">R$ ${fmt(totalReceitas)}</span></div>
-          <div><span style="color:var(--muted)">Custos: </span><span style="color:var(--red);font-weight:700">R$ ${fmt(totalCustos)}</span></div>
+    <div class="proc-grouper" style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;margin-bottom:14px;overflow:hidden;box-shadow:var(--card-shadow)">
+      <!-- HEADER (clicável) -->
+      <div style="padding:14px 18px;background:linear-gradient(135deg,rgba(14,165,233,0.06),rgba(34,225,192,0.06));border-bottom:1px solid var(--border);cursor:pointer"
+        onclick="toggleProcExpand('${escHtml(p.id)}')">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px">
+              <span style="font-size:18px;color:var(--muted);transition:transform 0.2s;display:inline-block;transform:rotate(${expanded?'90':'0'}deg);user-select:none">▶</span>
+              <span style="font-size:20px">📦</span>
+              <span style="font-family:'Outfit',sans-serif;font-weight:800;font-size:17px;color:var(--text)">${escHtml(p.id)}</span>
+              <span style="color:var(--muted2);font-size:13px">— ${escHtml(p.produto||'')}</span>
+              ${badge(p.status)}
+            </div>
+            ${subInfo ? `<div style="font-size:11px;color:var(--muted);padding-left:38px">${escHtml(subInfo)}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:6px;flex-shrink:0" onclick="event.stopPropagation()">
+            <button class="btn btn-secondary btn-xs" onclick="abrirPastaProcesso(S.processos.find(x=>x.id==='${escHtml(p.id)}'))" title="Pasta no Drive" style="padding:5px 10px">📂</button>
+            <button class="btn btn-secondary btn-xs" onclick="gerarRelatorioEmbarque('${escHtml(p.id)}')" title="PDF do processo" style="padding:5px 10px">📑</button>
+          </div>
         </div>
       </div>
-      ${entries.length===0 ? `<div style="padding:14px;text-align:center;color:var(--muted);font-size:12px">Nenhum lançamento. Use ✏️ no detalhe do processo para preencher valores.</div>` : ''}
-      ${entries.map(l => renderLancCard(l)).join('')}
+
+      <!-- KPI ROW (3 KPIs: Receita | Custo | Lucro) -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;background:var(--bg);border-bottom:${expanded?'1px solid var(--border)':'none'}">
+        <div style="padding:12px 14px;border-right:1px solid var(--border)">
+          <div style="font-size:9.5px;color:var(--muted);letter-spacing:1.3px;text-transform:uppercase;font-weight:600;margin-bottom:4px">💰 Receita</div>
+          <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:16px;color:var(--green)">R$ ${fmt(totalReceitas)}</div>
+        </div>
+        <div style="padding:12px 14px;border-right:1px solid var(--border)">
+          <div style="font-size:9.5px;color:var(--muted);letter-spacing:1.3px;text-transform:uppercase;font-weight:600;margin-bottom:4px">💸 Custo</div>
+          <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:16px;color:var(--red)">R$ ${fmt(totalCustos)}</div>
+          <div style="font-size:10px;color:var(--muted2);margin-top:2px">${totalDespesas} itens · ${totalPagos} pagos</div>
+        </div>
+        <div style="padding:12px 14px">
+          <div style="font-size:9.5px;color:var(--muted);letter-spacing:1.3px;text-transform:uppercase;font-weight:600;margin-bottom:4px">📈 Lucro</div>
+          <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:16px;color:${lucro>=0?'var(--green)':'var(--red)'}">R$ ${fmt(lucro)}</div>
+        </div>
+      </div>
+
+      <!-- LANÇAMENTOS (expandido) -->
+      ${expanded ? `
+        <div style="padding:12px 14px">
+          <div style="font-size:10px;color:var(--muted);letter-spacing:1.4px;text-transform:uppercase;font-weight:600;margin-bottom:8px">📋 Lançamentos do processo</div>
+          ${entries.length===0
+            ? `<div style="padding:18px;text-align:center;color:var(--muted);font-size:12px;background:var(--bg);border-radius:8px">Nenhum lançamento. Os custos aparecem aqui quando preenchidos no detalhe do processo.</div>`
+            : entries.map(l => renderLancCard(l)).join('')}
+        </div>
+      ` : ''}
     </div>`;
   }).join('')}`;
+}
+
+// Toggle expansão de um processo na aba Custos / Por Processo
+function toggleProcExpand(procId){
+  if (!S.procExpanded) S.procExpanded = new Set();
+  if (S.procExpanded.has(procId)) S.procExpanded.delete(procId);
+  else S.procExpanded.add(procId);
+  render();
+}
+
+// Expandir ou retrair todos os processos
+function toggleAllProcs(){
+  if (!S.procExpanded) S.procExpanded = new Set();
+  const allIds = S.processos.map(p => p.id);
+  const allExpanded = allIds.every(id => S.procExpanded.has(id));
+  if (allExpanded) {
+    S.procExpanded.clear();
+  } else {
+    allIds.forEach(id => S.procExpanded.add(id));
+  }
+  render();
+}
+
+// Toggle expansão de um mês na aba Custos Fixos
+function toggleMesExpand(mesId){
+  if (!S.mesExpanded) S.mesExpanded = new Set();
+  const id = String(mesId);
+  if (S.mesExpanded.has(id)) S.mesExpanded.delete(id);
+  else S.mesExpanded.add(id);
+  render();
+}
+
+// Expandir ou retrair todos os meses
+function toggleAllMeses(){
+  if (!S.mesExpanded) S.mesExpanded = new Set();
+  const allIds = (S.custosMensais||[]).map(m => String(m.id));
+  const allExpanded = allIds.every(id => S.mesExpanded.has(id));
+  if (allExpanded) {
+    S.mesExpanded.clear();
+  } else {
+    allIds.forEach(id => S.mesExpanded.add(id));
+  }
+  render();
+}
+
+// Toggle expansão de um mês na aba Extrato de Caixa
+function toggleExtratoMesExpand(mesKey){
+  if (!S.extratoMesExpanded) S.extratoMesExpanded = new Set();
+  if (S.extratoMesExpanded.has(mesKey)) S.extratoMesExpanded.delete(mesKey);
+  else S.extratoMesExpanded.add(mesKey);
+  render();
+}
+
+// Expandir ou retrair todos os meses do extrato
+function toggleAllExtratoMeses(){
+  if (!S.extratoMesExpanded) S.extratoMesExpanded = new Set();
+  // Reconstrói chaves de meses a partir das entries atuais
+  const all = buildAllEntries();
+  const chaves = new Set();
+  all.forEach(l => {
+    const d = l.data;
+    if (!d) { chaves.add('sem-data'); return; }
+    const m1 = String(d).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (m1) { chaves.add(m1[3]+'-'+m1[2].padStart(2,'0')); return; }
+    const m2 = String(d).match(/^(\w+)\/(\d{4})$/);
+    if (m2) {
+      const mn = {janeiro:'01',fevereiro:'02','março':'03',marco:'03',abril:'04',maio:'05',junho:'06',julho:'07',agosto:'08',setembro:'09',outubro:'10',novembro:'11',dezembro:'12'};
+      const n = mn[m2[1].toLowerCase()];
+      if (n) chaves.add(m2[2]+'-'+n);
+    }
+  });
+  const arr = [...chaves];
+  const allExpanded = arr.every(k => S.extratoMesExpanded.has(k));
+  if (allExpanded) {
+    S.extratoMesExpanded.clear();
+  } else {
+    arr.forEach(k => S.extratoMesExpanded.add(k));
+  }
+  render();
 }
 
 // ── Custos Fixos: gerenciamento de meses ──
@@ -2021,7 +2188,8 @@ function buildAllEntries(opts={}) {
   const out = [];
 
   // Câmbio + custos de processos (automáticos)
-  if (!opts.tipo || opts.tipo === 'processo') {
+  // Pula completamente se está filtrando por mês fixo (essa aba só mostra fixos)
+  if (!opts.filtroMesFixoId && (!opts.tipo || opts.tipo === 'processo')) {
     S.processos.forEach(p => {
       if (opts.filtroProcessoId && p.id !== opts.filtroProcessoId) return;
       // Câmbio recebido
@@ -2353,7 +2521,94 @@ function renderLancamentos(back, tabsHtml){
     ${hasActiveFilter ? `<button class="btn btn-secondary" style="margin-top:16px" onclick="S.lancFiltros={tipo:'todos',status:'todos',mes:'todos',processo:'todos'};render()">✕ Limpar filtros</button>` : `<button class="btn btn-primary" style="margin-top:16px" onclick="abrirModalLancamento()">+ Novo Lançamento</button>`}
   </div>` : ''}
 
-  ${lista.map(l => renderLancCard(l)).join('')}`;
+  ${(() => {
+    if (lista.length === 0) return '';
+    // Agrupa por mês (chave: YYYY-MM ou 'sem-data')
+    const grupos = {};
+    lista.forEach(l => {
+      const key = dateToMesKey(l.data) || 'sem-data';
+      if (!grupos[key]) grupos[key] = [];
+      grupos[key].push(l);
+    });
+    // Ordena chaves desc (mês mais recente primeiro), 'sem-data' por último
+    const chaves = Object.keys(grupos).sort((a,b) => {
+      if (a === 'sem-data') return 1;
+      if (b === 'sem-data') return -1;
+      return b.localeCompare(a);
+    });
+
+    // Estado de expansão: por padrão, mês mais recente expandido
+    if (!S.extratoMesExpanded) S.extratoMesExpanded = new Set();
+    if (S.extratoMesExpanded.size === 0 && chaves.length > 0) {
+      S.extratoMesExpanded.add(chaves[0]);
+    }
+
+    // Botão expandir/retrair tudo (entre os filtros e os meses)
+    const allExp = chaves.every(k => S.extratoMesExpanded.has(k));
+    const toggleAllBtn = chaves.length > 1
+      ? `<div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+          <button class="btn btn-secondary btn-sm" onclick="toggleAllExtratoMeses()" title="Expandir ou retrair todos os meses" style="padding:5px 10px;font-size:11px">📂 ${allExp?'Retrair':'Expandir'} tudo</button>
+        </div>`
+      : '';
+
+    return toggleAllBtn + chaves.map(key => {
+      const entries = grupos[key];
+      const mesLabel = key === 'sem-data' ? 'Sem data' : mesKeyToLabel(key);
+      const expanded = S.extratoMesExpanded.has(key);
+      // KPIs do mês
+      const totalReceitas = entries.filter(e => e.tipo==='Receita').reduce((a,e)=>a+(e.valor||0), 0);
+      const totalDespesas = entries.filter(e => e.tipo==='Despesa').reduce((a,e)=>a+(e.valor||0), 0);
+      const totalReemb = entries.filter(e => e.tipo==='Reembolso').reduce((a,e)=>a+(e.valor||0), 0);
+      const saldoMes = totalReceitas - totalDespesas + totalReemb;
+      const qtdLanc = entries.length;
+      const qtdAberto = entries.filter(e => e.status==='Em Aberto').length;
+      const qtdPago = entries.filter(e => e.status==='Pago').length;
+      return `
+      <div class="proc-grouper" style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;margin-bottom:14px;overflow:hidden;box-shadow:var(--card-shadow)">
+        <!-- HEADER (clicável) -->
+        <div style="padding:14px 18px;background:linear-gradient(135deg,rgba(99,102,241,0.06),rgba(168,85,247,0.06));border-bottom:1px solid var(--border);cursor:pointer"
+          onclick="toggleExtratoMesExpand('${escHtml(key)}')">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px">
+                <span style="font-size:18px;color:var(--muted);transition:transform 0.2s;display:inline-block;transform:rotate(${expanded?'90':'0'}deg);user-select:none">▶</span>
+                <span style="font-size:20px">🗓️</span>
+                <span style="font-family:'Outfit',sans-serif;font-weight:800;font-size:17px;color:var(--text)">${escHtml(mesLabel)}</span>
+                <span style="font-size:9px;color:var(--accent);background:rgba(99,102,241,0.1);padding:2px 7px;border-radius:4px;font-weight:600">EXTRATO</span>
+              </div>
+              <div style="font-size:11px;color:var(--muted);padding-left:38px">
+                ${qtdLanc} ${qtdLanc===1?'lançamento':'lançamentos'} · ${qtdPago} pago${qtdPago===1?'':'s'} · ${qtdAberto} em aberto
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- KPI ROW (3 KPIs: Receita | Despesa | Saldo) -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;background:var(--bg);border-bottom:${expanded?'1px solid var(--border)':'none'}">
+          <div style="padding:12px 14px;border-right:1px solid var(--border)">
+            <div style="font-size:9.5px;color:var(--muted);letter-spacing:1.3px;text-transform:uppercase;font-weight:600;margin-bottom:4px">💰 Receitas</div>
+            <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:16px;color:var(--green)">R$ ${fmt(totalReceitas)}</div>
+          </div>
+          <div style="padding:12px 14px;border-right:1px solid var(--border)">
+            <div style="font-size:9.5px;color:var(--muted);letter-spacing:1.3px;text-transform:uppercase;font-weight:600;margin-bottom:4px">💸 Despesas</div>
+            <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:16px;color:var(--red)">R$ ${fmt(totalDespesas)}</div>
+          </div>
+          <div style="padding:12px 14px">
+            <div style="font-size:9.5px;color:var(--muted);letter-spacing:1.3px;text-transform:uppercase;font-weight:600;margin-bottom:4px">📊 Saldo do mês</div>
+            <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:16px;color:${saldoMes>=0?'var(--green)':'var(--red)'}">R$ ${fmt(saldoMes)}</div>
+          </div>
+        </div>
+
+        <!-- LANÇAMENTOS (expandido) -->
+        ${expanded ? `
+          <div style="padding:12px 14px">
+            <div style="font-size:10px;color:var(--muted);letter-spacing:1.4px;text-transform:uppercase;font-weight:600;margin-bottom:8px">📋 Lançamentos do mês</div>
+            ${entries.map(l => renderLancCard(l)).join('')}
+          </div>
+        ` : ''}
+      </div>`;
+    }).join('');
+  })()}`;
 }
 
 function abrirModalLancamento(id=null){
