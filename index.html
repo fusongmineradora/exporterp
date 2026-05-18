@@ -1457,7 +1457,7 @@ function renderCustos(){
     <button class="tab ${tab==='processo'?'active':''}" onclick="S.custosTab='processo';render()">💸 Por Processo</button>
     <button class="tab ${tab==='fixos'?'active':''}" onclick="S.custosTab='fixos';render()">🏢 Custos Fixos</button>
     <button class="tab ${tab==='consolidado'?'active':''}" onclick="S.custosTab='consolidado';render()">📊 Consolidado</button>
-    <button class="tab ${tab==='lancamentos'?'active':''}" onclick="S.custosTab='lancamentos';render()">💳 Lançamentos</button>
+    <button class="tab ${tab==='lancamentos'?'active':''}" onclick="S.custosTab='lancamentos';render()">💳 Extrato de Caixa</button>
   </div>`;
 
   if(tab==='fixos'){
@@ -1756,10 +1756,88 @@ function excluirCadastro(kind, idx){
 function renderLancamentos(back, tabsHtml){
   const ls = S.lancamentos || [];
   const filtro = S.lancFiltro || 'todos';
-  const lista = filtro === 'todos' ? ls : ls.filter(l => l.tipo === filtro);
 
-  const totalEntradas = ls.filter(l=>l.tipo==='Receita').reduce((a,l)=>a+(l.valor||0),0);
-  const totalSaidas   = ls.filter(l=>l.tipo==='Despesa').reduce((a,l)=>a+(l.valor||0),0);
+  // Build computed entries from processos and custos fixos
+  const computedEntries = [];
+  
+  // Câmbio recebido por processo (entradas)
+  S.processos.forEach(p => {
+    if(p.cambioReais > 0) {
+      computedEntries.push({
+        _computed: true,
+        tipo: 'Receita',
+        descricao: 'Câmbio Recebido — ' + p.id,
+        valor: p.cambioReais||0,
+        data: p.cambioRecebimento || p.embarque || '',
+        empresa: p.cliente||'',
+        categoria: 'Câmbio',
+        vinculo: 'Processo',
+        vinculoId: p.id,
+        status: 'Confirmado',
+      });
+    }
+    // Custos do processo (saídas)
+    const custoLabels = {
+      custoMaritimo:'Frete Marítimo', custoFrete:'Frete Rodoviário',
+      custoCertificado:'Certificado de Origem', custoArmazem:'Armazém',
+      custoPorto:'Porto / Taxas', custoDespachante:'Despachante',
+      custoServTerceiros:'Serviços de Terceiros', custoImpostos:'Impostos',
+      custoProduto:'Produto'
+    };
+    Object.entries(custoLabels).forEach(([k, label]) => {
+      if(p[k] > 0) {
+        computedEntries.push({
+          _computed: true,
+          tipo: 'Despesa',
+          descricao: label + ' — ' + p.id,
+          valor: p[k]||0,
+          data: p.embarque||'',
+          empresa: '',
+          categoria: 'Custo de Processo',
+          vinculo: 'Processo',
+          vinculoId: p.id,
+          status: p[k+'_status']||'Estimativa',
+        });
+      }
+    });
+  });
+
+  // Custos fixos do mês atual
+  const m = S.custosMensais && S.custosMensais.length > 0 ? S.custosMensais[0] : null;
+  if(m) {
+    const fixosLabels = {contador:'Contador',aluguel:'Aluguel',software:'Software',
+      internet:'Internet',telefone:'Telefone',impostos:'Impostos',outros:'Outros'};
+    Object.entries(fixosLabels).forEach(([k, label]) => {
+      if(m[k] > 0) {
+        computedEntries.push({
+          _computed: true,
+          tipo: 'Despesa',
+          descricao: 'Custo Fixo: ' + label,
+          valor: m[k]||0,
+          data: (m.mes||'')+'/'+(m.ano||''),
+          empresa: '',
+          categoria: 'Custo Fixo',
+          status: 'Confirmado',
+        });
+      }
+    });
+  }
+
+  // Combine manual + computed entries, sort by date desc
+  const allEntries = [...computedEntries, ...ls].sort((a,b) => {
+    const da = a.data ? a.data.split('/').reverse().join('') : '';
+    const db = b.data ? b.data.split('/').reverse().join('') : '';
+    return db.localeCompare(da);
+  });
+
+  const showComputed = S.lancFiltro === '_computed';
+  const lista = filtro === 'todos' ? (showComputed ? computedEntries : allEntries)
+    : filtro === '_manual' ? ls
+    : [...computedEntries, ...ls].filter(l => l.tipo === filtro);
+
+  // Totals from ALL entries
+  const totalEntradas = allEntries.filter(l=>l.tipo==='Receita').reduce((a,l)=>a+(l.valor||0),0);
+  const totalSaidas   = allEntries.filter(l=>l.tipo==='Despesa').reduce((a,l)=>a+(l.valor||0),0);
   const totalTransf   = ls.filter(l=>l.tipo==='Transferência').reduce((a,l)=>a+(l.valor||0),0);
   const totalReemb    = ls.filter(l=>l.tipo==='Reembolso').reduce((a,l)=>a+(l.valor||0),0);
   const saldo = totalEntradas - totalSaidas + totalReemb;
@@ -1781,7 +1859,7 @@ function renderLancamentos(back, tabsHtml){
   return `
   ${back}
   <div class="page-header">
-    <div class="page-title">Custos</div>
+    <div class="page-title">Extrato de Caixa</div>
     <button class="btn btn-primary" onclick="abrirModalLancamento()">+ Novo Lançamento</button>
   </div>
   ${tabsHtml}
@@ -1812,9 +1890,12 @@ function renderLancamentos(back, tabsHtml){
   <div class="card" style="margin-bottom:14px">
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <span style="color:var(--muted);font-size:11px;letter-spacing:1px;text-transform:uppercase">Filtrar:</span>
-      ${['todos','Receita','Despesa','Transferência','Reembolso'].map(f=>`
+      ${['todos','Receita','Despesa','Transferência','Reembolso','_manual'].map(f=>`
         <button class="btn btn-sm ${S.lancFiltro===f||(!S.lancFiltro&&f==='todos')?'btn-primary':'btn-secondary'}"
-          onclick="S.lancFiltro='${f}';render()">${f==='todos'?'Todos':tipoIcon[f]+' '+f+'s'}</button>`).join('')}
+          onclick="S.lancFiltro='${f}';render()">${
+            f==='todos'?'📊 Tudo':
+            f==='_manual'?'✏️ Manuais':
+            tipoIcon[f]+' '+f+'s'}</button>`).join('')}
       ${S.lancFiltro && S.lancFiltro!=='todos' ? `<button class="btn btn-secondary btn-sm" onclick="S.lancFiltro='todos';render()">✕ Limpar</button>` : ''}
     </div>
   </div>
@@ -1826,7 +1907,7 @@ function renderLancamentos(back, tabsHtml){
   </div>` : ''}
 
   ${lista.map((l,i)=>`
-    <div class="card" style="margin-bottom:10px">
+    <div class="card" style="margin-bottom:10px;${l._computed?'border-left:3px solid var(--border2);opacity:0.9':''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
         <div style="flex:1">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
@@ -1841,14 +1922,14 @@ function renderLancamentos(back, tabsHtml){
           </div>
           ${l.observacao?`<div style="font-size:11px;color:var(--muted);font-style:italic;margin-bottom:6px">${escHtml(l.observacao)}</div>`:''}
           <div style="display:flex;gap:6px;flex-wrap:wrap">
-            ${['comprovante','fatura','nfe','outros'].map(dk=>{
+            ${l._computed ? '' : ['comprovante','fatura','nfe','outros'].map(dk=>{
               const docLabel={'comprovante':'🧾 Comprovante','fatura':'📋 Fatura','nfe':'📄 NF-e','outros':'📎 Outros'}[dk];
               const hasDoc = l.docs && l.docs[dk] && l.docs[dk].length>0;
               return `<span class="doc-chip ${hasDoc?'has-doc':''}" onclick="abrirDocLanc(${i},'${dk}')" style="font-size:10px;padding:4px 9px">
                 ${hasDoc?'✅':'+'} ${docLabel}
               </span>`;
             }).join('')}
-            ${l.docs&&l.docs.nfe&&l.docs.nfe.length>0?`<span style="font-size:10px;color:var(--muted);padding:4px 9px;background:var(--bg);border-radius:6px">Chave: <span style="font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:9px">${escHtml(l.docs.nfeChave||'—')}</span></span>`:''}
+            ${l._computed ? '' : l.docs&&l.docs.nfe&&l.docs.nfe.length>0?`<span style="font-size:10px;color:var(--muted);padding:4px 9px;background:var(--bg);border-radius:6px">Chave: <span style="font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:9px">${escHtml(l.docs.nfeChave||'—')}</span></span>`:''}
           </div>
         </div>
         <div style="text-align:right;flex-shrink:0">
@@ -1859,8 +1940,11 @@ function renderLancamentos(back, tabsHtml){
             <span style="font-size:10px;font-weight:700;color:${statusColor[l.status]||'var(--muted)'}">● ${escHtml(l.status||'—')}</span>
           </div>
           <div style="display:flex;gap:6px;margin-top:8px;justify-content:flex-end">
-            <button class="btn btn-secondary btn-xs" onclick="editarLancamento(${i})">✏️</button>
-            <button class="btn btn-danger btn-xs" onclick="excluirLancamento(${i})">🗑️</button>
+            ${l._computed ? 
+              `<span style="font-size:9px;color:var(--muted);padding:4px 8px;background:var(--bg);border-radius:6px">🔒 Automático</span>` :
+              `<button class="btn btn-secondary btn-xs" onclick="editarLancamento(${i})">✏️</button>
+              <button class="btn btn-danger btn-xs" onclick="excluirLancamento(${i})">🗑️</button>`
+            }
           </div>
         </div>
       </div>
@@ -2440,7 +2524,7 @@ function gerarRelatorioContabilidade(){
   if(totalLanc>0){
     y = pdfRow(doc,'Outras receitas (lançamentos)','R$ '+fmt(totalLanc),y,[22,163,74]);
   }
-  y = pdfTotal(doc,'TOTAL ENTRADAS','R$ '+fmt(totalR+totalLanc),y,[22,163,74]);
+  y = pdfTotal(doc,'TOTAL CÂMBIO RECEBIDO','R$ '+fmt(totalR),y,[22,163,74]);
 
   if(y>220){ y=pdfNewPage(doc); }
   y = pdfSection(doc,'SAÍDAS — Custos Variáveis por Processo', y);
@@ -2474,10 +2558,10 @@ function gerarRelatorioContabilidade(){
 
   if(y>220){ y=pdfNewPage(doc); }
   y = pdfSection(doc,'RESULTADO DO PERÍODO', y);
-  const totalEntradas = totalR+totalLanc;
+  const totalEntradas = totalR; // Câmbio recebido = entrada principal
   const totalSaidas   = totalC+totalF+totalLancSaida;
   const resultado     = totalEntradas-totalSaidas;
-  y = pdfRow(doc,'Total Entradas','R$ '+fmt(totalEntradas),y,[22,163,74]);
+  y = pdfRow(doc,'Total Entradas (Câmbio + Outras Receitas)','R$ '+fmt(totalR+totalLanc),y,[22,163,74]);
   y = pdfRow(doc,'Total Saídas','R$ '+fmt(totalSaidas),y,[220,38,38]);
   y = pdfTotal(doc,'RESULTADO LÍQUIDO DO PERÍODO','R$ '+fmt(resultado),y,resultado>=0?[22,163,74]:[220,38,38]);
 
@@ -2635,6 +2719,24 @@ function makeFabDraggable() {
     window.addEventListener('mouseup', mu);
   });
 
+  // Touch - full XY support for mobile and tablet
+  fab.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    startDrag(t.clientX, t.clientY);
+    const tm = e2 => {
+      if (e2.cancelable) e2.preventDefault();
+      const t2 = e2.touches[0];
+      moveDrag(t2.clientX, t2.clientY);
+    };
+    const tu = () => {
+      endDrag();
+      window.removeEventListener('touchmove', tm);
+      window.removeEventListener('touchend', tu);
+    };
+    window.addEventListener('touchmove', tm, {passive: false});
+    window.addEventListener('touchend', tu);
+  }, {passive: true});
+
   // Touch
   fab.addEventListener('touchstart', e => {
     const t = e.touches[0];
@@ -2751,15 +2853,16 @@ const SHEET_ID = '1-Or9ewLhLkunUHP8GgOw9rZWd2k2bhMS8_93Ie1znXY';
 const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
 
 // Get current OAuth token from Google Identity Services
-function getAccessToken() {
+function getAccessToken(forceDriveConsent=false) {
   return new Promise((resolve, reject) => {
     const user = sessionStorage.getItem('erp-user');
     if (!user) { reject('Not logged in'); return; }
-    // Use GIS token client for Sheets scope
-    if (window._sheetsToken && window._sheetsTokenExpiry > Date.now()) {
+    // Return cached token if valid
+    if (!forceDriveConsent && window._sheetsToken && window._sheetsTokenExpiry > Date.now()) {
       resolve(window._sheetsToken);
       return;
     }
+    const prompt = forceDriveConsent ? 'consent' : (window._driveConsented ? '' : 'consent');
     const client = google.accounts.oauth2.initTokenClient({
       client_id: '69223242564-l80vfi8s0i58tf4b6jumrbvt82mdjlik.apps.googleusercontent.com',
       scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive',
@@ -2767,10 +2870,14 @@ function getAccessToken() {
         if (resp.error) { reject(resp.error); return; }
         window._sheetsToken = resp.access_token;
         window._sheetsTokenExpiry = Date.now() + (resp.expires_in * 1000) - 60000;
+        window._driveConsented = true;
+        sessionStorage.setItem('drive-consented', '1');
         resolve(resp.access_token);
       },
     });
-    client.requestAccessToken({prompt: ''});
+    // Check if user already consented in this browser
+    const alreadyConsented = sessionStorage.getItem('drive-consented') === '1' || window._driveConsented;
+    client.requestAccessToken({prompt: alreadyConsented ? '' : 'consent'});
   });
 }
 
@@ -3018,8 +3125,12 @@ async function criarPastaProcesso(processo) {
     return { folderId, folderUrl };
   } catch(e) {
     hideSyncIndicator();
-    console.warn('Erro ao criar pasta:', e.message);
-    showToast('⚠️ Não foi possível criar pasta no Drive');
+    const msg = e.message || '';
+    if(msg.includes('popup') || msg.includes('access_denied') || msg.includes('consent')) {
+      showToast('🔑 Autorize o acesso ao Drive na janela que abrir');
+    } else {
+      showToast('⚠️ Erro Drive: ' + msg.substring(0,50));
+    }
     return null;
   }
 }
