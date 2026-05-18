@@ -126,7 +126,6 @@ html.light ::-webkit-scrollbar-thumb{background:var(--border2);}
 /* ── INPUTS ── */
 input,select,textarea{width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:7px;padding:8px 11px;color:var(--text);font-size:13px;font-family:'Inter',sans-serif;outline:none;transition:border 0.15s;}
 input:focus,select:focus,textarea:focus{border-color:var(--accent2);box-shadow:0 0 0 3px #0088ff15;}
-input[type=text],input[type=email],input[type=number]{max-length:500;}
 label.lbl{color:var(--muted);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;display:block;margin-bottom:4px;}
 .ig{margin-bottom:12px;}
 select option{background:var(--bg2);}
@@ -169,7 +168,14 @@ select option{background:var(--bg2);}
 .doc-grid{display:flex;flex-wrap:wrap;gap:8px;}
 .doc-chip{padding:7px 13px;background:var(--bg);border:1px dashed var(--border2);border-radius:8px;color:var(--muted);font-size:11.5px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all 0.15s;}
 .doc-chip:hover{border-color:var(--accent2);color:var(--accent);}
-.doc-chip.has-doc{border-color:var(--green);border-style:solid;color:var(--green);}
+.doc-chip.has-doc{border-color:var(--green);border-style:solid;color:var(--green);background:rgba(34,197,94,0.06);}
+
+/* Card compacto de lançamento */
+.lanc-card{transition:transform 0.12s, box-shadow 0.12s;}
+.lanc-card:hover{transform:translateY(-1px);box-shadow:0 2px 8px rgba(0,0,0,0.06);}
+@media (max-width:520px){
+  .lanc-card .doc-chip{padding:2px 5px;font-size:9px;}
+}
 
 /* ── PAGE HEADER ── */
 .page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px;}
@@ -344,6 +350,9 @@ select option{background:var(--bg2);}
   <button onclick="saveToSheets()" style="width:100%;margin-bottom:6px;background:transparent;border:1px solid var(--accent2);border-radius:8px;padding:7px;color:var(--accent2);font-size:11px;cursor:pointer;font-family:'Inter',sans-serif">
     ☁️ Salvar agora
   </button>
+  <button onclick="reconectarDrive()" style="width:100%;margin-bottom:6px;background:transparent;border:1px solid var(--border);border-radius:8px;padding:7px;color:var(--muted);font-size:11px;cursor:pointer;font-family:'Inter',sans-serif" title="Use se houver erro ao acessar o Google Drive" onmouseover="this.style.color='var(--accent)';this.style.borderColor='var(--accent)'" onmouseout="this.style.color='var(--muted)';this.style.borderColor='var(--border)'">
+    🔗 Reconectar Drive
+  </button>
   <button onclick="logoutUser()" style="width:100%;margin-bottom:6px;background:transparent;border:1px solid var(--border);border-radius:8px;padding:7px;color:var(--muted);font-size:11px;cursor:pointer;font-family:'Inter',sans-serif" onmouseover="this.style.color='var(--red)';this.style.borderColor='var(--red)'" onmouseout="this.style.color='var(--muted)';this.style.borderColor='var(--border)'">
     🚪 Sair
   </button>
@@ -462,6 +471,36 @@ const fmt = n=>(parseFloat(n)||0).toLocaleString('pt-BR',{minimumFractionDigits:
 const fmtN = n=>(parseFloat(n)||0).toLocaleString('pt-BR');
 const tc = p=>(p.custoMaritimo||0)+(p.custoFrete||0)+(p.custoCertificado||0)+(p.custoArmazem||0)+(p.custoPorto||0)+(p.custoDespachante||0)+(p.custoServTerceiros||0)+(p.custoImpostos||0)+(p.custoProduto||0);
 const tcm = m=>(m.contador||0)+(m.aluguel||0)+(m.software||0)+(m.internet||0)+(m.telefone||0)+(m.impostos||0)+(m.outros||0);
+
+// ── STATUS UNIFICADO ──────────────────────────────────────
+// Apenas 3 estados visíveis: Em Aberto, Pago, Cancelado
+// Mapeamento de status legados para os novos
+const STATUS_LEGACY_MAP = {
+  'Estimativa':'Em Aberto', 'Pendente':'Em Aberto', 'Aguardando':'Em Aberto',
+  'Pré Embarque Enviado':'Em Aberto', 'Em Aberto':'Em Aberto',
+  'Pago':'Pago', 'Confirmado':'Pago', 'Liquidado':'Pago',
+  'Cancelado':'Cancelado'
+};
+const STATUS_OPTIONS = ['Em Aberto', 'Pago', 'Cancelado'];
+const STATUS_COLORS = {
+  'Em Aberto':'var(--yellow)',
+  'Pago':'var(--green)',
+  'Cancelado':'var(--red)'
+};
+const STATUS_ICONS = {
+  'Em Aberto':'🟡',
+  'Pago':'🟢',
+  'Cancelado':'⚫'
+};
+// Normaliza qualquer string de status legada para o novo conjunto
+const normalizeStatus = s => STATUS_LEGACY_MAP[s] || 'Em Aberto';
+// Verifica se um conjunto de docs tem ao menos um comprovante anexado
+const hasComprovante = docs => {
+  if (!docs || typeof docs !== 'object') return false;
+  const keys = ['comprovante','fatura','nfe','outros'];
+  return keys.some(k => docs[k] && String(docs[k]).length > 0);
+};
+
 const badge = s=>{
   const m={'Embarcado':'emb','No Porto':'porto','No Armazém':'arm','A Coletar':'col'};
   const i={'Embarcado':'🚢','No Porto':'⚓','No Armazém':'🏭','A Coletar':'🚛'};
@@ -639,9 +678,14 @@ function toggleTheme(){
 // NAV + HISTORY
 // ═══════════════════════════════════════════════════════════
 const navHistory=[];
+const NAV_HISTORY_MAX = 50;
 
 function nav(page,sub=null){
-  if(S.page) navHistory.push({page:S.page,sub:S.sub,editMode:S.editMode,createMode:S.createMode,filter:S.filter,custosTab:S.custosTab,cambioTab:S.cambioTab,cadastroTab:S.cadastroTab,lancFiltro:S.lancFiltro});
+  if(S.page) {
+    navHistory.push({page:S.page,sub:S.sub,editMode:S.editMode,createMode:S.createMode,filter:S.filter,custosTab:S.custosTab,cambioTab:S.cambioTab,cadastroTab:S.cadastroTab,lancFiltro:S.lancFiltro});
+    // Limit history size to avoid memory growth
+    if(navHistory.length > NAV_HISTORY_MAX) navHistory.shift();
+  }
   S.page=page; S.sub=sub; S.editMode=false; S.createMode=false; S.filter=null;
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   const nb=document.getElementById('nav-'+page);
@@ -965,7 +1009,7 @@ function renderProcessoDetalhe(p){
   <div class="g2">
     <div class="card">
       <div class="card-title"><div class="card-title-left">💸 Custos do Processo</div></div>
-      ${[['Marítimo',p.custoMaritimo,'maritimo'],['Frete Rodoviário',p.custoFrete,'frete'],['Certificado de Origem',p.custoCertificado,'certificado'],['Armazém',p.custoArmazem,'armazem'],['Porto / Taxas',p.custoPorto,'porto'],['Despachante',p.custoDespachante,'despachante'],['Serviços de Terceiros',p.custoServTerceiros,'servicos'],['Impostos',p.custoImpostos,'impostos'],['Produto',p.custoProduto,'produto'],['Transportadora (DACTE/MDF)',p.custoFrete,'transportadora']].map(([l,v])=>`
+      ${[['Marítimo',p.custoMaritimo,'maritimo'],['Frete Rodoviário',p.custoFrete,'frete'],['Certificado de Origem',p.custoCertificado,'certificado'],['Armazém',p.custoArmazem,'armazem'],['Porto / Taxas',p.custoPorto,'porto'],['Despachante',p.custoDespachante,'despachante'],['Serviços de Terceiros',p.custoServTerceiros,'servicos'],['Impostos',p.custoImpostos,'impostos'],['Produto',p.custoProduto,'produto']].map(([l,v])=>`
         <div class="cost-row"><span class="c-label">${l}</span><span class="c-val">R$ ${fmt(v)}</span></div>`).join('')}
       <div class="total-box">
         <span style="color:var(--muted);font-size:12px">Total Custos</span>
@@ -1005,7 +1049,7 @@ function renderProcessoDetalhe(p){
     </div>
     <div style="margin-top:12px;padding:10px;background:var(--bg);border-radius:8px;font-size:11px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
       <span>💡 Clique em cada documento para colar o link do Google Drive.</span>
-      <button onclick="abrirPastaProcesso(p)"
+      <button onclick="abrirPastaProcesso(S.processos.find(x=>x.id==='${p.id}'))"
         style="background:var(--accent2);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">
         📂 ${p.docs&&p.docs._folderUrl ? 'Abrir Pasta do Processo' : 'Criar Pasta no Drive'}
       </button>
@@ -1036,8 +1080,8 @@ function renderProcessoForm(p){
   const companhias=['MAERSK','COSCO','MSC','CMA CGM','Hapag-Lloyd','Evergreen','Outros'];
   const modalidades=['Crossdock','Armazenagem tradicional'];
   const bancos=['Itaú','Bradesco','Santander','Banco do Brasil','Outro'];
-  const cambioStatus=['Aguardando','Pré-embarque enviado','Pós-embarque enviado','Liquidado'];
-  const custoStatus=['Estimativa','Pago','Pendente'];
+  const cambioStatus=STATUS_OPTIONS;
+  const custoStatus=STATUS_OPTIONS;
   const containerQty=isEdit?(parseInt(p.qtdContainer)||1):1;
   const containerNums=isEdit?(p.containers||[p.container||'']).slice(0,containerQty):[''];
   const clienteOpts=S.clientes.map(c=>c.nome);
@@ -1175,7 +1219,7 @@ function renderProcessoForm(p){
       <div style="font-size:9px;color:var(--muted);letter-spacing:1.2px;text-transform:uppercase">Valor (R$)</div>
       <div style="font-size:9px;color:var(--muted);letter-spacing:1.2px;text-transform:uppercase">Status</div>
     </div>
-    ${[['Marítimo','custoMaritimo'],['Frete Rodoviário','custoFrete'],['Certificado de Origem','custoCertificado'],['Armazém','custoArmazem'],['Porto / Taxas','custoPorto'],['Despachante','custoDespachante'],['Serviços de Terceiros','custoServTerceiros'],['Impostos','custoImpostos'],['Custo do Produto','custoProduto']].map(([label,key])=>'<div style="display:grid;grid-template-columns:140px 1fr 120px;gap:8px;align-items:center;margin-bottom:5px"><div style="font-size:12px;color:var(--muted2)">'+label+'</div><div class="ig" style="margin-bottom:0"><input type="number" id="f_'+key+'" value="'+dc(key)+'" placeholder="0,00" step="0.01" oninput="calcularTotalCustos()"/></div><div class="ig" style="margin-bottom:0"><select id="f_'+key+'_status" style="font-size:11px;padding:7px 8px">'+custoStatus.map(s=>'<option'+(((!isEdit&&s==="Estimativa")||(isEdit&&(p?.[key+"_status"]||"Estimativa")===s))?" selected":"")+'>'+s+'</option>').join('')+'</select></div></div>').join('')}
+    ${[['Marítimo','custoMaritimo'],['Frete Rodoviário','custoFrete'],['Certificado de Origem','custoCertificado'],['Armazém','custoArmazem'],['Porto / Taxas','custoPorto'],['Despachante','custoDespachante'],['Serviços de Terceiros','custoServTerceiros'],['Impostos','custoImpostos'],['Custo do Produto','custoProduto']].map(([label,key])=>'<div style="display:grid;grid-template-columns:140px 1fr 120px;gap:8px;align-items:center;margin-bottom:5px"><div style="font-size:12px;color:var(--muted2)">'+label+'</div><div class="ig" style="margin-bottom:0"><input type="number" id="f_'+key+'" value="'+dc(key)+'" placeholder="0,00" step="0.01" oninput="calcularTotalCustos()"/></div><div class="ig" style="margin-bottom:0"><select id="f_'+key+'_status" style="font-size:11px;padding:7px 8px">'+custoStatus.map(s=>{ const currentRaw = isEdit ? (p?.[key+"_status"]||"Em Aberto") : "Em Aberto"; const current = normalizeStatus(currentRaw); return '<option'+(s===current?" selected":"")+'>'+s+'</option>'; }).join('')+'</select></div></div>').join('')}
     <div style="display:flex;justify-content:space-between;padding:10px 14px;background:var(--bg);border-radius:8px;margin-top:8px">
       <span style="color:var(--muted);font-size:12px">Total Estimado</span>
       <span id="custo-total-val" style="color:var(--yellow);font-family:'Outfit',sans-serif;font-weight:700;font-size:15px">R$ ${[dc('custoMaritimo'),dc('custoFrete'),dc('custoCertificado'),dc('custoArmazem'),dc('custoPorto'),dc('custoDespachante'),dc('custoServTerceiros'),dc('custoImpostos'),dc('custoProduto')].reduce((a,b)=>a+(parseFloat(b)||0),0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</span>
@@ -1198,7 +1242,7 @@ function renderProcessoForm(p){
     </div>
     <div class="g2">
       ${IG('Banco','cambioBanco',d('cambioBanco','Itaú'),'text',bancos)}
-      ${IG('Status Câmbio','cambioStatus',d('cambioStatus','Aguardando'),'text',cambioStatus)}
+      ${IG('Status Câmbio','cambioStatus',normalizeStatus(d('cambioStatus','Em Aberto')),'text',cambioStatus)}
     </div>
     <div class="sec-divider"><div class="sec-divider-line"></div><div class="sec-divider-label">DU-E</div><div class="sec-divider-line"></div></div>
     <div class="g2">
@@ -1214,8 +1258,29 @@ function renderProcessoForm(p){
   </div>`;
 }
 function renderRastreamento(){
-  const maerskUrl=c=>`https://www.maersk.com/tracking/${c}`;
-  const coscoUrl=c=>`https://elines.coscoshipping.com/ebusiness/cargoTracking?trackingType=CONTAINER&number=${c}`;
+  const trackUrl = (companhia, container) => {
+    const c = (container||'').trim();
+    if(!c) return '#';
+    const comp = (companhia||'').toUpperCase();
+    if(comp.includes('MAERSK')) return `https://www.maersk.com/tracking/${c}`;
+    if(comp.includes('COSCO'))  return `https://elines.coscoshipping.com/ebusiness/cargoTracking?trackingType=CONTAINER&number=${c}`;
+    if(comp.includes('MSC'))    return `https://www.msc.com/track-a-shipment?agencyPath=msc&searchNumber=${c}`;
+    if(comp.includes('CMA') || comp.includes('CGM')) return `https://www.cma-cgm.com/ebusiness/tracking/search?number=${c}`;
+    if(comp.includes('HAPAG')) return `https://www.hapag-lloyd.com/en/online-business/track/track-by-container-solution.html?container=${c}`;
+    if(comp.includes('EVERGREEN')) return `https://www.evergreen-shipping.us/aboutus/StaticPages/CargoTrackingMain.aspx?bl=${c}`;
+    if(comp.includes('ONE')) return `https://ecomm.one-line.com/one-ecom/manage-shipment/cargo-tracking?term=${c}`;
+    // Fallback: search Google for "<container> tracking"
+    return `https://www.google.com/search?q=${encodeURIComponent(c + ' container tracking ' + (companhia||''))}`;
+  };
+  const compIcon = (companhia) => {
+    const comp = (companhia||'').toUpperCase();
+    if(comp.includes('MAERSK')) return '🔵';
+    if(comp.includes('COSCO')) return '🔴';
+    if(comp.includes('MSC')) return '🟡';
+    if(comp.includes('CMA') || comp.includes('CGM')) return '🟢';
+    if(comp.includes('HAPAG')) return '🟠';
+    return '🚢';
+  };
   return `
   ${backBtn()}
   <div class="page-header">
@@ -1226,12 +1291,12 @@ function renderRastreamento(){
     <div class="card">
       <div class="card-title">
         <div class="card-title-left">
-          ${p.companhia==='MAERSK'?'🔵':'🔴'} ${p.container}
+          ${compIcon(p.companhia)} ${p.container}
           <span style="color:var(--muted);font-weight:400;font-size:11px">· ${p.id} · ${p.produto}</span>
         </div>
         <div style="display:flex;gap:8px">
           ${badge(p.status)}
-          <a href="${p.companhia==='MAERSK'?maerskUrl(p.container):coscoUrl(p.container)}" target="_blank" class="btn btn-secondary btn-sm">🔍 Rastrear no site</a>
+          <a href="${trackUrl(p.companhia, p.container)}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">🔍 Rastrear no site</a>
         </div>
       </div>
       <div class="g2">
@@ -1267,7 +1332,7 @@ function renderRastreamento(){
       </div>
       <div style="margin-top:12px;padding:10px 14px;background:var(--bg);border-radius:8px;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:8px">
         ℹ️ Para rastreamento em tempo real, clique em "Rastrear no site" — a API da ${p.companhia} será integrada na Fase 2.
-        <a href="${p.companhia==='MAERSK'?maerskUrl(p.container):coscoUrl(p.container)}" target="_blank" style="color:var(--accent);font-size:11px;text-decoration:none;margin-left:auto">Abrir rastreamento →</a>
+        <a href="${trackUrl(p.companhia, p.container)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);font-size:11px;text-decoration:none;margin-left:auto">Abrir rastreamento →</a>
       </div>
     </div>`).join('')||`
     <div class="card" style="text-align:center;padding:40px">
@@ -1318,7 +1383,7 @@ function renderCambio(){
       <div class="g3">
         ${IG('Invoice','nc_invoiceNum','')}
         ${IG('Contrato','nc_contratoNum','')}
-        ${IG('Status','nc_status','Aguardando','text',['Aguardando','Pré-embarque enviado','Pós-embarque enviado','Liquidado'])}
+        ${IG('Status','nc_status','Em Aberto','text',STATUS_OPTIONS)}
       </div>
 
       <div class="sec-divider"><div class="sec-divider-line"></div><div class="sec-divider-label">Pré-Embarque</div><div class="sec-divider-line"></div></div>
@@ -1378,7 +1443,7 @@ function renderCambio(){
         <div class="card-title">
           <div class="card-title-left">💱 ${escHtml(p.id)} — <span style="font-weight:400;color:var(--muted2)">${escHtml(nomeCliente)}</span></div>
           <div style="display:flex;gap:8px;align-items:center">
-            <span class="badge ${statusClass}">${escHtml(p.cambioStatus||'Aguardando')}</span>
+            <span class="badge ${statusClass}">${escHtml(normalizeStatus(p.cambioStatus||'Em Aberto'))}</span>
             <button class="btn btn-secondary btn-xs" onclick="gerarExtratoCambio('${escHtml(p.id)}')">📑 PDF</button>
           </div>
         </div>
@@ -1440,7 +1505,7 @@ function autoPreencherCambio(id){
   setV('nc_iof', p.cambioIOF||'');
   setV('nc_spread', p.cambioSpread||'');
   setV('nc_reais', p.cambioReais||'');
-  setV('nc_status', p.cambioStatus||'Aguardando');
+  setV('nc_status', normalizeStatus(p.cambioStatus||'Em Aberto'));
 }
 
 
@@ -1461,26 +1526,97 @@ function renderCustos(){
   </div>`;
 
   if(tab==='fixos'){
-    const m=S.custosMensais[0]||{};
-    const total=tcm(m);
+    // Garante pelo menos um mês ativo
+    if (!S.custosMensais || S.custosMensais.length === 0) {
+      const hoje = new Date();
+      const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+      S.custosMensais = [{
+        id: Date.now(),
+        mes: meses[hoje.getMonth()], ano: hoje.getFullYear(),
+        contador:0, aluguel:0, software:0, internet:0, telefone:0, impostos:0, outros:0, docs:{}
+      }];
+    }
+    if (!S.fixoMesAtivo) S.fixoMesAtivo = String(S.custosMensais[0].id || 0);
+
+    // Localiza o mês selecionado
+    let mIdx = S.custosMensais.findIndex(x => String(x.id) === S.fixoMesAtivo);
+    if (mIdx < 0) { mIdx = 0; S.fixoMesAtivo = String(S.custosMensais[0].id); }
+    const m = S.custosMensais[mIdx];
+    const total = tcm(m);
+
     return `
     ${backBtn()}
-    <div class="page-header"><div class="page-title">Custos</div><button class="btn btn-success btn-sm" onclick="gerarRelatorioMensal()">📑 PDF Mensal</button></div>
+    <div class="page-header">
+      <div class="page-title">Custos Fixos</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary btn-sm" onclick="novoMesFixo()" title="Criar próximo mês baseado no atual">📅 Novo Mês</button>
+        <button class="btn btn-success btn-sm" onclick="gerarRelatorioMensal()">📑 PDF</button>
+      </div>
+    </div>
     ${tabsHtml}
-    <div class="card">
-      <div class="card-title"><div class="card-title-left">🏢 Custos Fixos Mensais — ${m.mes||'Mês atual'}</div></div>
-      <div class="g3">
-        ${[['Contador','contador'],['Aluguel Coworking','aluguel'],['Software','software'],['Internet','internet'],['Telefone','telefone'],['Impostos','impostos'],['Outros','outros']].map(([l,k])=>`
-          <div class="ig"><label class="lbl">${l} (R$)</label><input type="number" value="${m[k]||0}" onchange="S.custosMensais[0]['${k}']=parseFloat(this.value)||0;updateSB()" /></div>`).join('')}
+
+    <div class="card" style="margin-bottom:14px">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <div style="flex:1;min-width:180px">
+          <div style="color:var(--muted);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px">Mês de referência</div>
+          <select onchange="S.fixoMesAtivo=this.value;render()" style="font-size:13px;padding:8px 10px">
+            ${S.custosMensais.map(x => `<option value="${x.id}" ${String(x.id)===S.fixoMesAtivo?'selected':''}>${escHtml(x.mes||'—')}${x.ano?'/'+x.ano:''}</option>`).join('')}
+          </select>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="editarMesFixo('${m.id}')" style="white-space:nowrap">✏️ Renomear mês</button>
+        ${S.custosMensais.length > 1 ? `<button class="btn btn-danger btn-sm" onclick="excluirMesFixo('${m.id}')" style="white-space:nowrap">🗑️ Excluir mês</button>` : ''}
       </div>
-      <div class="total-box">
-        <span style="color:var(--muted)">Total Fixos do Mês</span>
-        <span style="color:var(--yellow);font-family:'Outfit',sans-serif;font-weight:800;font-size:16px" id="total-fixos">R$ ${fmt(total)}</span>
+      <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--bg);border-radius:8px">
+        <span style="font-size:11px;color:var(--muted);letter-spacing:1.2px;text-transform:uppercase">Total do Mês</span>
+        <span style="font-family:'Outfit',sans-serif;font-weight:800;font-size:18px;color:var(--yellow)">R$ ${fmt(total)}</span>
       </div>
-      <div style="margin-top:12px;padding:10px;background:var(--bg);border-radius:8px;font-size:11px;color:var(--muted)">
-        💡 Opção: ratear custos fixos por processo. <button class="btn btn-secondary btn-xs" style="margin-left:8px">Ratear por Processo</button>
-      </div>
-    </div>`;
+    </div>
+
+    ${Object.entries(FIXED_COST_FIELDS).map(([field, label]) => {
+      const valor = m[field] || 0;
+      const docs = (m.docs && m.docs[field]) || {};
+      const isPago = hasComprovante(docs);
+      const status = isPago ? 'Pago' : (valor>0 ? 'Em Aberto' : 'Em Aberto');
+      const fakeLancId = 'auto_fixo_' + field + '_' + m.id;
+      return `<div class="card" style="margin-bottom:10px;border-left:3px solid var(--accent2)">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+          <div style="flex:1">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+              <span style="font-size:16px">💸</span>
+              <span style="font-family:'Outfit',sans-serif;font-weight:700;font-size:14px;color:var(--text)">${escHtml(label)}</span>
+              <span style="font-size:9px;color:var(--accent2);background:rgba(34,197,160,0.1);padding:2px 6px;border-radius:4px;font-weight:600">⚙️ FIXO</span>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--muted2);margin-bottom:10px">
+              <span>📅 ${escHtml(m.mes||'')}${m.ano?'/'+m.ano:''}</span>
+              <span>🏷️ Custo Fixo Mensal</span>
+            </div>
+            <div class="ig" style="margin-bottom:10px;max-width:200px">
+              <label class="lbl">Valor (R$)</label>
+              <input type="number" value="${valor}" step="0.01" placeholder="0,00"
+                onchange="atualizarValorFixo('${m.id}','${field}', parseFloat(this.value)||0)" />
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              ${['comprovante','fatura','nfe','outros'].map(dk=>{
+                const docLabel={'comprovante':'🧾 Comprovante','fatura':'📋 Fatura','nfe':'📄 NF-e','outros':'📎 Outros'}[dk];
+                const hasDoc = docs[dk] && String(docs[dk]).length>0;
+                return `<span class="doc-chip ${hasDoc?'has-doc':''}" onclick="abrirDocLanc('${fakeLancId}','${dk}')" style="font-size:10px;padding:4px 9px">
+                  ${hasDoc?'✅':'+'} ${docLabel}
+                </span>`;
+              }).join('')}
+            </div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:18px;color:var(--red)">
+              - R$ ${fmt(valor)}
+            </div>
+            <div style="margin-top:6px;display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:rgba(0,0,0,0.04);border-radius:10px;border:1px solid ${STATUS_COLORS[status]||'var(--border)'}">
+              <span style="font-size:11px">${STATUS_ICONS[status]||'⚪'}</span>
+              <span style="font-size:10px;font-weight:700;color:${STATUS_COLORS[status]||'var(--muted)'}">${status}</span>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    }).join('')}`;
   }
 
   if(tab==='consolidado'){
@@ -1536,6 +1672,73 @@ function renderCustos(){
         <span style="color:var(--yellow);font-family:'Outfit',sans-serif;font-weight:800;font-size:15px">R$ ${fmt(c)}</span>
       </div>
     </div>`;}).join('')}`;
+}
+
+// ── Custos Fixos: gerenciamento de meses ──
+function atualizarValorFixo(mesId, field, valor){
+  const m = (S.custosMensais||[]).find(x => String(x.id) === String(mesId));
+  if (!m) return;
+  m[field] = parseFloat(valor) || 0;
+  scheduleAutoSave();
+  updateSB();
+  render();
+}
+
+function novoMesFixo(){
+  const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+  const hoje = new Date();
+  // Buscar próximo mês a partir do mais recente
+  const ult = S.custosMensais && S.custosMensais.length > 0 ? S.custosMensais[0] : null;
+  let nextMesNome = meses[hoje.getMonth()];
+  let nextAno = hoje.getFullYear();
+  if (ult && ult.mes) {
+    const idx = meses.indexOf(ult.mes);
+    if (idx >= 0) {
+      nextMesNome = meses[(idx + 1) % 12];
+      nextAno = idx === 11 ? (parseInt(ult.ano||hoje.getFullYear(),10) + 1) : (ult.ano || hoje.getFullYear());
+    }
+  }
+  // Copia valores do mês anterior (mas zera docs)
+  const novo = {
+    id: Date.now(),
+    mes: nextMesNome, ano: nextAno,
+    contador: (ult?.contador)||0, aluguel: (ult?.aluguel)||0,
+    software: (ult?.software)||0, internet: (ult?.internet)||0,
+    telefone: (ult?.telefone)||0, impostos: (ult?.impostos)||0,
+    outros: (ult?.outros)||0,
+    docs: {}
+  };
+  S.custosMensais.unshift(novo);
+  S.fixoMesAtivo = String(novo.id);
+  showToast('✅ ' + novo.mes + '/' + novo.ano + ' criado');
+  scheduleAutoSave();
+  render();
+}
+
+function editarMesFixo(mesId){
+  const m = (S.custosMensais||[]).find(x => String(x.id) === String(mesId));
+  if (!m) return;
+  const nome = prompt('Nome do mês (ex: "Maio"):', m.mes || '');
+  if (nome === null) return;
+  const ano = prompt('Ano (ex: 2026):', m.ano || new Date().getFullYear());
+  if (ano === null) return;
+  m.mes = String(nome).trim();
+  m.ano = parseInt(ano,10) || new Date().getFullYear();
+  scheduleAutoSave();
+  render();
+}
+
+function excluirMesFixo(mesId){
+  if (S.custosMensais.length <= 1) { alert('Não é possível excluir o único mês existente.'); return; }
+  const idx = S.custosMensais.findIndex(x => String(x.id) === String(mesId));
+  if (idx < 0) return;
+  const m = S.custosMensais[idx];
+  if (!confirm('Excluir o mês "' + (m.mes||'') + '/' + (m.ano||'') + '"?\n\nIsso remove todos os valores e comprovantes deste mês. Não pode ser desfeito.')) return;
+  S.custosMensais.splice(idx, 1);
+  S.fixoMesAtivo = String(S.custosMensais[0].id);
+  showToast('✅ Mês excluído');
+  scheduleAutoSave();
+  render();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1746,82 +1949,121 @@ function excluirCadastro(kind, idx){
   if(kind==='cliente') S.clientes.splice(idx,1);
   else S.fornecedores.splice(idx,1);
   showToast();
+  scheduleAutoSave();
   render();
 }
 
 
 // ═══════════════════════════════════════════════════════════
-// LANÇAMENTOS FINANCEIROS
+// LANÇAMENTOS FINANCEIROS / EXTRATO DE CAIXA
 // ═══════════════════════════════════════════════════════════
+
+// Mapas de configuração para entries automáticas (uma única fonte de verdade)
+const PROCESS_COST_FIELDS = {
+  custoMaritimo:'Frete Marítimo', custoFrete:'Frete Rodoviário',
+  custoCertificado:'Certificado de Origem', custoArmazem:'Armazém',
+  custoPorto:'Porto / Taxas', custoDespachante:'Despachante',
+  custoServTerceiros:'Serviços de Terceiros', custoImpostos:'Impostos',
+  custoProduto:'Produto'
+};
+const FIXED_COST_FIELDS = {
+  contador:'Contador', aluguel:'Aluguel', software:'Software',
+  internet:'Internet', telefone:'Telefone', impostos:'Impostos', outros:'Outros'
+};
+
 function renderLancamentos(back, tabsHtml){
   const ls = S.lancamentos || [];
-  const filtro = S.lancFiltro || 'todos';
 
-  // Build computed entries from processos and custos fixos
+  // Set para detectar duplicação: chave = sourceProcessoId + sourceField
+  // Se existe lançamento manual com vinculoId apontando para o mesmo processo+campo, esconde o auto
+  const manualOverride = new Set();
+  ls.forEach(l => {
+    if (l.vinculo === 'processo' && l.vinculoId && l.categoria) {
+      manualOverride.add(`${l.vinculoId}::${l.categoria}`);
+    }
+  });
+
   const computedEntries = [];
-  
-  // Câmbio recebido por processo (entradas)
+
+  // Câmbio recebido por processo (entrada automática)
   S.processos.forEach(p => {
-    if(p.cambioReais > 0) {
+    if((p.cambioReais||0) > 0 && !manualOverride.has(`${p.id}::Câmbio`)) {
+      const docs = (p.docs && p.docs._lancCambio) ? p.docs._lancCambio : {};
+      // Status: se tem comprovante OU status legado já é Pago, vira Pago
+      const legacy = p.cambioStatus || '';
+      let status = hasComprovante(docs) ? 'Pago' : normalizeStatus(legacy);
+      if (legacy === 'Cancelado') status = 'Cancelado';
       computedEntries.push({
+        id: 'auto_cambio_' + p.id,
         _computed: true,
+        _sourceProcessoId: p.id,
+        _sourceField: 'cambioReais',
         tipo: 'Receita',
         descricao: 'Câmbio Recebido — ' + p.id,
         valor: p.cambioReais||0,
         data: p.cambioRecebimento || p.embarque || '',
         empresa: p.cliente||'',
         categoria: 'Câmbio',
-        vinculo: 'Processo',
+        vinculo: 'processo',
         vinculoId: p.id,
-        status: 'Confirmado',
+        status,
+        docs,
       });
     }
-    // Custos do processo (saídas)
-    const custoLabels = {
-      custoMaritimo:'Frete Marítimo', custoFrete:'Frete Rodoviário',
-      custoCertificado:'Certificado de Origem', custoArmazem:'Armazém',
-      custoPorto:'Porto / Taxas', custoDespachante:'Despachante',
-      custoServTerceiros:'Serviços de Terceiros', custoImpostos:'Impostos',
-      custoProduto:'Produto'
-    };
-    Object.entries(custoLabels).forEach(([k, label]) => {
-      if(p[k] > 0) {
+    // Custos do processo (saídas automáticas)
+    Object.entries(PROCESS_COST_FIELDS).forEach(([field, label]) => {
+      if((p[field]||0) > 0 && !manualOverride.has(`${p.id}::${label}`)) {
+        const docs = (p.docs && p.docs['_lanc_'+field]) ? p.docs['_lanc_'+field] : {};
+        const legacy = p[field+'_status'] || '';
+        let status = hasComprovante(docs) ? 'Pago' : normalizeStatus(legacy);
+        if (legacy === 'Cancelado') status = 'Cancelado';
         computedEntries.push({
+          id: 'auto_' + field + '_' + p.id,
           _computed: true,
+          _sourceProcessoId: p.id,
+          _sourceField: field,
+          _sourceStatusField: field + '_status',
           tipo: 'Despesa',
           descricao: label + ' — ' + p.id,
-          valor: p[k]||0,
+          valor: p[field]||0,
           data: p.embarque||'',
-          empresa: '',
-          categoria: 'Custo de Processo',
-          vinculo: 'Processo',
+          empresa: p.logTransportadora || '',
+          categoria: label,
+          vinculo: 'processo',
           vinculoId: p.id,
-          status: p[k+'_status']||'Estimativa',
+          status,
+          docs,
         });
       }
     });
   });
 
-  // Custos fixos do mês atual
-  const m = S.custosMensais && S.custosMensais.length > 0 ? S.custosMensais[0] : null;
-  if(m) {
-    const fixosLabels = {contador:'Contador',aluguel:'Aluguel',software:'Software',
-      internet:'Internet',telefone:'Telefone',impostos:'Impostos',outros:'Outros'};
-    Object.entries(fixosLabels).forEach(([k, label]) => {
-      if(m[k] > 0) {
+  // Custos fixos do mês atual (saídas automáticas) — uma entry por (mês, custo)
+  (S.custosMensais || []).forEach((m, mi) => {
+    const mesId = 'fixos_' + (m.id || m.mes || mi);
+    Object.entries(FIXED_COST_FIELDS).forEach(([field, label]) => {
+      if((m[field]||0) > 0 && !manualOverride.has(`${mesId}::Custo Fixo: ${label}`)) {
+        const docs = (m.docs && m.docs[field]) ? m.docs[field] : {};
+        const status = hasComprovante(docs) ? 'Pago' : 'Em Aberto';
         computedEntries.push({
+          id: 'auto_fixo_' + field + '_' + (m.id || mi),
           _computed: true,
+          _sourceFixoField: field,
+          _sourceFixoIdx: mi,
           tipo: 'Despesa',
           descricao: 'Custo Fixo: ' + label,
-          valor: m[k]||0,
-          data: (m.mes||'')+'/'+(m.ano||''),
+          valor: m[field]||0,
+          data: (m.mes||'')+(m.ano?'/'+m.ano:''),
           empresa: '',
-          categoria: 'Custo Fixo',
-          status: 'Confirmado',
+          categoria: 'Custo Fixo: ' + label,
+          vinculo: 'fixo',
+          vinculoId: mesId,
+          status,
+          docs,
         });
       }
     });
-  }
+  });
 
   // Combine manual + computed entries, sort by date desc
   const allEntries = [...computedEntries, ...ls].sort((a,b) => {
@@ -1830,16 +2072,64 @@ function renderLancamentos(back, tabsHtml){
     return db.localeCompare(da);
   });
 
-  const showComputed = S.lancFiltro === '_computed';
-  const lista = filtro === 'todos' ? (showComputed ? computedEntries : allEntries)
-    : filtro === '_manual' ? ls
-    : [...computedEntries, ...ls].filter(l => l.tipo === filtro);
+  // ── Aplicação de filtros múltiplos ──
+  // Filtros disponíveis em S.lancFiltros (objeto):
+  //   tipo: 'todos' | 'Receita' | 'Despesa' | 'Transferência' | 'Reembolso' | '_manual' | '_auto'
+  //   status: 'todos' | 'Em Aberto' | 'Pago' | 'Cancelado'
+  //   mes: 'todos' | 'YYYY-MM' (formato ISO para ordenação)
+  //   processo: 'todos' | <procId>
+  if (!S.lancFiltros) S.lancFiltros = { tipo:'todos', status:'todos', mes:'todos', processo:'todos' };
+  // Compatibilidade com S.lancFiltro antigo
+  if (S.lancFiltro && S.lancFiltro !== 'todos') {
+    if (['Receita','Despesa','Transferência','Reembolso','_manual'].includes(S.lancFiltro)) {
+      S.lancFiltros.tipo = S.lancFiltro;
+    }
+    S.lancFiltro = null;
+  }
+  const F = S.lancFiltros;
 
-  // Totals from ALL entries
-  const totalEntradas = allEntries.filter(l=>l.tipo==='Receita').reduce((a,l)=>a+(l.valor||0),0);
-  const totalSaidas   = allEntries.filter(l=>l.tipo==='Despesa').reduce((a,l)=>a+(l.valor||0),0);
-  const totalTransf   = ls.filter(l=>l.tipo==='Transferência').reduce((a,l)=>a+(l.valor||0),0);
-  const totalReemb    = ls.filter(l=>l.tipo==='Reembolso').reduce((a,l)=>a+(l.valor||0),0);
+  // Extrair valores únicos para os dropdowns
+  const dateToMesKey = d => {
+    if (!d) return '';
+    const m1 = String(d).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/); // DD/MM/AAAA
+    if (m1) return m1[3] + '-' + m1[2].padStart(2,'0');
+    const m2 = String(d).match(/^(\w+)\/(\d{4})$/); // Mes/AAAA literal
+    if (m2) {
+      const mesesNum = {janeiro:'01',fevereiro:'02','março':'03',marco:'03',abril:'04',maio:'05',junho:'06',julho:'07',agosto:'08',setembro:'09',outubro:'10',novembro:'11',dezembro:'12'};
+      const n = mesesNum[m2[1].toLowerCase()];
+      if (n) return m2[2] + '-' + n;
+    }
+    return '';
+  };
+  const mesKeyToLabel = k => {
+    if (!k) return '—';
+    const [y,m] = k.split('-');
+    const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+    return (meses[parseInt(m,10)-1]||m) + '/' + y;
+  };
+  const mesesDisp = [...new Set(allEntries.map(l => dateToMesKey(l.data)).filter(Boolean))].sort().reverse();
+  const processosDisp = [...new Set(allEntries.filter(l => l.vinculo==='processo').map(l => l.vinculoId))].sort();
+
+  // Aplica filtros
+  const lista = allEntries.filter(l => {
+    if (F.tipo !== 'todos') {
+      if (F.tipo === '_manual' && l._computed) return false;
+      if (F.tipo === '_auto' && !l._computed) return false;
+      if (!['_manual','_auto'].includes(F.tipo) && l.tipo !== F.tipo) return false;
+    }
+    if (F.status !== 'todos' && l.status !== F.status) return false;
+    if (F.mes !== 'todos' && dateToMesKey(l.data) !== F.mes) return false;
+    if (F.processo !== 'todos' && l.vinculoId !== F.processo) return false;
+    return true;
+  });
+
+  // Totals da LISTA filtrada
+  const totalEntradas = lista.filter(l=>l.tipo==='Receita').reduce((a,l)=>a+(l.valor||0),0);
+  const totalSaidas   = lista.filter(l=>l.tipo==='Despesa').reduce((a,l)=>a+(l.valor||0),0);
+  const totalTransf   = lista.filter(l=>l.tipo==='Transferência').reduce((a,l)=>a+(l.valor||0),0);
+  const totalReemb    = lista.filter(l=>l.tipo==='Reembolso').reduce((a,l)=>a+(l.valor||0),0);
+  const totalEmAberto = lista.filter(l=>l.status==='Em Aberto').reduce((a,l)=>a+(l.valor||0),0);
+  const totalPago     = lista.filter(l=>l.status==='Pago').reduce((a,l)=>a+(l.valor||0),0);
   const saldo = totalEntradas - totalSaidas + totalReemb;
 
   const tipoColor = {
@@ -1849,12 +2139,12 @@ function renderLancamentos(back, tabsHtml){
   const tipoIcon = {
     'Receita':'💰','Despesa':'💸','Transferência':'🔄','Reembolso':'↩️'
   };
-  const statusColor = {
-    'Confirmado':'var(--green)','Pago':'var(--green)',
-    'Pendente':'var(--yellow)','Cancelado':'var(--red)'
-  };
+  const statusColor = STATUS_COLORS;
+  const statusIcons = STATUS_ICONS;
 
   const docsCount = d => d ? Object.values(d).filter(v=>v&&v.length>0).length : 0;
+
+  const hasActiveFilter = F.tipo!=='todos' || F.status!=='todos' || F.mes!=='todos' || F.processo!=='todos';
 
   return `
   ${back}
@@ -1865,20 +2155,20 @@ function renderLancamentos(back, tabsHtml){
   ${tabsHtml}
 
   <div class="g4" style="margin-bottom:16px">
-    <div class="kpi" onclick="S.lancFiltro='Receita';render()" style="cursor:pointer">
+    <div class="kpi" onclick="S.lancFiltros.tipo='Receita';render()" style="cursor:pointer">
       <div class="kpi-label">Entradas</div>
       <div class="kpi-val" style="color:var(--green);font-size:16px">R$ ${fmt(totalEntradas)}</div>
       <div class="kpi-sub"><span>💰 Receitas</span><span style="font-size:9px;color:var(--muted)">FILTRAR →</span></div>
     </div>
-    <div class="kpi" onclick="S.lancFiltro='Despesa';render()" style="cursor:pointer">
+    <div class="kpi" onclick="S.lancFiltros.tipo='Despesa';render()" style="cursor:pointer">
       <div class="kpi-label">Saídas</div>
       <div class="kpi-val" style="color:var(--red);font-size:16px">R$ ${fmt(totalSaidas)}</div>
       <div class="kpi-sub"><span>💸 Despesas</span><span style="font-size:9px;color:var(--muted)">FILTRAR →</span></div>
     </div>
-    <div class="kpi" onclick="S.lancFiltro='Reembolso';render()" style="cursor:pointer">
-      <div class="kpi-label">Reembolsos</div>
-      <div class="kpi-val" style="color:var(--yellow);font-size:16px">R$ ${fmt(totalReemb)}</div>
-      <div class="kpi-sub"><span>↩️ Devoluções</span><span style="font-size:9px;color:var(--muted)">FILTRAR →</span></div>
+    <div class="kpi" onclick="S.lancFiltros.status='Em Aberto';render()" style="cursor:pointer">
+      <div class="kpi-label">Em Aberto</div>
+      <div class="kpi-val" style="color:var(--yellow);font-size:16px">R$ ${fmt(totalEmAberto)}</div>
+      <div class="kpi-sub"><span>🟡 Não pagos</span><span style="font-size:9px;color:var(--muted)">FILTRAR →</span></div>
     </div>
     <div class="kpi">
       <div class="kpi-label">Saldo do Período</div>
@@ -1888,74 +2178,117 @@ function renderLancamentos(back, tabsHtml){
   </div>
 
   <div class="card" style="margin-bottom:14px">
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <span style="color:var(--muted);font-size:11px;letter-spacing:1px;text-transform:uppercase">Filtrar:</span>
-      ${['todos','Receita','Despesa','Transferência','Reembolso','_manual'].map(f=>`
-        <button class="btn btn-sm ${S.lancFiltro===f||(!S.lancFiltro&&f==='todos')?'btn-primary':'btn-secondary'}"
-          onclick="S.lancFiltro='${f}';render()">${
-            f==='todos'?'📊 Tudo':
-            f==='_manual'?'✏️ Manuais':
-            tipoIcon[f]+' '+f+'s'}</button>`).join('')}
-      ${S.lancFiltro && S.lancFiltro!=='todos' ? `<button class="btn btn-secondary btn-sm" onclick="S.lancFiltro='todos';render()">✕ Limpar</button>` : ''}
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+
+      <div style="flex:1;min-width:150px">
+        <div style="color:var(--muted);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px">Tipo</div>
+        <select onchange="S.lancFiltros.tipo=this.value;render()" style="font-size:12px;padding:7px 8px">
+          <option value="todos" ${F.tipo==='todos'?'selected':''}>📊 Todos</option>
+          <option value="Receita" ${F.tipo==='Receita'?'selected':''}>💰 Receitas</option>
+          <option value="Despesa" ${F.tipo==='Despesa'?'selected':''}>💸 Despesas</option>
+          <option value="Transferência" ${F.tipo==='Transferência'?'selected':''}>🔄 Transferências</option>
+          <option value="Reembolso" ${F.tipo==='Reembolso'?'selected':''}>↩️ Reembolsos</option>
+          <option value="_manual" ${F.tipo==='_manual'?'selected':''}>✏️ Só manuais</option>
+          <option value="_auto" ${F.tipo==='_auto'?'selected':''}>⚙️ Só automáticos</option>
+        </select>
+      </div>
+
+      <div style="flex:1;min-width:140px">
+        <div style="color:var(--muted);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px">Status</div>
+        <select onchange="S.lancFiltros.status=this.value;render()" style="font-size:12px;padding:7px 8px">
+          <option value="todos" ${F.status==='todos'?'selected':''}>Todos</option>
+          <option value="Em Aberto" ${F.status==='Em Aberto'?'selected':''}>🟡 Em Aberto</option>
+          <option value="Pago" ${F.status==='Pago'?'selected':''}>🟢 Pago</option>
+          <option value="Cancelado" ${F.status==='Cancelado'?'selected':''}>⚫ Cancelado</option>
+        </select>
+      </div>
+
+      <div style="flex:1;min-width:140px">
+        <div style="color:var(--muted);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px">Mês</div>
+        <select onchange="S.lancFiltros.mes=this.value;render()" style="font-size:12px;padding:7px 8px">
+          <option value="todos" ${F.mes==='todos'?'selected':''}>Todos</option>
+          ${mesesDisp.map(k => `<option value="${k}" ${F.mes===k?'selected':''}>${mesKeyToLabel(k)}</option>`).join('')}
+        </select>
+      </div>
+
+      <div style="flex:1;min-width:140px">
+        <div style="color:var(--muted);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px">Processo</div>
+        <select onchange="S.lancFiltros.processo=this.value;render()" style="font-size:12px;padding:7px 8px">
+          <option value="todos" ${F.processo==='todos'?'selected':''}>Todos</option>
+          ${processosDisp.map(id => `<option value="${escHtml(id)}" ${F.processo===id?'selected':''}>${escHtml(id)}</option>`).join('')}
+        </select>
+      </div>
+
+      ${hasActiveFilter ? `<button class="btn btn-secondary btn-sm" onclick="S.lancFiltros={tipo:'todos',status:'todos',mes:'todos',processo:'todos'};render()" style="white-space:nowrap">✕ Limpar filtros</button>` : ''}
     </div>
+    ${hasActiveFilter ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:11px;color:var(--muted)">
+      📋 Mostrando <b>${lista.length}</b> lançamento(s) · Pagos: R$ ${fmt(totalPago)} · Em Aberto: R$ ${fmt(totalEmAberto)}
+    </div>` : ''}
   </div>
 
   ${lista.length===0 ? `<div class="card" style="text-align:center;padding:40px;color:var(--muted)">
     <div style="font-size:36px;margin-bottom:12px">💳</div>
-    <div>Nenhum lançamento encontrado.</div>
-    <button class="btn btn-primary" style="margin-top:16px" onclick="abrirModalLancamento()">+ Novo Lançamento</button>
+    <div>Nenhum lançamento encontrado com os filtros atuais.</div>
+    ${hasActiveFilter ? `<button class="btn btn-secondary" style="margin-top:16px" onclick="S.lancFiltros={tipo:'todos',status:'todos',mes:'todos',processo:'todos'};render()">✕ Limpar filtros</button>` : `<button class="btn btn-primary" style="margin-top:16px" onclick="abrirModalLancamento()">+ Novo Lançamento</button>`}
   </div>` : ''}
 
   ${lista.map((l,i)=>`
-    <div class="card" style="margin-bottom:10px;${l._computed?'border-left:3px solid var(--border2);opacity:0.9':''}">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
-        <div style="flex:1">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-            <span style="font-size:16px">${tipoIcon[l.tipo]||'💳'}</span>
-            <span style="font-family:'Outfit',sans-serif;font-weight:700;font-size:14px;color:var(--text)">${escHtml(l.descricao)}</span>
-          </div>
-          <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--muted2);margin-bottom:8px">
-            <span>📅 ${escHtml(l.data)}</span>
-            ${l.empresa?`<span>🏢 ${escHtml(l.empresa)}</span>`:''}
-            ${l.categoria?`<span>🏷️ ${escHtml(l.categoria)}</span>`:''}
-            ${l.vinculo&&l.vinculoId?`<span style="color:var(--accent)">🔗 ${escHtml(l.vinculoId)}</span>`:''}
-          </div>
-          ${l.observacao?`<div style="font-size:11px;color:var(--muted);font-style:italic;margin-bottom:6px">${escHtml(l.observacao)}</div>`:''}
-          <div style="display:flex;gap:6px;flex-wrap:wrap">
-            ${l._computed ? '' : ['comprovante','fatura','nfe','outros'].map(dk=>{
-              const docLabel={'comprovante':'🧾 Comprovante','fatura':'📋 Fatura','nfe':'📄 NF-e','outros':'📎 Outros'}[dk];
-              const hasDoc = l.docs && l.docs[dk] && l.docs[dk].length>0;
-              return `<span class="doc-chip ${hasDoc?'has-doc':''}" onclick="abrirDocLanc(${i},'${dk}')" style="font-size:10px;padding:4px 9px">
-                ${hasDoc?'✅':'+'} ${docLabel}
-              </span>`;
-            }).join('')}
-            ${l._computed ? '' : l.docs&&l.docs.nfe&&l.docs.nfe.length>0?`<span style="font-size:10px;color:var(--muted);padding:4px 9px;background:var(--bg);border-radius:6px">Chave: <span style="font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:9px">${escHtml(l.docs.nfeChave||'—')}</span></span>`:''}
-          </div>
+    <div class="card lanc-card" style="margin-bottom:6px;padding:10px 12px;${l._computed?'border-left:3px solid var(--accent2)':''}">
+      <!-- LINHA 1: descrição + valor + status -->
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:5px">
+        <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0">
+          <span style="font-size:14px;flex-shrink:0">${tipoIcon[l.tipo]||'💳'}</span>
+          <span style="font-family:'Outfit',sans-serif;font-weight:700;font-size:13px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(l.descricao)}</span>
+          ${l._computed?'<span style="font-size:8.5px;color:var(--accent2);background:rgba(34,197,160,0.1);padding:1px 5px;border-radius:3px;font-weight:600;flex-shrink:0">AUTO</span>':''}
         </div>
-        <div style="text-align:right;flex-shrink:0">
-          <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:18px;color:${tipoColor[l.tipo]||'var(--text)'}">
+        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+          <span style="font-family:'Outfit',sans-serif;font-weight:800;font-size:15px;color:${tipoColor[l.tipo]||'var(--text)'};white-space:nowrap">
             ${l.tipo==='Despesa'?'-':'+'} R$ ${fmt(l.valor)}
-          </div>
-          <div style="margin-top:6px">
-            <span style="font-size:10px;font-weight:700;color:${statusColor[l.status]||'var(--muted)'}">● ${escHtml(l.status||'—')}</span>
-          </div>
-          <div style="display:flex;gap:6px;margin-top:8px;justify-content:flex-end">
-            ${l._computed ? 
-              `<span style="font-size:9px;color:var(--muted);padding:4px 8px;background:var(--bg);border-radius:6px">🔒 Automático</span>` :
-              `<button class="btn btn-secondary btn-xs" onclick="editarLancamento(${i})">✏️</button>
-              <button class="btn btn-danger btn-xs" onclick="excluirLancamento(${i})">🗑️</button>`
-            }
-          </div>
+          </span>
+          <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:9px;border:1px solid ${statusColor[l.status]||'var(--border)'};font-size:10px">
+            <span style="font-size:9px">${statusIcons[l.status]||'⚪'}</span>
+            <span style="font-weight:700;color:${statusColor[l.status]||'var(--muted)'}">${escHtml(l.status||'—')}</span>
+          </span>
+        </div>
+      </div>
+
+      <!-- LINHA 2: metadados pequenos -->
+      <div style="display:flex;flex-wrap:wrap;gap:8px;font-size:10.5px;color:var(--muted2);margin-bottom:6px">
+        <span>📅 ${escHtml(l.data||'—')}</span>
+        ${l.empresa?`<span>🏢 ${escHtml(l.empresa)}</span>`:''}
+        ${l.categoria&&!l.descricao.includes(l.categoria)?`<span>🏷️ ${escHtml(l.categoria)}</span>`:''}
+        ${l.vinculo&&l.vinculoId&&!l.descricao.includes(l.vinculoId)?`<span style="color:var(--accent)">🔗 ${escHtml(l.vinculoId)}</span>`:''}
+        ${l.observacao?`<span style="font-style:italic;color:var(--muted)">💬 ${escHtml(l.observacao)}</span>`:''}
+      </div>
+
+      <!-- LINHA 3: chips de docs + ações -->
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <div style="display:flex;gap:4px;flex-wrap:wrap;flex:1">
+          ${['comprovante','fatura','nfe','outros'].map(dk=>{
+            const docLabel={'comprovante':'🧾','fatura':'📋','nfe':'📄','outros':'📎'}[dk];
+            const docName={'comprovante':'Comprov.','fatura':'Fatura','nfe':'NF-e','outros':'Outros'}[dk];
+            const hasDoc = l.docs && l.docs[dk] && String(l.docs[dk]).length>0;
+            return `<span class="doc-chip ${hasDoc?'has-doc':''}" onclick="abrirDocLanc('${l.id}','${dk}')" style="font-size:9.5px;padding:2px 7px" title="${docName}${hasDoc?' (anexado)':''}">
+              ${hasDoc?'✅':'+'} ${docLabel} ${docName}
+            </span>`;
+          }).join('')}
+        </div>
+        <div style="display:flex;gap:4px;flex-shrink:0">
+          <button class="btn btn-secondary btn-xs" onclick="editarLancamento('${l.id}')" title="${l._computed?'Editar (altera o processo de origem)':'Editar'}" style="padding:3px 7px;font-size:11px">✏️</button>
+          <button class="btn btn-danger btn-xs" onclick="excluirLancamento('${l.id}')" title="${l._computed?'Excluir (zera o campo no processo de origem)':'Excluir'}" style="padding:3px 7px;font-size:11px">🗑️</button>
         </div>
       </div>
     </div>`).join('')}`;
 }
 
-function abrirModalLancamento(idx=null){
+function abrirModalLancamento(id=null){
   const existing=document.getElementById('lanc-modal');
   if(existing) existing.remove();
 
-  const l = idx!==null ? S.lancamentos[idx] : null;
+  // Aceita ID estável (string) — busca o lançamento no array
+  const l = id!==null && id!==undefined && id!=='null'
+    ? (S.lancamentos||[]).find(x => String(x.id) === String(id))
+    : null;
   const v = k => l ? escHtml(String(l[k]||'')) : '';
   const vd = k => l&&l.docs ? escHtml(String(l.docs[k]||'')) : '';
 
@@ -1971,7 +2304,7 @@ function abrirModalLancamento(idx=null){
     <div class="modal" style="max-width:580px;width:95%;max-height:90vh;overflow-y:auto">
 
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-        <div class="modal-title" style="margin-bottom:0">${idx!==null?'✏️ Editar':'+ Novo'} Lançamento</div>
+        <div class="modal-title" style="margin-bottom:0">${l?'✏️ Editar':'+ Novo'} Lançamento</div>
         <button class="btn btn-secondary btn-xs" onclick="document.getElementById('lanc-modal').remove()">✕</button>
       </div>
 
@@ -2079,7 +2412,7 @@ function abrirModalLancamento(idx=null){
 
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;padding-top:14px;border-top:1px solid var(--border)">
         <button class="btn btn-secondary" onclick="document.getElementById('lanc-modal').remove()">Cancelar</button>
-        <button class="btn btn-primary" style="min-width:140px" onclick="salvarLancamento(${idx!==null?idx:'null'})">💾 Salvar Lançamento</button>
+        <button class="btn btn-primary" style="min-width:140px" onclick="salvarLancamento('${l?l.id:''}')">💾 Salvar Lançamento</button>
       </div>
     </div>`;
   document.body.appendChild(modal);
@@ -2120,36 +2453,298 @@ function salvarLancamento(idx){
   if(!obj.descricao){ alert('Informe a descrição do lançamento.'); return; }
   if(!obj.valor || obj.valor<=0){ alert('Informe um valor válido maior que zero.'); return; }
 
-  if(idx!==null && idx!==undefined && idx!=='null'){
-    obj.id = S.lancamentos[idx].id;
-    S.lancamentos[idx] = obj;
+  if(!S.lancamentos) S.lancamentos = [];
+
+  // idx aqui é o ID estável do lançamento (não o índice do array filtrado)
+  // String vazia ou null = novo lançamento
+  if(idx && idx !== 'null' && idx !== 'undefined'){
+    const realIdx = S.lancamentos.findIndex(l => String(l.id) === String(idx));
+    if(realIdx >= 0){
+      obj.id = S.lancamentos[realIdx].id;
+      S.lancamentos[realIdx] = obj;
+    } else {
+      obj.id = Date.now();
+      S.lancamentos.unshift(obj);
+    }
   } else {
     obj.id = Date.now();
-    if(!S.lancamentos) S.lancamentos = [];
     S.lancamentos.unshift(obj);
   }
 
   document.getElementById('lanc-modal').remove();
   S.custosTab = 'lancamentos';
-  showToast(); render();
+  showToast(); scheduleAutoSave(); render();
 }
 
-function editarLancamento(idx){
-  abrirModalLancamento(idx);
+// Localiza um lançamento por ID, manual ou automático.
+// Retorna {kind:'manual'|'auto-cambio'|'auto-cost'|'auto-fixo', entry, processo, field, fixo}
+function findLancamento(id){
+  // Manual primeiro
+  const manual = (S.lancamentos||[]).find(l => String(l.id) === String(id));
+  if(manual) return { kind:'manual', entry: manual };
+
+  // Automático: id começa com 'auto_'
+  const sid = String(id);
+  if(sid.startsWith('auto_cambio_')){
+    const procId = sid.replace('auto_cambio_','');
+    const p = S.processos.find(x => x.id === procId);
+    if(p) return { kind:'auto-cambio', processo: p, field: 'cambioReais' };
+  }
+  if(sid.startsWith('auto_fixo_')){
+    // formato: auto_fixo_<field>_<idDoMes>
+    const rest = sid.replace('auto_fixo_','');
+    for(const field of Object.keys(FIXED_COST_FIELDS)){
+      const prefix = field + '_';
+      if(rest.startsWith(prefix)){
+        const mesId = rest.slice(prefix.length);
+        const m = (S.custosMensais||[]).find(x => String(x.id) === mesId)
+              || (S.custosMensais||[])[parseInt(mesId,10)];
+        if(m) return { kind:'auto-fixo', fixo: m, field };
+      }
+    }
+  }
+  if(sid.startsWith('auto_')){
+    // auto_<field>_<procId>
+    const rest = sid.replace('auto_','');
+    for(const field of Object.keys(PROCESS_COST_FIELDS)){
+      const prefix = field + '_';
+      if(rest.startsWith(prefix)){
+        const procId = rest.slice(prefix.length);
+        const p = S.processos.find(x => x.id === procId);
+        if(p) return { kind:'auto-cost', processo: p, field };
+      }
+    }
+  }
+  return null;
 }
 
-function excluirLancamento(idx){
-  if(!confirm('Excluir este lançamento?')) return;
-  S.lancamentos.splice(idx,1);
-  showToast(); render();
+function editarLancamento(id){
+  const f = findLancamento(id);
+  if(!f){ showToast('⚠️ Lançamento não encontrado'); return; }
+  if(f.kind === 'manual'){
+    abrirModalLancamento(id);
+    return;
+  }
+  // Automáticos abrem modal completo, mas sincronizados com o processo/fixo de origem
+  abrirModalAutoLancamento(f);
 }
 
-function abrirDocLanc(idx, docKey){
-  const l = S.lancamentos[idx];
-  if(!l) return;
-  const hasDoc = l.docs && l.docs[docKey] && l.docs[docKey].length>0;
-  if(hasDoc){ window.open(sanitizeUrl(l.docs&&l.docs[docKey]?l.docs[docKey]:''),'_blank'); return; }
-  abrirModalLancamento(idx);
+function excluirLancamento(id){
+  const f = findLancamento(id);
+  if(!f){ showToast('⚠️ Lançamento não encontrado'); return; }
+  if(f.kind === 'manual'){
+    if(!confirm('Excluir este lançamento manual?')) return;
+    const idx = S.lancamentos.findIndex(l => String(l.id) === String(id));
+    if(idx < 0) return;
+    S.lancamentos.splice(idx,1);
+    showToast('✅ Lançamento excluído'); scheduleAutoSave(); render();
+    return;
+  }
+  // Câmbio é obrigatório em todo processo — não pode ser excluído, só editado
+  if(f.kind === 'auto-cambio'){
+    alert('⚠️ Câmbio Recebido não pode ser excluído.\n\nTodo processo tem um câmbio obrigatório.\nSe ainda não recebeu, use ✏️ Editar e:\n  • Mude o status para "Aguardando"\n  • Ou zere o valor recebido temporariamente.');
+    return;
+  }
+  // Auto-cost / auto-fixo: zera o valor (item some do extrato pois só aparece quando >0)
+  let label = '', origem = '';
+  if(f.kind === 'auto-cost'){
+    label = (PROCESS_COST_FIELDS[f.field]||f.field) + ' — ' + f.processo.id;
+    origem = 'O custo será zerado no processo ' + f.processo.id + ' (R$ ' + fmt(f.processo[f.field]) + ' → R$ 0,00).';
+  } else if(f.kind === 'auto-fixo'){
+    label = 'Custo Fixo: ' + (FIXED_COST_FIELDS[f.field]||f.field);
+    origem = 'O custo fixo "' + (FIXED_COST_FIELDS[f.field]||f.field) + '" será zerado (R$ ' + fmt(f.fixo[f.field]) + ' → R$ 0,00).';
+  }
+  if(!confirm(`Excluir "${label}"?\n\n${origem}\n\nContinuar?`)) return;
+  if(f.kind === 'auto-cost'){ f.processo[f.field] = 0; }
+  else if(f.kind === 'auto-fixo'){ f.fixo[f.field] = 0; }
+  showToast('✅ Zerado na origem'); scheduleAutoSave(); render();
+}
+
+// Modal completo para editar lançamento automático — sincroniza com processo/fixo
+function abrirModalAutoLancamento(f) {
+  const existing = document.getElementById('lanc-modal');
+  if (existing) existing.remove();
+
+  // Coletar dados atuais conforme tipo
+  let titulo = '', valorAtual = 0, statusAtual = '', dataAtual = '', empresaAtual = '', observacaoAtual = '';
+  let categoriaLabel = '', vinculoLabel = '', vinculoId = '';
+
+  if (f.kind === 'auto-cambio') {
+    const p = f.processo;
+    titulo = 'Câmbio Recebido — ' + p.id;
+    valorAtual = p.cambioReais || 0;
+    statusAtual = normalizeStatus(p.cambioStatus || 'Em Aberto');
+    dataAtual = p.cambioRecebimento || '';
+    empresaAtual = p.cliente || '';
+    observacaoAtual = (p.docs && p.docs._cambioObs) || '';
+    categoriaLabel = 'Câmbio';
+    vinculoLabel = 'Processo';
+    vinculoId = p.id;
+  } else if (f.kind === 'auto-cost') {
+    const p = f.processo;
+    titulo = (PROCESS_COST_FIELDS[f.field]||f.field) + ' — ' + p.id;
+    valorAtual = p[f.field] || 0;
+    statusAtual = normalizeStatus(p[f.field+'_status'] || 'Em Aberto');
+    dataAtual = p.embarque || '';
+    empresaAtual = p.logTransportadora || '';
+    observacaoAtual = (p.docs && p.docs._costObs && p.docs._costObs[f.field]) || '';
+    categoriaLabel = PROCESS_COST_FIELDS[f.field] || f.field;
+    vinculoLabel = 'Processo';
+    vinculoId = p.id;
+  } else if (f.kind === 'auto-fixo') {
+    const m = f.fixo;
+    titulo = 'Custo Fixo: ' + (FIXED_COST_FIELDS[f.field]||f.field);
+    valorAtual = m[f.field] || 0;
+    // Status do custo fixo = derivado do comprovante
+    statusAtual = hasComprovante((m.docs && m.docs[f.field]) || {}) ? 'Pago' : 'Em Aberto';
+    dataAtual = (m.mes||'') + (m.ano ? '/'+m.ano : '');
+    empresaAtual = '';
+    observacaoAtual = (m.docs && m.docs._obs && m.docs._obs[f.field]) || '';
+    categoriaLabel = 'Custo Fixo: ' + (FIXED_COST_FIELDS[f.field]||f.field);
+    vinculoLabel = 'Custo Fixo Mensal';
+    vinculoId = m.mes || '';
+  }
+
+  // Status unificado para todos os tipos
+  const statusOpts = STATUS_OPTIONS;
+
+  const modal = document.createElement('div');
+  modal.id = 'lanc-modal';
+  modal.className = 'modal-overlay';
+  modal.dataset.autoKind = f.kind;
+  modal.dataset.autoField = f.field || '';
+  modal.dataset.autoProcId = (f.processo && f.processo.id) || '';
+  modal.innerHTML = `
+    <div class="modal" style="max-width:560px;width:95%;max-height:90vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div class="modal-title" style="margin-bottom:0">⚙️ Editar Lançamento Automático</div>
+        <button class="btn btn-secondary btn-xs" onclick="document.getElementById('lanc-modal').remove()">✕</button>
+      </div>
+      <div style="background:rgba(34,197,160,0.08);border-left:3px solid var(--accent2);padding:10px 14px;border-radius:6px;margin-bottom:18px;font-size:11px;color:var(--muted2)">
+        🔗 Este lançamento é <b>sincronizado com o processo</b>. Alterações refletem em ${escHtml(vinculoLabel)} <b>${escHtml(vinculoId)}</b>.
+      </div>
+
+      <div class="ig"><label class="lbl">Descrição</label>
+        <input type="text" value="${escHtml(titulo)}" disabled style="opacity:0.7;cursor:not-allowed"/>
+      </div>
+
+      <div class="g2">
+        <div class="ig"><label class="lbl">Valor (R$) *</label>
+          <input type="number" id="al_valor" value="${valorAtual}" step="0.01" placeholder="0,00"/>
+        </div>
+        <div class="ig"><label class="lbl">Data ${f.kind==='auto-cambio'?'do Recebimento':''}</label>
+          <input type="text" id="al_data" value="${escHtml(dataAtual)}" placeholder="DD/MM/AAAA"/>
+        </div>
+      </div>
+
+      <div class="g2">
+        <div class="ig"><label class="lbl">Status</label>
+          <select id="al_status">
+            ${statusOpts.map(s=>`<option value="${s}" ${s===statusAtual?'selected':''}>${s}</option>`).join('')}
+          </select>
+        </div>
+        <div class="ig"><label class="lbl">Categoria</label>
+          <input type="text" value="${escHtml(categoriaLabel)}" disabled style="opacity:0.7;cursor:not-allowed"/>
+        </div>
+      </div>
+
+      ${f.kind==='auto-cambio' ? `
+        <div class="ig"><label class="lbl">Banco</label>
+          <input type="text" id="al_banco" value="${escHtml(f.processo.cambioBanco||'')}" placeholder="Banco onde foi recebido"/>
+        </div>
+      ` : ''}
+
+      ${f.kind==='auto-cost' ? `
+        <div class="ig"><label class="lbl">Transportadora / Fornecedor</label>
+          <input type="text" id="al_empresa" value="${escHtml(empresaAtual)}" placeholder="Nome do fornecedor"/>
+        </div>
+      ` : ''}
+
+      <div class="ig"><label class="lbl">Observação</label>
+        <textarea id="al_observacao" rows="2" placeholder="Notas internas">${escHtml(observacaoAtual)}</textarea>
+      </div>
+
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+        <button class="btn btn-secondary" onclick="document.getElementById('lanc-modal').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="salvarAutoLancamento()">💾 Salvar Alterações</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  setTimeout(()=>document.getElementById('al_valor')?.focus(), 100);
+}
+
+function salvarAutoLancamento() {
+  const modal = document.getElementById('lanc-modal');
+  if (!modal) return;
+  const kind = modal.dataset.autoKind;
+  const field = modal.dataset.autoField;
+  const procId = modal.dataset.autoProcId;
+
+  const valor = parseFloat(document.getElementById('al_valor')?.value) || 0;
+  const data = sanitize(document.getElementById('al_data')?.value || '');
+  const status = sanitize(document.getElementById('al_status')?.value || '');
+  const observacao = sanitize(document.getElementById('al_observacao')?.value || '');
+  if (valor < 0) { alert('Valor não pode ser negativo.'); return; }
+
+  if (kind === 'auto-cambio') {
+    const p = S.processos.find(x => x.id === procId);
+    if (!p) { showToast('⚠️ Processo não encontrado'); return; }
+    p.cambioReais = valor;
+    p.cambioRecebimento = data;
+    p.cambioStatus = status;
+    const banco = sanitize(document.getElementById('al_banco')?.value || '');
+    if (banco) p.cambioBanco = banco;
+    // Guarda observação no docs do processo para não duplicar coluna
+    if (observacao) {
+      if (!p.docs) p.docs = {};
+      p.docs._cambioObs = observacao;
+    }
+  } else if (kind === 'auto-cost') {
+    const p = S.processos.find(x => x.id === procId);
+    if (!p) { showToast('⚠️ Processo não encontrado'); return; }
+    p[field] = valor;
+    p[field + '_status'] = status;
+    const empresa = sanitize(document.getElementById('al_empresa')?.value || '');
+    if (empresa) p.logTransportadora = empresa;
+    if (observacao) {
+      if (!p.docs) p.docs = {};
+      if (!p.docs._costObs) p.docs._costObs = {};
+      p.docs._costObs[field] = observacao;
+    }
+  } else if (kind === 'auto-fixo') {
+    const m = S.custosMensais && S.custosMensais[0];
+    if (!m) { showToast('⚠️ Custo fixo não encontrado'); return; }
+    m[field] = valor;
+    if (observacao) {
+      if (!m.docs) m.docs = {};
+      if (!m.docs._obs) m.docs._obs = {};
+      m.docs._obs[field] = observacao;
+    }
+  }
+
+  modal.remove();
+  scheduleAutoSave();
+  showToast('✅ Alterações salvas');
+  render();
+}
+
+function abrirDocLanc(id, docKey){
+  const f = findLancamento(id);
+  if(!f) return;
+  // Para manuais, abre direto se já tem doc
+  if(f.kind === 'manual'){
+    const l = f.entry;
+    const hasDoc = l.docs && l.docs[docKey] && String(l.docs[docKey]).length>0;
+    if(hasDoc){ window.open(sanitizeUrl(l.docs[docKey]),'_blank','noopener,noreferrer'); return; }
+    abrirModalLancamento(id);
+    return;
+  }
+  // Para automáticos, abre o modal de upload diretamente
+  // Os docs ficam guardados em:
+  //   processos[].docs._lancCambio[docKey]                   (câmbio do processo)
+  //   processos[].docs._lanc_<field>[docKey]                 (custos do processo)
+  //   custosMensais[0].docs.<field>[docKey]                  (custos fixos)
+  abrirUploadLanc(id, docKey);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2513,17 +3108,23 @@ function gerarRelatorioContabilidade(){
   const totalR = S.processos.reduce((a,p)=>a+(p.cambioReais||0),0);
   const totalC = S.processos.reduce((a,p)=>a+tc(p),0);
   const totalF = tcm(m);
-  const totalLanc = (S.lancamentos||[]).filter(l=>l.tipo==='Receita').reduce((a,l)=>a+(l.valor||0),0);
-  const totalLancSaida = (S.lancamentos||[]).filter(l=>l.tipo==='Despesa').reduce((a,l)=>a+(l.valor||0),0);
+
+  // Lançamentos avulsos: excluir os vinculados a câmbio de processo (já contados em cambioReais)
+  // para evitar double-count
+  const lancAvulsos = (S.lancamentos||[]).filter(l => {
+    // Excluir lançamentos de câmbio vinculados a um processo (já somados em cambioReais)
+    const isCambioProcesso = l.vinculo === 'processo' &&
+      (l.categoria === 'Câmbio' || (l.descricao||'').toLowerCase().includes('câmbio') || (l.descricao||'').toLowerCase().includes('cambio'));
+    return !isCambioProcesso;
+  });
+  const totalLancReceita = lancAvulsos.filter(l=>l.tipo==='Receita').reduce((a,l)=>a+(l.valor||0),0);
+  const totalLancDespesa = lancAvulsos.filter(l=>l.tipo==='Despesa').reduce((a,l)=>a+(l.valor||0),0);
 
   y = pdfSection(doc,'ENTRADAS — Câmbio Recebido por Processo', y);
   S.processos.forEach(p=>{
     if(y>250){ y=pdfNewPage(doc); }
     y = pdfRow(doc,p.id+' — '+(p.produto||'')+(p.cambioRecebimento?' ('+p.cambioRecebimento+')':''),'R$ '+fmt(p.cambioReais),y,[22,163,74]);
   });
-  if(totalLanc>0){
-    y = pdfRow(doc,'Outras receitas (lançamentos)','R$ '+fmt(totalLanc),y,[22,163,74]);
-  }
   y = pdfTotal(doc,'TOTAL CÂMBIO RECEBIDO','R$ '+fmt(totalR),y,[22,163,74]);
 
   if(y>220){ y=pdfNewPage(doc); }
@@ -2545,24 +3146,26 @@ function gerarRelatorioContabilidade(){
   ].forEach(([l,v])=>{ if((v||0)>0) y=pdfRow(doc,l,'R$ '+fmt(v),y,[251,146,60]); });
   y = pdfTotal(doc,'Total Fixos','R$ '+fmt(totalF),y,[251,146,60]);
 
-  if((S.lancamentos||[]).length>0){
+  if(lancAvulsos.length>0){
     if(y>210){ y=pdfNewPage(doc); }
-    y = pdfSection(doc,'LANÇAMENTOS AVULSOS', y);
-    (S.lancamentos||[]).forEach(l=>{
+    y = pdfSection(doc,'LANÇAMENTOS AVULSOS (exceto câmbio já lançado por processo)', y);
+    lancAvulsos.forEach(l=>{
       if(y>250){ y=pdfNewPage(doc); }
       const cor = l.tipo==='Receita'?[22,163,74]:l.tipo==='Despesa'?[220,38,38]:[100,116,139];
       y = pdfRow(doc,(l.data?l.data+' · ':'')+l.descricao+(l.empresa?' ('+l.empresa+')':''),
         (l.tipo==='Despesa'?'- ':'+ ')+'R$ '+fmt(l.valor),y,cor);
     });
+    if(totalLancReceita>0) y = pdfTotal(doc,'Total Receitas Avulsas','R$ '+fmt(totalLancReceita),y,[22,163,74]);
+    if(totalLancDespesa>0) y = pdfTotal(doc,'Total Despesas Avulsas','R$ '+fmt(totalLancDespesa),y,[220,38,38]);
   }
 
   if(y>220){ y=pdfNewPage(doc); }
   y = pdfSection(doc,'RESULTADO DO PERÍODO', y);
-  const totalEntradas = totalR; // Câmbio recebido = entrada principal
-  const totalSaidas   = totalC+totalF+totalLancSaida;
-  const resultado     = totalEntradas-totalSaidas;
-  y = pdfRow(doc,'Total Entradas (Câmbio + Outras Receitas)','R$ '+fmt(totalR+totalLanc),y,[22,163,74]);
-  y = pdfRow(doc,'Total Saídas','R$ '+fmt(totalSaidas),y,[220,38,38]);
+  const totalEntradas = totalR + totalLancReceita;
+  const totalSaidas   = totalC + totalF + totalLancDespesa;
+  const resultado     = totalEntradas - totalSaidas;
+  y = pdfRow(doc,'Total Entradas (Câmbio + Receitas Avulsas)','R$ '+fmt(totalEntradas),y,[22,163,74]);
+  y = pdfRow(doc,'Total Saídas (Variáveis + Fixos + Despesas Avulsas)','R$ '+fmt(totalSaidas),y,[220,38,38]);
   y = pdfTotal(doc,'RESULTADO LÍQUIDO DO PERÍODO','R$ '+fmt(resultado),y,resultado>=0?[22,163,74]:[220,38,38]);
 
   doc.save(`Contabilidade_${new Date().toLocaleDateString('pt-BR').replace(/\//g,'-')}.pdf`);
@@ -2621,7 +3224,8 @@ function confirmarDoc(processId,docKey){
   const p=S.processos.find(x=>x.id===pid);
   if(p){if(!p.docs)p.docs={};p.docs[dkey]=link;}
   if(modal) modal.remove();
-  showToast(); render();
+  scheduleAutoSave();
+  showToast('✅ Documento salvo!'); render();
 }
 
 // ── FORM HELPERS ──────────────────────────────────────────
@@ -2737,16 +3341,6 @@ function makeFabDraggable() {
     window.addEventListener('touchend', tu);
   }, {passive: true});
 
-  // Touch
-  fab.addEventListener('touchstart', e => {
-    const t = e.touches[0];
-    startDrag(t.clientX, t.clientY);
-    const tm = e2 => { e2.preventDefault(); const t2 = e2.touches[0]; moveDrag(t2.clientX, t2.clientY); };
-    const tu = () => { endDrag(); window.removeEventListener('touchmove', tm); window.removeEventListener('touchend', tu); };
-    window.addEventListener('touchmove', tm, {passive: false});
-    window.addEventListener('touchend', tu);
-  }, {passive: true});
-
   // Restore saved position
   try {
     const saved = JSON.parse(localStorage.getItem('fab-pos'));
@@ -2767,7 +3361,9 @@ function attachEvents(){
       const gv = id=>{ const el=document.getElementById(id); return el?sanitize(el.value):''; };
       const gn = id=>{ const el=document.getElementById(id); return parseFloat(el?.value)||0; };
       const procId = gv('nc_processo');
+      if(!procId){ alert('Selecione um processo válido.'); return; }
       const p = S.processos.find(x=>x.id===procId);
+      if(!p){ alert('Processo "'+procId+'" não encontrado.'); return; }
       const obj = {
         invoiceNum:gv('nc_invoiceNum'), contratoNum:gv('nc_contratoNum'),
         cambioBanco:gv('nc_banco'), cambioStatus:gv('nc_status'),
@@ -2777,11 +3373,7 @@ function attachEvents(){
         cambioRecebido:gn('nc_recebido'), cambioIOF:gn('nc_iof'),
         cambioSpread:gn('nc_spread'), cambioReais:gn('nc_reais'),
       };
-      if(p){ Object.assign(p, JSON.parse(JSON.stringify(obj))); }
-      else if(S.processos.length>0){
-        // Link to first processo as fallback only if explicitly chosen
-        if(S.processos.length>0) Object.assign(S.processos[0],obj);
-      }
+      Object.assign(p, obj);
       S.cambioTab='lista';
       showToast(); scheduleAutoSave(); render();
     });
@@ -2845,6 +3437,20 @@ function logoutUser(){
   document.getElementById('login-screen').style.display='flex';
 }
 
+// Força nova autorização do Google Drive (útil quando aparece aviso "app não verificado")
+async function reconectarDrive() {
+  try {
+    window._sheetsToken = null;
+    window._sheetsTokenExpiry = 0;
+    window._driveConsented = false;
+    showToast('🔑 Abrindo janela de autorização do Google...');
+    await getAccessToken(true);
+    showToast('✅ Drive reconectado com sucesso!');
+  } catch(e) {
+    showToast('⚠️ ' + (e||'Erro ao reconectar. Clique em "Avançado" → "Ir para fusongmineradora.com"'));
+  }
+}
+
 
 // ═══════════════════════════════════════════════════════════
 // GOOGLE SHEETS INTEGRATION
@@ -2856,28 +3462,46 @@ const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
 function getAccessToken(forceDriveConsent=false) {
   return new Promise((resolve, reject) => {
     const user = sessionStorage.getItem('erp-user');
-    if (!user) { reject('Not logged in'); return; }
+    if (!user) { reject(new Error('Not logged in')); return; }
     // Return cached token if valid
     if (!forceDriveConsent && window._sheetsToken && window._sheetsTokenExpiry > Date.now()) {
       resolve(window._sheetsToken);
       return;
     }
-    const prompt = forceDriveConsent ? 'consent' : (window._driveConsented ? '' : 'consent');
-    const client = google.accounts.oauth2.initTokenClient({
-      client_id: '69223242564-l80vfi8s0i58tf4b6jumrbvt82mdjlik.apps.googleusercontent.com',
-      scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive',
-      callback: (resp) => {
-        if (resp.error) { reject(resp.error); return; }
-        window._sheetsToken = resp.access_token;
-        window._sheetsTokenExpiry = Date.now() + (resp.expires_in * 1000) - 60000;
-        window._driveConsented = true;
-        sessionStorage.setItem('drive-consented', '1');
-        resolve(resp.access_token);
-      },
-    });
-    // Check if user already consented in this browser
+    // Ensure Google Identity Services is loaded
+    if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
+      reject(new Error('Google Identity Services não carregou. Aguarde alguns segundos e tente novamente.'));
+      return;
+    }
+    let client;
+    try {
+      client = google.accounts.oauth2.initTokenClient({
+        client_id: '69223242564-l80vfi8s0i58tf4b6jumrbvt82mdjlik.apps.googleusercontent.com',
+        scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive',
+        callback: (resp) => {
+          if (resp.error) { reject(new Error(resp.error)); return; }
+          window._sheetsToken = resp.access_token;
+          window._sheetsTokenExpiry = Date.now() + (resp.expires_in * 1000) - 60000;
+          window._driveConsented = true;
+          try { sessionStorage.setItem('drive-consented', '1'); } catch(e) {}
+          resolve(resp.access_token);
+        },
+        error_callback: (err) => {
+          reject(new Error(err.message || err.type || 'OAuth error'));
+        },
+      });
+    } catch(e) {
+      reject(e);
+      return;
+    }
+    // Decide whether to show consent screen
     const alreadyConsented = sessionStorage.getItem('drive-consented') === '1' || window._driveConsented;
-    client.requestAccessToken({prompt: alreadyConsented ? '' : 'consent'});
+    const promptMode = forceDriveConsent ? 'consent' : (alreadyConsented ? '' : 'consent');
+    try {
+      client.requestAccessToken({ prompt: promptMode });
+    } catch(e) {
+      reject(e);
+    }
   });
 }
 
@@ -2903,9 +3527,32 @@ async function sheetsAPI(method, endpoint, body=null) {
 // ── SETUP: Create sheets if they don't exist ──────────────
 async function setupSheets() {
   try {
-    const info = await sheetsAPI('GET', `/${SHEET_ID}?fields=sheets.properties.title`);
+    const info = await sheetsAPI('GET', `/${SHEET_ID}?fields=sheets.properties.title,sheets.properties.sheetId`);
     const existing = info.sheets.map(s => s.properties.title);
-    const needed = ['PROCESSOS', 'CLIENTES', 'FORNECEDORES', 'LANCAMENTOS', 'CUSTOS_FIXOS', 'CONFIG'];
+
+    // Migração: renomear LANCAMENTOS -> EXTRATO_CAIXA se existir e EXTRATO_CAIXA não
+    if (existing.includes('LANCAMENTOS') && !existing.includes('EXTRATO_CAIXA')) {
+      const sheet = info.sheets.find(s => s.properties.title === 'LANCAMENTOS');
+      if (sheet) {
+        try {
+          await sheetsAPI('POST', `/${SHEET_ID}:batchUpdate`, {
+            requests: [{
+              updateSheetProperties: {
+                properties: { sheetId: sheet.properties.sheetId, title: 'EXTRATO_CAIXA' },
+                fields: 'title'
+              }
+            }]
+          });
+          // Atualizar lista local
+          const idx = existing.indexOf('LANCAMENTOS');
+          if (idx >= 0) existing[idx] = 'EXTRATO_CAIXA';
+        } catch(e) {
+          console.warn('Falha ao renomear LANCAMENTOS:', e.message);
+        }
+      }
+    }
+
+    const needed = ['PROCESSOS', 'CLIENTES', 'FORNECEDORES', 'EXTRATO_CAIXA', 'CUSTOS_FIXOS', 'CONFIG'];
     const toCreate = needed.filter(n => !existing.includes(n));
 
     if (toCreate.length > 0) {
@@ -2915,7 +3562,7 @@ async function setupSheets() {
     }
 
     // Write headers for each sheet
-    const headerData = {"PROCESSOS": ["id", "embarque", "status", "cliente", "usci", "clienteTel", "clienteEmail", "clienteAdd", "produto", "ncm", "moeda", "pol", "pod", "origem", "destino", "incoterm", "pagamento", "peso", "companhia", "booking", "qtdContainer", "containers", "saida", "deadlineCarga", "deadlineDraft", "logCidade", "logTransportadora", "logEmbarque", "logChegada", "logArmazem", "logModalidade", "logVazio", "logPorto", "logEnd", "custoMaritimo", "custoMaritimo_status", "custoFrete", "custoFrete_status", "custoCertificado", "custoCertificado_status", "custoArmazem", "custoArmazem_status", "custoPorto", "custoPorto_status", "custoDespachante", "custoDespachante_status", "custoServTerceiros", "custoServTerceiros_status", "custoImpostos", "custoImpostos_status", "custoProduto", "custoProduto_status", "cambioInvoice", "cambioTaxa", "cambioReais", "cambioIOF", "cambioSpread", "cambioRecebido", "cambioFechamento", "cambioRecebimento", "cambioBanco", "cambioStatus", "dueNumero", "dueChave", "invoiceNum", "contratoNum", "docs"], "CLIENTES": ["id", "nome", "usci", "tel", "email", "end"], "FORNECEDORES": ["id", "tipo", "nome", "cnpj", "ie", "cep", "email", "end", "banco", "agencia", "conta", "pix"], "LANCAMENTOS": ["id", "data", "tipo", "descricao", "valor", "empresa", "processo", "comprovante", "nfe", "obs"], "CUSTOS_FIXOS": ["id", "mes", "ano", "contador", "aluguel", "software", "internet", "telefone", "impostos", "outros"], "CONFIG": ["chave", "valor"]};
+    const headerData = {"PROCESSOS": ["id", "embarque", "status", "cliente", "usci", "clienteTel", "clienteEmail", "clienteAdd", "produto", "ncm", "moeda", "pol", "pod", "origem", "destino", "incoterm", "pagamento", "peso", "companhia", "booking", "qtdContainer", "containers", "saida", "deadlineCarga", "deadlineDraft", "logCidade", "logTransportadora", "logEmbarque", "logChegada", "logArmazem", "logModalidade", "logVazio", "logPorto", "logEnd", "custoMaritimo", "custoMaritimo_status", "custoFrete", "custoFrete_status", "custoCertificado", "custoCertificado_status", "custoArmazem", "custoArmazem_status", "custoPorto", "custoPorto_status", "custoDespachante", "custoDespachante_status", "custoServTerceiros", "custoServTerceiros_status", "custoImpostos", "custoImpostos_status", "custoProduto", "custoProduto_status", "cambioInvoice", "cambioTaxa", "cambioReais", "cambioIOF", "cambioSpread", "cambioRecebido", "cambioFechamento", "cambioRecebimento", "cambioBanco", "cambioStatus", "dueNumero", "dueChave", "invoiceNum", "contratoNum", "docs"], "CLIENTES": ["id", "nome", "usci", "tel", "email", "end"], "FORNECEDORES": ["id", "tipo", "nome", "cnpj", "ie", "cep", "email", "end", "banco", "agencia", "conta", "pix"], "EXTRATO_CAIXA": ["id", "data", "tipo", "descricao", "valor", "empresa", "vinculo", "vinculoId", "categoria", "status", "observacao", "docs"], "CUSTOS_FIXOS": ["id", "mes", "ano", "contador", "aluguel", "software", "internet", "telefone", "impostos", "outros", "docs"], "CONFIG": ["chave", "valor"]};
     const updates = Object.entries(headerData).map(([sheet, cols]) => ({
       range: `${sheet}!A1`,
       values: [cols]
@@ -2924,7 +3571,7 @@ async function setupSheets() {
       valueInputOption: 'RAW',
       data: updates
     });
-    console.log('Sheets setup complete');
+    // Sheets setup complete
   } catch(e) {
     console.warn('Setup sheets error:', e.message);
   }
@@ -2934,7 +3581,7 @@ async function setupSheets() {
 async function loadFromSheets() {
   try {
     showSyncIndicator('Carregando dados...');
-    const ranges = ['PROCESSOS', 'CLIENTES', 'FORNECEDORES', 'LANCAMENTOS', 'CUSTOS_FIXOS'];
+    const ranges = ['PROCESSOS', 'CLIENTES', 'FORNECEDORES', 'EXTRATO_CAIXA', 'CUSTOS_FIXOS'];
     const res = await sheetsAPI('GET',
       `/${SHEET_ID}/values:batchGet?ranges=${ranges.join('&ranges=')}&majorDimension=ROWS`
     );
@@ -2961,16 +3608,29 @@ async function loadFromSheets() {
         try { p.docs = JSON.parse(p.docs); } catch(e) { p.docs = {}; }
       } else if (!p.docs) { p.docs = {}; }
     });
-    lanc.forEach(l => { l.valor = parseFloat(l.valor) || 0; });
+    lanc.forEach(l => {
+      l.valor = parseFloat(l.valor) || 0;
+      if (l.docs && typeof l.docs === 'string') {
+        try { l.docs = JSON.parse(l.docs); } catch(e) { l.docs = {}; }
+      } else if (!l.docs) { l.docs = {}; }
+    });
     fixos.forEach(m => {
       ['contador','aluguel','software','internet','telefone','impostos','outros'
       ].forEach(k => { m[k] = parseFloat(m[k]) || 0; });
+      if (m.docs && typeof m.docs === 'string') {
+        try { m.docs = JSON.parse(m.docs); } catch(e) { m.docs = {}; }
+      } else if (!m.docs) { m.docs = {}; }
     });
     if (proc.length > 0) S.processos = proc;
     if (cli.length > 0) S.clientes = cli;
     if (forn.length > 0) S.fornecedores = forn;
     if (lanc.length > 0) S.lancamentos = lanc;
     if (fixos.length > 0) S.custosMensais = fixos;
+    // Re-vincular S.sub ao objeto recém-carregado (mesmo ID, novo objeto em memória)
+    if (S.sub && S.sub.id) {
+      const refreshed = S.processos.find(p => p.id === S.sub.id);
+      if (refreshed) S.sub = refreshed;
+    }
     hideSyncIndicator();
     render();
   } catch(e) {
@@ -2990,12 +3650,12 @@ async function saveToSheets() {
       return v === null || v === undefined ? '' : String(v);
     });
 
-    const headerData = {"PROCESSOS": ["id", "embarque", "status", "cliente", "usci", "clienteTel", "clienteEmail", "clienteAdd", "produto", "ncm", "moeda", "pol", "pod", "origem", "destino", "incoterm", "pagamento", "peso", "companhia", "booking", "qtdContainer", "containers", "saida", "deadlineCarga", "deadlineDraft", "logCidade", "logTransportadora", "logEmbarque", "logChegada", "logArmazem", "logModalidade", "logVazio", "logPorto", "logEnd", "custoMaritimo", "custoMaritimo_status", "custoFrete", "custoFrete_status", "custoCertificado", "custoCertificado_status", "custoArmazem", "custoArmazem_status", "custoPorto", "custoPorto_status", "custoDespachante", "custoDespachante_status", "custoServTerceiros", "custoServTerceiros_status", "custoImpostos", "custoImpostos_status", "custoProduto", "custoProduto_status", "cambioInvoice", "cambioTaxa", "cambioReais", "cambioIOF", "cambioSpread", "cambioRecebido", "cambioFechamento", "cambioRecebimento", "cambioBanco", "cambioStatus", "dueNumero", "dueChave", "invoiceNum", "contratoNum", "docs"], "CLIENTES": ["id", "nome", "usci", "tel", "email", "end"], "FORNECEDORES": ["id", "tipo", "nome", "cnpj", "ie", "cep", "email", "end", "banco", "agencia", "conta", "pix"], "LANCAMENTOS": ["id", "data", "tipo", "descricao", "valor", "empresa", "processo", "comprovante", "nfe", "obs"], "CUSTOS_FIXOS": ["id", "mes", "ano", "contador", "aluguel", "software", "internet", "telefone", "impostos", "outros"], "CONFIG": ["chave", "valor"]};
+    const headerData = {"PROCESSOS": ["id", "embarque", "status", "cliente", "usci", "clienteTel", "clienteEmail", "clienteAdd", "produto", "ncm", "moeda", "pol", "pod", "origem", "destino", "incoterm", "pagamento", "peso", "companhia", "booking", "qtdContainer", "containers", "saida", "deadlineCarga", "deadlineDraft", "logCidade", "logTransportadora", "logEmbarque", "logChegada", "logArmazem", "logModalidade", "logVazio", "logPorto", "logEnd", "custoMaritimo", "custoMaritimo_status", "custoFrete", "custoFrete_status", "custoCertificado", "custoCertificado_status", "custoArmazem", "custoArmazem_status", "custoPorto", "custoPorto_status", "custoDespachante", "custoDespachante_status", "custoServTerceiros", "custoServTerceiros_status", "custoImpostos", "custoImpostos_status", "custoProduto", "custoProduto_status", "cambioInvoice", "cambioTaxa", "cambioReais", "cambioIOF", "cambioSpread", "cambioRecebido", "cambioFechamento", "cambioRecebimento", "cambioBanco", "cambioStatus", "dueNumero", "dueChave", "invoiceNum", "contratoNum", "docs"], "CLIENTES": ["id", "nome", "usci", "tel", "email", "end"], "FORNECEDORES": ["id", "tipo", "nome", "cnpj", "ie", "cep", "email", "end", "banco", "agencia", "conta", "pix"], "EXTRATO_CAIXA": ["id", "data", "tipo", "descricao", "valor", "empresa", "vinculo", "vinculoId", "categoria", "status", "observacao", "docs"], "CUSTOS_FIXOS": ["id", "mes", "ano", "contador", "aluguel", "software", "internet", "telefone", "impostos", "outros", "docs"], "CONFIG": ["chave", "valor"]};
     const data = [
       { sheet: 'PROCESSOS', items: S.processos },
       { sheet: 'CLIENTES', items: S.clientes },
       { sheet: 'FORNECEDORES', items: S.fornecedores },
-      { sheet: 'LANCAMENTOS', items: S.lancamentos || [] },
+      { sheet: 'EXTRATO_CAIXA', items: S.lancamentos || [] },
       { sheet: 'CUSTOS_FIXOS', items: S.custosMensais || [] },
     ];
 
@@ -3076,8 +3736,9 @@ async function driveAPI(method, endpoint, body=null, params='') {
 
 // Get or create a folder by name inside a parent
 async function getOrCreateFolder(name, parentId=null) {
-  // Search for existing folder
-  const q = `mimeType='application/vnd.google-apps.folder' and name='${name}' and trashed=false`
+  // Drive API: nome em query precisa de aspas simples escapadas como \'
+  const safeName = String(name).replace(/'/g, "\\'");
+  const q = `mimeType='application/vnd.google-apps.folder' and name='${safeName}' and trashed=false`
     + (parentId ? ` and '${parentId}' in parents` : '');
   const search = await driveAPI('GET', '/files', null,
     `q=${encodeURIComponent(q)}&fields=files(id,name)&spaces=drive`);
@@ -3150,32 +3811,43 @@ async function saveConfig(key, value) {
 
 // Open process Drive folder
 async function abrirPastaProcesso(p) {
-  // If we have folder URL, open it
-  if (p.docs && p.docs._folderUrl) {
+  // If we have folder URL cached, open it directly
+  if (p.docs && p.docs._folderUrl && p.docs._folderUrl.startsWith('https://')) {
     window.open(sanitizeUrl(p.docs._folderUrl), '_blank', 'noopener,noreferrer');
     return;
   }
-  // If we have folderId, construct URL
-  if (p.docs && p.docs._folderId) {
+  // If we have folderId, construct URL and cache it
+  if (p.docs && p.docs._folderId && p.docs._folderId.length > 5) {
     const url = 'https://drive.google.com/drive/folders/' + p.docs._folderId;
-    if (!p.docs._folderUrl) { p.docs._folderUrl = url; scheduleAutoSave(); }
+    p.docs._folderUrl = url;
+    scheduleAutoSave();
     window.open(sanitizeUrl(url), '_blank', 'noopener,noreferrer');
     return;
   }
-  // Try to create/find folder then open
-  showToast('📂 Criando pasta no Drive...');
+  // Need to create/find folder — requires Drive token
+  if (!window._sheetsToken) {
+    showToast('🔑 Aguarde... conectando ao Google Drive');
+    try {
+      await getAccessToken();
+    } catch(e) {
+      showToast('⚠️ Autorize o acesso ao Drive primeiro');
+      return;
+    }
+  }
+  showToast('📂 Buscando/criando pasta no Drive...');
   try {
     const result = await criarPastaProcesso(p);
     if (result && result.folderUrl) {
+      // Force immediate save so folderId persists
+      await saveToSheets();
       window.open(sanitizeUrl(result.folderUrl), '_blank', 'noopener,noreferrer');
-      scheduleAutoSave();
       render();
     } else {
-      // Fallback: open Drive root folder search
-      window.open('https://drive.google.com/drive/search?q=' + encodeURIComponent(p.id), '_blank', 'noopener,noreferrer');
+      // Last resort: open Drive search
+      showToast('🔍 Abrindo Drive com busca por ' + p.id);
+      setTimeout(()=>window.open('https://drive.google.com/drive/search?q=' + encodeURIComponent(p.id), '_blank', 'noopener,noreferrer'), 300);
     }
   } catch(e) {
-    // Fallback: open Drive search for this process
     showToast('🔍 Abrindo Drive com busca por ' + p.id);
     setTimeout(()=>window.open('https://drive.google.com/drive/search?q=' + encodeURIComponent(p.id), '_blank', 'noopener,noreferrer'), 300);
   }
@@ -3329,7 +4001,12 @@ async function processUploadFile(file, processId, docKey, docLabel) {
       if (!p.docs) p.docs = {};
       p.docs[docKey] = result.url;
     }
-    scheduleAutoSave();
+    // Salvar imediatamente para não perder o documento ao navegar
+    if (window._sheetsToken) {
+      await saveToSheets();
+    } else {
+      scheduleAutoSave();
+    }
 
     if (prog) { prog.style.display = 'block'; prog.innerHTML = '✅ Upload concluído! <a href="' + sanitizeUrl(result.url) + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent2)">Ver arquivo ↗</a>'; }
 
@@ -3356,6 +4033,261 @@ function abrirUploadCusto(processId, custoKey) {
   abrirUploadDoc(processId, docKey, '🧾 Comprovante: ' + (labels[custoKey]||custoKey));
 }
 
+// ── UPLOAD GENÉRICO PARA LANÇAMENTOS (manuais e automáticos) ──
+// Abre modal de upload para um lançamento qualquer, escolhendo a pasta certa no Drive:
+//  - Manual com processo vinculado     → pasta do processo / Comprovantes
+//  - Manual sem processo               → pasta raiz / Comprovantes <Mês/Ano do pagamento>
+//  - Auto câmbio / custo de processo   → pasta do processo / Comprovantes
+//  - Auto custo fixo                   → pasta raiz / Comprovantes Fixos <Mês/Ano>
+function abrirUploadLanc(id, docKey) {
+  const f = findLancamento(id);
+  if (!f) { showToast('⚠️ Lançamento não encontrado'); return; }
+
+  const docLabels = {comprovante:'🧾 Comprovante', fatura:'📋 Fatura', nfe:'📄 NF-e', outros:'📎 Outros'};
+  const docLabel = docLabels[docKey] || docKey;
+
+  // Detecta URL atual baseado no kind
+  let currentUrl = '';
+  if (f.kind === 'manual') {
+    currentUrl = (f.entry.docs && f.entry.docs[docKey]) || '';
+  } else if (f.kind === 'auto-cambio' && f.processo.docs?._lancCambio) {
+    currentUrl = f.processo.docs._lancCambio[docKey] || '';
+  } else if (f.kind === 'auto-cost' && f.processo.docs?.['_lanc_'+f.field]) {
+    currentUrl = f.processo.docs['_lanc_'+f.field][docKey] || '';
+  } else if (f.kind === 'auto-fixo' && f.fixo.docs?.[f.field]) {
+    currentUrl = f.fixo.docs[f.field][docKey] || '';
+  }
+
+  const existing = document.getElementById('upload-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'upload-modal';
+  modal.className = 'modal-overlay';
+  modal.dataset.lancId = id;
+  modal.dataset.docKey = docKey;
+  modal.innerHTML = `
+    <div class="modal" style="max-width:480px;width:95%">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div class="modal-title" style="margin-bottom:0">${docLabel}</div>
+        <button class="btn btn-secondary btn-xs" onclick="document.getElementById('upload-modal').remove()">✕</button>
+      </div>
+
+      <div style="border:2px dashed var(--border2);border-radius:10px;padding:24px;text-align:center;margin-bottom:16px;cursor:pointer"
+        onclick="document.getElementById('file-input-lanc').click()"
+        ondragover="event.preventDefault();this.style.borderColor='var(--accent2)'"
+        ondragleave="this.style.borderColor='var(--border2)'"
+        ondrop="event.preventDefault();handleDropUploadLanc(event)">
+        <div style="font-size:36px;margin-bottom:8px">📂</div>
+        <div style="font-size:13px;font-weight:600;color:var(--text)">Clique ou arraste o arquivo aqui</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">PDF, Word, Excel, imagens — qualquer formato</div>
+        <input type="file" id="file-input-lanc" style="display:none" onchange="processUploadFileLanc(this.files[0])"/>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+        <span style="font-size:10px;color:var(--muted);letter-spacing:1px">OU COLE O LINK</span>
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+      </div>
+
+      <div class="ig">
+        <label class="lbl">Link do Google Drive</label>
+        <input type="url" id="doc-link-input-lanc" value="${escHtml(currentUrl)}" placeholder="https://drive.google.com/file/d/..."/>
+      </div>
+
+      ${currentUrl ? `<div style="margin-top:8px">
+        <a href="${sanitizeUrl(currentUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent2);font-size:12px">↗ Ver arquivo atual</a>
+        <button class="btn btn-danger btn-xs" style="margin-left:10px" onclick="removerDocLanc()">🗑️ Remover</button>
+      </div>` : ''}
+
+      <div id="upload-progress-lanc" style="display:none;margin:12px 0;padding:10px;background:var(--bg);border-radius:8px;font-size:12px;color:var(--muted)">
+        ⏳ Fazendo upload...
+      </div>
+
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+        <button class="btn btn-secondary" onclick="document.getElementById('upload-modal').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="salvarLinkDocLanc()">💾 Salvar Link</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+function handleDropUploadLanc(event){
+  const file = event.dataTransfer.files[0];
+  if (file) processUploadFileLanc(file);
+}
+
+// Decide a pasta Drive destino para um doc de lançamento e faz o upload
+async function uploadFileForLanc(file, id, docKey) {
+  const f = findLancamento(id);
+  if (!f) throw new Error('Lançamento não encontrado');
+  try {
+    showSyncIndicator('Fazendo upload: ' + file.name + '...');
+    const token = await getAccessToken();
+    const rootId = await getRootFolderId();
+
+    // Determinar pasta de destino
+    let destFolderId = null;
+    if (f.kind === 'manual') {
+      const l = f.entry;
+      // Se está vinculado a processo, usar pasta do processo / Comprovantes
+      if (l.vinculo === 'processo' && l.vinculoId) {
+        const p = S.processos.find(x => x.id === l.vinculoId);
+        if (p) {
+          let procFolderId = p.docs?._folderId;
+          if (!procFolderId) {
+            const r = await criarPastaProcesso(p);
+            procFolderId = r?.folderId;
+          }
+          if (procFolderId) destFolderId = await getOrCreateFolder('Comprovantes', procFolderId);
+        }
+      }
+      // Se não tem processo: pasta raiz / Comprovantes <Mês/Ano>
+      if (!destFolderId) {
+        const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+        let mesAno = 'Sem Data';
+        if (l.data && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(l.data)) {
+          const [,mm,yy] = l.data.split('/');
+          mesAno = (meses[parseInt(mm,10)-1] || mm) + '/' + yy;
+        }
+        destFolderId = await getOrCreateFolder('Comprovantes ' + mesAno, rootId);
+      }
+    } else if (f.kind === 'auto-cambio' || f.kind === 'auto-cost') {
+      const p = f.processo;
+      let procFolderId = p.docs?._folderId;
+      if (!procFolderId) {
+        const r = await criarPastaProcesso(p);
+        procFolderId = r?.folderId;
+      }
+      if (procFolderId) destFolderId = await getOrCreateFolder('Comprovantes', procFolderId);
+    } else if (f.kind === 'auto-fixo') {
+      const m = f.fixo;
+      const mesAno = (m.mes||'Sem Data') + (m.ano?'/'+m.ano:'');
+      destFolderId = await getOrCreateFolder('Comprovantes Fixos ' + mesAno, rootId);
+    }
+
+    const metadata = { name: file.name };
+    if (destFolderId) metadata.parents = [destFolderId];
+
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify(metadata)], {type: 'application/json'}));
+    form.append('file', file);
+
+    const res = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
+      { method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: form }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(()=>({}));
+      throw new Error(err.error?.message || 'Upload failed');
+    }
+    const data = await res.json();
+
+    // Tornar acessível por link
+    await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'reader', type: 'anyone' })
+    });
+
+    hideSyncIndicator();
+    return data.webViewLink;
+  } catch(e) {
+    hideSyncIndicator();
+    throw e;
+  }
+}
+
+// Persiste o URL do doc no local correto (manual, processo ou fixo)
+// Side effect: se URL é válido e docKey é 'comprovante', marca o lançamento como Pago
+function setLancDocUrl(id, docKey, url){
+  const f = findLancamento(id);
+  if (!f) return false;
+  const isAdding = url && String(url).length > 0;
+
+  if (f.kind === 'manual') {
+    if (!f.entry.docs) f.entry.docs = {};
+    f.entry.docs[docKey] = url;
+    // Auto-Pago: se adicionou comprovante, status vira Pago
+    if (isAdding && docKey === 'comprovante' && f.entry.status !== 'Cancelado') {
+      f.entry.status = 'Pago';
+    }
+  } else if (f.kind === 'auto-cambio') {
+    if (!f.processo.docs) f.processo.docs = {};
+    if (!f.processo.docs._lancCambio) f.processo.docs._lancCambio = {};
+    f.processo.docs._lancCambio[docKey] = url;
+    if (isAdding && docKey === 'comprovante' && f.processo.cambioStatus !== 'Cancelado') {
+      f.processo.cambioStatus = 'Pago';
+    }
+  } else if (f.kind === 'auto-cost') {
+    if (!f.processo.docs) f.processo.docs = {};
+    const k = '_lanc_' + f.field;
+    if (!f.processo.docs[k]) f.processo.docs[k] = {};
+    f.processo.docs[k][docKey] = url;
+    if (isAdding && docKey === 'comprovante' && f.processo[f.field+'_status'] !== 'Cancelado') {
+      f.processo[f.field+'_status'] = 'Pago';
+    }
+  } else if (f.kind === 'auto-fixo') {
+    if (!f.fixo.docs) f.fixo.docs = {};
+    if (!f.fixo.docs[f.field]) f.fixo.docs[f.field] = {};
+    f.fixo.docs[f.field][docKey] = url;
+    // Para fixos não há campo de status separado — a presença do comprovante já é a verdade
+  }
+  return true;
+}
+
+async function processUploadFileLanc(file){
+  if (!file) return;
+  const modal = document.getElementById('upload-modal');
+  if (!modal) return;
+  const id = modal.dataset.lancId;
+  const docKey = modal.dataset.docKey;
+  const prog = document.getElementById('upload-progress-lanc');
+  if (prog) { prog.style.display = 'block'; prog.textContent = '⏳ Fazendo upload de ' + file.name + '...'; }
+  try {
+    const url = await uploadFileForLanc(file, id, docKey);
+    if (url) {
+      setLancDocUrl(id, docKey, url);
+      const linkInput = document.getElementById('doc-link-input-lanc');
+      if (linkInput) linkInput.value = url;
+      if (prog) prog.innerHTML = '✅ Upload concluído! <a href="' + sanitizeUrl(url) + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent2)">Ver arquivo ↗</a>';
+      if (window._sheetsToken) await saveToSheets(); else scheduleAutoSave();
+      showToast('✅ ' + file.name + ' enviado!');
+      setTimeout(()=>{ document.getElementById('upload-modal')?.remove(); render(); }, 1200);
+    }
+  } catch(e) {
+    if (prog) prog.innerHTML = '⚠️ ' + (e.message || 'Erro no upload');
+    showToast('⚠️ ' + (e.message||'Erro'));
+  }
+}
+
+function salvarLinkDocLanc(){
+  const modal = document.getElementById('upload-modal');
+  if (!modal) return;
+  const id = modal.dataset.lancId;
+  const docKey = modal.dataset.docKey;
+  const link = sanitizeUrl(document.getElementById('doc-link-input-lanc')?.value?.trim() || '');
+  if (!link) { showToast('⚠️ Cole um link válido'); return; }
+  if (!setLancDocUrl(id, docKey, link)) { showToast('⚠️ Lançamento não encontrado'); return; }
+  modal.remove();
+  if (window._sheetsToken) saveToSheets(); else scheduleAutoSave();
+  render();
+  showToast('✅ Link salvo!');
+}
+
+function removerDocLanc(){
+  const modal = document.getElementById('upload-modal');
+  if (!modal) return;
+  const id = modal.dataset.lancId;
+  const docKey = modal.dataset.docKey;
+  if (!confirm('Remover este anexo? O arquivo continua no Drive — apenas o vínculo será removido.')) return;
+  setLancDocUrl(id, docKey, '');
+  modal.remove();
+  if (window._sheetsToken) saveToSheets(); else scheduleAutoSave();
+  render();
+  showToast('✅ Anexo removido');
+}
+
 function salvarLinkDoc(processId, docKey) {
   const link = sanitizeUrl(document.getElementById('doc-link-input')?.value?.trim() || '');
   if (!link) { showToast('⚠️ Cole um link válido'); return; }
@@ -3363,7 +4295,12 @@ function salvarLinkDoc(processId, docKey) {
   if (p) {
     if (!p.docs) p.docs = {};
     p.docs[docKey] = link;
-    scheduleAutoSave();
+    // Salvar imediatamente para não perder o documento ao navegar
+    if (window._sheetsToken) {
+      saveToSheets();
+    } else {
+      scheduleAutoSave();
+    }
     render();
   }
   document.getElementById('upload-modal')?.remove();
@@ -3372,18 +4309,33 @@ function salvarLinkDoc(processId, docKey) {
 
 
 // Auto-update process status based on dates
+// Mapeamento correto baseado nos campos do processo:
+//  logEmbarque -> data de saída da origem (coletado)
+//  logChegada  -> data de chegada no armazém
+//  logPorto    -> data de entrada no porto
+//  saida       -> data de saída do navio
 function autoUpdateStatus() {
   const today = new Date(); today.setHours(0,0,0,0);
   S.processos.forEach(p => {
-    const parseDate = s => { if(!s) return null; const [d,m,y]=s.split('/'); return new Date(y,m-1,d); };
-    const dtArmazem = parseDate(p.logEmbarque);  // chegada armazem
-    const dtPorto   = parseDate(p.saida);         // entrada porto / saida
-    const dtNavio   = parseDate(p.logChegada);    // saida navio / chegada destino
-    if (dtNavio && today >= dtNavio && p.status !== 'No Destino' && p.status !== 'Concluído') {
+    const parseDate = s => {
+      if(!s) return null;
+      const parts = s.split('/');
+      if(parts.length !== 3) return null;
+      const [d,m,y] = parts.map(x => parseInt(x,10));
+      if(!d || !m || !y) return null;
+      const dt = new Date(y, m-1, d);
+      return isNaN(dt.getTime()) ? null : dt;
+    };
+    const dtArmazem = parseDate(p.logChegada);  // chegada no armazém
+    const dtPorto   = parseDate(p.logPorto);    // entrada no porto
+    const dtNavio   = parseDate(p.saida);       // saída do navio
+    // Preserve status terminais
+    if (p.status === 'No Destino' || p.status === 'Concluído') return;
+    if (dtNavio && today >= dtNavio) {
       p.status = 'Embarcado';
-    } else if (dtPorto && today >= dtPorto && p.status === 'No Armazém') {
+    } else if (dtPorto && today >= dtPorto) {
       p.status = 'No Porto';
-    } else if (dtArmazem && today >= dtArmazem && p.status === 'A Coletar') {
+    } else if (dtArmazem && today >= dtArmazem) {
       p.status = 'No Armazém';
     }
     // Auto cambio status
@@ -3392,7 +4344,7 @@ function autoUpdateStatus() {
     } else if (p.cambioFechamento) {
       p.cambioStatus = 'Pré Embarque Enviado';
     } else if (!p.cambioRecebimento && !p.cambioFechamento) {
-      if (p.cambioInvoice > 0) p.cambioStatus = 'Aguardando';
+      if ((p.cambioInvoice||0) > 0) p.cambioStatus = 'Aguardando';
     }
   });
 }
@@ -3400,14 +4352,18 @@ function autoUpdateStatus() {
 // INIT
 // ═══════════════════════════════════════════════════════════
 // Check if already logged in
-// Security: prevent clickjacking via JS
-if(window.top !== window.self){
-  window.top.location = window.self.location;
+// Security: prevent clickjacking via JS (CSP frame-ancestors already blocks, this is defense-in-depth)
+try {
+  if(window.top !== window.self){
+    window.top.location = window.self.location;
+  }
+} catch(e) {
+  // SecurityError in cross-origin iframe — CSP will block it anyway
 }
 
-// Security: warn if not HTTPS (only in production)
-if(location.protocol === 'file:' === false && location.protocol !== 'https:' && location.hostname !== 'localhost'){
-  console.warn('ERP should be served over HTTPS');
+// Security: warn if not HTTPS in production
+if(location.protocol !== 'file:' && location.protocol !== 'https:' && location.hostname !== 'localhost'){
+  // production environment must use HTTPS
 }
 if (!checkSession()) {
   // Show login screen - Google GIS will handle it
