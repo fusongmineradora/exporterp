@@ -3076,7 +3076,7 @@ async function abrirPastaProcesso(p) {
 // ═══════════════════════════════════════════════════════════
 
 // Upload file to Drive folder and return file URL
-async function uploadFileToDrive(file, processId) {
+async function uploadFileToDrive(file, processId, docKey='') {
   try {
     showSyncIndicator('Fazendo upload: ' + file.name + '...');
     const token = await getAccessToken();
@@ -3091,10 +3091,18 @@ async function uploadFileToDrive(file, processId) {
       if (result) folderId = result.folderId;
     }
 
+    // If this is a cost receipt (custo_), create/use a subfolder
+    let uploadFolderId = folderId;
+    if (docKey && docKey.startsWith('custo_') && folderId) {
+      try {
+        uploadFolderId = await getOrCreateFolder('📎 Comprovantes de Custos', folderId);
+      } catch(e) { uploadFolderId = folderId; }
+    }
+
     // Upload file metadata + content
     const metadata = {
       name: file.name,
-      parents: folderId ? [folderId] : []
+      parents: uploadFolderId ? [uploadFolderId] : (folderId ? [folderId] : [])
     };
 
     const form = new FormData();
@@ -3202,7 +3210,7 @@ async function processUploadFile(file, processId, docKey, docLabel) {
   const prog = document.getElementById('upload-progress');
   if (prog) { prog.style.display = 'block'; prog.textContent = '⏳ Fazendo upload de ' + file.name + '...'; }
 
-  const result = await uploadFileToDrive(file, processId);
+  const result = await uploadFileToDrive(file, processId, docKey);
   if (result) {
     // Save URL to processo docs
     const p = S.processos.find(x => x.id === processId);
