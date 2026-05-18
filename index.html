@@ -583,14 +583,18 @@ function handleGoogleLogin(response) {
     nav('dashboard');
 
     // Setup and load from Google Sheets
+    // Já solicita o token OAuth aqui — uma única tela de permissão no login
+    // libera Sheets + Drive para toda a sessão (renovação silenciosa em background)
     setTimeout(async () => {
       try {
+        await getAccessToken();   // mostra tela de consentimento na 1ª vez
         await setupSheets();
         await loadFromSheets();
       } catch(e) {
         console.warn('Sheets init:', e);
+        // Se falhou, o usuário pode usar "Reconectar Drive" depois
       }
-    }, 1000);
+    }, 800);
 
   } catch(e) {
     // Login error handled silently
@@ -624,6 +628,7 @@ function checkSession() {
       const parsed = JSON.parse(user);
       if(parsed.expires && Date.now() > parsed.expires){
         sessionStorage.removeItem('erp-user');
+        sessionStorage.removeItem('erp-gtoken');
         return false;
       }
       const {name, email, picture} = parsed;
@@ -634,6 +639,22 @@ function checkSession() {
       updateUserInfo(name, email, picture);
       applyTheme();
       nav('dashboard');
+      // Restaura token do storage, ou pede silenciosamente se já consentiu
+      setTimeout(async () => {
+        if (restoreTokenFromStorage()) {
+          // Token ainda válido — agenda renovação automática
+          scheduleTokenRenewal();
+          try { await loadFromSheets(); } catch(e) {}
+          return;
+        }
+        // Tenta renovação silenciosa (sem pop-up porque drive-consented está marcado)
+        try {
+          await getAccessToken();
+          await loadFromSheets();
+        } catch(e) {
+          // Falhou silenciosamente — clique no botão Reconectar Drive resolve
+        }
+      }, 500);
       return true;
     } catch(e) {}
   }
@@ -3466,6 +3487,12 @@ function attachEvents(){
 
 function logoutUser(){
   sessionStorage.removeItem('erp-user');
+  sessionStorage.removeItem('erp-gtoken');
+  sessionStorage.removeItem('drive-consented');
+  window._sheetsToken = null;
+  window._sheetsTokenExpiry = 0;
+  window._driveConsented = false;
+  clearTimeout(_renewTimer);
   document.getElementById('main').style.display='none';
   document.getElementById('login-screen').style.display='flex';
 }
@@ -3491,51 +3518,114 @@ async function reconectarDrive() {
 const SHEET_ID = '1-Or9ewLhLkunUHP8GgOw9rZWd2k2bhMS8_93Ie1znXY';
 const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
 
+// ── GERENCIAMENTO DE TOKEN OAUTH ──────────────────────────
+// Estratégia: ao logar, solicita imediatamente o token de Sheets/Drive
+// e renova silenciosamente (sem pop-up) a cada hora.
+// Token fica em sessionStorage para sobreviver a F5 dentro da mesma sessão.
+
+let _tokenClient = null; // singleton
+
+function getTokenClient() {
+  if (_tokenClient) return _tokenClient;
+  if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) return null;
+  _tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: '69223242564-l80vfi8s0i58tf4b6jumrbvt82mdjlik.apps.googleusercontent.com',
+    scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive',
+    callback: () => {}, // sobrescrito a cada chamada
+  });
+  return _tokenClient;
+}
+
+// Restaura token do sessionStorage se ainda for válido (>2min de vida)
+function restoreTokenFromStorage() {
+  try {
+    const raw = sessionStorage.getItem('erp-gtoken');
+    if (!raw) return false;
+    const t = JSON.parse(raw);
+    if (t.expiry && t.expiry > Date.now() + 120000) {
+      window._sheetsToken = t.token;
+      window._sheetsTokenExpiry = t.expiry;
+      return true;
+    }
+    sessionStorage.removeItem('erp-gtoken');
+  } catch(e) {}
+  return false;
+}
+
+// Persiste token na sessionStorage
+function persistToken() {
+  try {
+    sessionStorage.setItem('erp-gtoken', JSON.stringify({
+      token: window._sheetsToken,
+      expiry: window._sheetsTokenExpiry,
+    }));
+  } catch(e) {}
+}
+
 // Get current OAuth token from Google Identity Services
-function getAccessToken(forceDriveConsent=false) {
+// modes:
+//  - silent (default): tenta renovar sem pop-up se já consentido
+//  - 'consent': força tela de consentimento (primeiro acesso ou reautorização explícita)
+function getAccessToken(forceConsent=false) {
   return new Promise((resolve, reject) => {
     const user = sessionStorage.getItem('erp-user');
     if (!user) { reject(new Error('Not logged in')); return; }
-    // Return cached token if valid
-    if (!forceDriveConsent && window._sheetsToken && window._sheetsTokenExpiry > Date.now()) {
+    // Token cacheado e válido?
+    if (!forceConsent && window._sheetsToken && window._sheetsTokenExpiry > Date.now() + 60000) {
       resolve(window._sheetsToken);
       return;
     }
-    // Ensure Google Identity Services is loaded
-    if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
-      reject(new Error('Google Identity Services não carregou. Aguarde alguns segundos e tente novamente.'));
+    // Tenta restaurar do storage
+    if (!forceConsent && restoreTokenFromStorage()) {
+      resolve(window._sheetsToken);
       return;
     }
-    let client;
-    try {
-      client = google.accounts.oauth2.initTokenClient({
-        client_id: '69223242564-l80vfi8s0i58tf4b6jumrbvt82mdjlik.apps.googleusercontent.com',
-        scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive',
-        callback: (resp) => {
-          if (resp.error) { reject(new Error(resp.error)); return; }
-          window._sheetsToken = resp.access_token;
-          window._sheetsTokenExpiry = Date.now() + (resp.expires_in * 1000) - 60000;
-          window._driveConsented = true;
-          try { sessionStorage.setItem('drive-consented', '1'); } catch(e) {}
-          resolve(resp.access_token);
-        },
-        error_callback: (err) => {
-          reject(new Error(err.message || err.type || 'OAuth error'));
-        },
-      });
-    } catch(e) {
-      reject(e);
+    const client = getTokenClient();
+    if (!client) {
+      reject(new Error('Google Identity Services não carregou. Aguarde e tente novamente.'));
       return;
     }
-    // Decide whether to show consent screen
+    client.callback = (resp) => {
+      if (resp.error) { reject(new Error(resp.error)); return; }
+      window._sheetsToken = resp.access_token;
+      window._sheetsTokenExpiry = Date.now() + (resp.expires_in * 1000) - 60000;
+      window._driveConsented = true;
+      try { sessionStorage.setItem('drive-consented', '1'); } catch(e) {}
+      persistToken();
+      // Agenda auto-renovação silenciosa antes de expirar
+      scheduleTokenRenewal();
+      resolve(resp.access_token);
+    };
+    client.error_callback = (err) => {
+      reject(new Error(err.message || err.type || 'OAuth error'));
+    };
+    // Se nunca consentiu OU pediu force, mostra a tela de permissão
+    // Caso contrário, renovação silenciosa (prompt='' = sem pop-up se já autorizado)
     const alreadyConsented = sessionStorage.getItem('drive-consented') === '1' || window._driveConsented;
-    const promptMode = forceDriveConsent ? 'consent' : (alreadyConsented ? '' : 'consent');
+    const promptMode = (forceConsent || !alreadyConsented) ? 'consent' : '';
     try {
       client.requestAccessToken({ prompt: promptMode });
     } catch(e) {
       reject(e);
     }
   });
+}
+
+// Agenda renovação silenciosa antes do token expirar
+let _renewTimer = null;
+function scheduleTokenRenewal() {
+  clearTimeout(_renewTimer);
+  if (!window._sheetsTokenExpiry) return;
+  // Renova 2 minutos antes de expirar
+  const renewIn = Math.max(60000, window._sheetsTokenExpiry - Date.now() - 120000);
+  _renewTimer = setTimeout(async () => {
+    try {
+      // Silent renewal — não mostra pop-up porque já consentiu antes
+      await getAccessToken(false);
+    } catch(e) {
+      // Falhou — usuário pode usar "Reconectar Drive" se for clicar em algo
+    }
+  }, renewIn);
 }
 
 // Generic Sheets API call
