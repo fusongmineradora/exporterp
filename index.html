@@ -286,7 +286,7 @@ select option{background:var(--bg2);}
   .g4,.g5{grid-template-columns:repeat(2,1fr);}
 }
 @media(max-width:800px){
-  #dash-fab{left:72px!important;}
+  #dash-fab{left:72px;}
   #sidebar{width:56px;padding:16px 8px;}
   #sidebar .logo-area div[style*='background:#EFEFEF']{display:none;}
   .logo-sub,.nav-btn span:not(.nav-icon),.sidebar-footer .sf-label,.sidebar-footer .sf-val{display:none;}
@@ -388,15 +388,15 @@ select option{background:var(--bg2);}
   </div>
   <span id="theme-label">Claro</span>
 </button>
-<button id="dash-fab" onclick="nav('dashboard')" title="Dashboard" style="
-  position:fixed;bottom:28px;left:240px;z-index:500;
+<button id="dash-fab" title="Dashboard (arraste para mover)" style="
+  position:fixed;top:auto;bottom:28px;left:240px;right:auto;z-index:500;
   background:linear-gradient(135deg,var(--accent2),var(--accent));
   color:#fff;border:none;border-radius:50px;
   padding:10px 20px;font-size:12px;font-family:'Inter',sans-serif;
-  font-weight:700;cursor:pointer;display:flex;align-items:center;gap:7px;
-  box-shadow:0 4px 20px rgba(0,136,255,0.4);transition:all 0.2s;letter-spacing:0.3px;
-" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 8px 28px rgba(0,136,255,0.5)'"
-   onmouseout="this.style.transform='none';this.style.boxShadow='0 4px 20px rgba(0,136,255,0.4)'">
+  font-weight:700;cursor:grab;display:flex;align-items:center;gap:7px;
+  box-shadow:0 4px 20px rgba(0,136,255,0.4);transition:box-shadow 0.2s;letter-spacing:0.3px;
+" onmouseover="this.style.boxShadow='0 8px 28px rgba(0,136,255,0.5)'"
+   onmouseout="this.style.boxShadow='0 4px 20px rgba(0,136,255,0.4)'">
   📊 Dashboard
 </button>
 <div class="toast" id="toast">✓ Salvo com sucesso!</div>
@@ -666,6 +666,7 @@ const backBtn=()=>navHistory.length>0
   : '';
 
 function render(){
+  autoUpdateStatus();
   // reapply backgrounds after innerHTML changes
   document.body.style.background = isLight ? '#F1F5F9' : '#0a0f1e';
   const mainEl=document.getElementById('main');
@@ -910,7 +911,7 @@ function renderProcessos(){
 
 function renderProcessoDetalhe(p){
   const custo=tc(p); const lucro=(p.cambioReais||0)-custo;
-  const docItems=[['invoice','📄 Invoice'],['contrato','📃 Contrato'],['packingList','📦 Packing List'],['bl','🚢 BL - Bill of Lading'],['due','🏛️ DU-E'],['nfe','🧾 NF-e'],['comprovantes','🖨️ Comprovantes Câmbio'],['certOrigem','🌐 Cert. Origem'],['proforma','📋 Proforma Invoice'],['seguro','🛡️ Seguro de Carga'],['pesagem','⚖️ Laudo de Pesagem'],['outros','📁 Outros Documentos']];
+  const docItems=[['invoice','📄 Invoice'],['contrato','📃 Contrato'],['packingList','📦 Packing List'],['bl','🚢 BL - Bill of Lading'],['due','🏛️ DU-E'],['nfe','🧾 NF-e'],['comprovantes','🖨️ Comprovantes Câmbio'],['certOrigem','🌐 Cert. Origem'],['seguro','🛡️ Seguro de Carga'],['pesagem','⚖️ Laudo de Pesagem'],['outros','📁 Outros Documentos']];
   return `
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap">
     <button class="btn btn-secondary btn-sm" onclick="goBack()"><span style="font-size:15px">←</span> Voltar</button>
@@ -964,7 +965,7 @@ function renderProcessoDetalhe(p){
   <div class="g2">
     <div class="card">
       <div class="card-title"><div class="card-title-left">💸 Custos do Processo</div></div>
-      ${[['Marítimo',p.custoMaritimo],['Frete Rodoviário',p.custoFrete],['Certificado de Origem',p.custoCertificado],['Armazém',p.custoArmazem],['Porto / Taxas',p.custoPorto],['Despachante',p.custoDespachante],['Serviços de Terceiros',p.custoServTerceiros],['Impostos',p.custoImpostos],['Produto',p.custoProduto]].map(([l,v])=>`
+      ${[['Marítimo',p.custoMaritimo,'maritimo'],['Frete Rodoviário',p.custoFrete,'frete'],['Certificado de Origem',p.custoCertificado,'certificado'],['Armazém',p.custoArmazem,'armazem'],['Porto / Taxas',p.custoPorto,'porto'],['Despachante',p.custoDespachante,'despachante'],['Serviços de Terceiros',p.custoServTerceiros,'servicos'],['Impostos',p.custoImpostos,'impostos'],['Produto',p.custoProduto,'produto'],['Transportadora (DACTE/MDF)',p.custoFrete,'transportadora']].map(([l,v])=>`
         <div class="cost-row"><span class="c-label">${l}</span><span class="c-val">R$ ${fmt(v)}</span></div>`).join('')}
       <div class="total-box">
         <span style="color:var(--muted);font-size:12px">Total Custos</span>
@@ -1020,8 +1021,10 @@ function renderProcessoForm(p){
   const lastNum=parseInt(lastId.replace('FS',''))||260096;
   const nextNum=isEdit?parseInt(p.id.replace('FS','')):lastNum+1;
   const nextId=isEdit?p.id:'FS'+nextNum;
-  const nextInv=isEdit?p.invoiceNum:nextId;
-  const nextCont=isEdit?p.contratoNum:nextId;
+  const baseEmb=9; const baseProc=260096;
+  const nextEmb=isEdit?(p.embarque||''):(String(baseEmb+(nextNum-baseProc)).padStart(2,'0'));
+  const nextInv=isEdit?p.invoiceNum:'Invoice - '+nextId;
+  const nextCont=isEdit?p.contratoNum:'Sales Contract - '+nextId;
 
   // Defaults for new vs edit
   const d=(k,def)=>isEdit?(p?.[k]||''):def;
@@ -1060,8 +1063,8 @@ function renderProcessoForm(p){
       </div>
     </div>
     <div class="g2">
-      ${IG('Embarque Nº','embarque',d('embarque',''))}
-      ${IG('Status','status',d('status','No Armazém'),'text',statuses)}
+      ${IG('Embarque Nº','embarque',isEdit?d('embarque',''):nextEmb)}
+      ${IG('Status','status',d('status','A Coletar'),'text',statuses)}
     </div>
     <div style="padding:8px 12px;background:var(--bg);border-radius:8px;font-size:11px;color:var(--muted)">
       ℹ️ Número do processo, invoice e contrato são gerados automaticamente em sequência.
@@ -1518,8 +1521,15 @@ function renderCustos(){
     return `<div class="card">
       <div class="card-title"><div class="card-title-left">💸 ${p.id} — ${p.produto}</div>${badge(p.status)}</div>
       <div class="g3">
-        ${[['Marítimo',p.custoMaritimo],['Frete Rodoviário',p.custoFrete],['Certificado de Origem',p.custoCertificado],['Armazém',p.custoArmazem],['Porto / Taxas',p.custoPorto],['Despachante',p.custoDespachante],['Serviços de Terceiros',p.custoServTerceiros],['Impostos',p.custoImpostos],['Produto',p.custoProduto]].map(([l,v])=>`
-          <div class="cost-row"><span class="c-label">${l}</span><span class="c-val">R$ ${fmt(v)}</span></div>`).join('')}
+        ${[['Marítimo',p.custoMaritimo],['Frete Rodoviário',p.custoFrete],['Certificado de Origem',p.custoCertificado],['Armazém',p.custoArmazem],['Porto / Taxas',p.custoPorto],['Despachante',p.custoDespachante],['Serviços de Terceiros',p.custoServTerceiros],['Impostos',p.custoImpostos],['Produto',p.custoProduto]].map(([l,v,k])=>`
+          <div class="cost-row">
+            <span class="c-label">${l}</span>
+            <span class="c-val">R$ ${fmt(v)}</span>
+            <button onclick="abrirUploadCusto('${p.id}','${k}')"
+              style="background:none;border:1px solid ${p.custos&&p.custos[k]?'var(--green)':'var(--border)'};border-radius:6px;padding:2px 8px;font-size:10px;cursor:pointer;color:${p.custos&&p.custos[k]?'var(--green)':'var(--muted)'}">
+              ${p.custos&&p.custos[k]?'✅':'📎'}
+            </button>
+          </div>`).join('')}
       </div>
       <div class="total-box" style="margin-top:8px">
         <span style="color:var(--muted)">Total do Processo</span>
@@ -2238,14 +2248,17 @@ function pdfSection(doc,label,y){
 }
 
 function pdfRow(doc,label,val,y,color=[51,65,85]){
-  // Alternating row backgrounds
   doc.setTextColor(71,85,105);
   doc.setFontSize(8.5);
   doc.setFont('helvetica','normal');
-  doc.text(String(label),16,y);
+  // Truncate label if too long to avoid overlap with value
+  const maxLabelWidth = 100;
+  const labelStr = String(label);
+  const valStr = String(val);
+  doc.text(labelStr, 16, y, {maxWidth: maxLabelWidth});
   doc.setTextColor(...color);
   doc.setFont('helvetica','bold');
-  doc.text(String(val),130,y,'right');
+  doc.text(valStr, 160,y,'right');
   doc.setDrawColor(241,245,249);
   doc.line(14,y+2,196,y+2);
   return y+7;
@@ -2565,59 +2578,81 @@ function makeFabDraggable() {
   const fab = document.getElementById('dash-fab');
   if (!fab || fab._draggable) return;
   fab._draggable = true;
-  let dragging = false, startX, startY, origX, origY;
 
-  const onDown = (e) => {
-    dragging = false;
-    const touch = e.touches ? e.touches[0] : e;
-    startX = touch.clientX; startY = touch.clientY;
+  let dragging = false, startX = 0, startY = 0, origLeft = 0, origTop = 0;
+
+  function getPos() {
     const rect = fab.getBoundingClientRect();
-    origX = rect.left; origY = rect.top;
-    fab.style.transition = 'none';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-    document.addEventListener('touchmove', onMove, {passive:false});
-    document.addEventListener('touchend', onUp);
-  };
+    return { left: rect.left, top: rect.top };
+  }
 
-  const onMove = (e) => {
-    const touch = e.touches ? e.touches[0] : e;
-    const dx = touch.clientX - startX;
-    const dy = touch.clientY - startY;
-    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
-      dragging = true;
-      if (e.cancelable) e.preventDefault();
-    }
-    if (!dragging) return;
-    const newX = Math.max(0, Math.min(window.innerWidth - fab.offsetWidth, origX + dx));
-    const newY = Math.max(0, Math.min(window.innerHeight - fab.offsetHeight, origY + dy));
-    fab.style.position = 'fixed';
-    fab.style.left = newX + 'px';
-    fab.style.top = newY + 'px';
+  function startDrag(cx, cy) {
+    dragging = false;
+    const pos = getPos();
+    // Convert to fixed top/left removing bottom
     fab.style.bottom = 'auto';
-    localStorage.setItem('fab-pos', JSON.stringify({left: newX, top: newY}));
-  };
+    fab.style.right = 'auto';
+    fab.style.top = pos.top + 'px';
+    fab.style.left = pos.left + 'px';
+    origLeft = pos.left;
+    origTop = pos.top;
+    startX = cx;
+    startY = cy;
+    fab.style.transition = 'none';
+    fab.style.cursor = 'grabbing';
+  }
 
-  const onUp = () => {
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    document.removeEventListener('touchmove', onMove);
-    document.removeEventListener('touchend', onUp);
-    fab.style.transition = '';
+  function moveDrag(cx, cy) {
+    const dx = cx - startX;
+    const dy = cy - startY;
+    if (!dragging && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) dragging = true;
+    if (!dragging) return;
+    const maxLeft = window.innerWidth - fab.offsetWidth - 4;
+    const maxTop = window.innerHeight - fab.offsetHeight - 4;
+    const newLeft = Math.max(4, Math.min(maxLeft, origLeft + dx));
+    const newTop = Math.max(4, Math.min(maxTop, origTop + dy));
+    fab.style.left = newLeft + 'px';
+    fab.style.top = newTop + 'px';
+    fab.style.bottom = 'auto';
+    fab.style.right = 'auto';
+    try { localStorage.setItem('fab-pos', JSON.stringify({left: newLeft, top: newTop})); } catch(e){}
+  }
+
+  function endDrag() {
+    fab.style.cursor = 'grab';
+    fab.style.transition = 'box-shadow 0.2s';
     if (!dragging) nav('dashboard');
-  };
+    dragging = false;
+  }
 
-  fab.addEventListener('mousedown', onDown);
-  fab.addEventListener('touchstart', onDown, {passive:true});
+  // Mouse
+  fab.addEventListener('mousedown', e => {
+    e.preventDefault();
+    startDrag(e.clientX, e.clientY);
+    const mm = e2 => moveDrag(e2.clientX, e2.clientY);
+    const mu = () => { endDrag(); window.removeEventListener('mousemove', mm); window.removeEventListener('mouseup', mu); };
+    window.addEventListener('mousemove', mm);
+    window.addEventListener('mouseup', mu);
+  });
+
+  // Touch
+  fab.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    startDrag(t.clientX, t.clientY);
+    const tm = e2 => { e2.preventDefault(); const t2 = e2.touches[0]; moveDrag(t2.clientX, t2.clientY); };
+    const tu = () => { endDrag(); window.removeEventListener('touchmove', tm); window.removeEventListener('touchend', tu); };
+    window.addEventListener('touchmove', tm, {passive: false});
+    window.addEventListener('touchend', tu);
+  }, {passive: true});
 
   // Restore saved position
   try {
     const saved = JSON.parse(localStorage.getItem('fab-pos'));
-    if (saved) {
-      fab.style.position = 'fixed';
-      fab.style.left = saved.left + 'px';
-      fab.style.top = saved.top + 'px';
+    if (saved && saved.left >= 0 && saved.top >= 0) {
       fab.style.bottom = 'auto';
+      fab.style.right = 'auto';
+      fab.style.left = Math.min(saved.left, window.innerWidth - 100) + 'px';
+      fab.style.top = Math.min(saved.top, window.innerHeight - 50) + 'px';
     }
   } catch(e) {}
 }
@@ -3030,7 +3065,8 @@ async function abrirPastaProcesso(p) {
     }
   } catch(e) {
     // Fallback: open Drive search for this process
-    window.open('https://drive.google.com/drive/search?q=' + encodeURIComponent(p.id), '_blank', 'noopener,noreferrer');
+    showToast('🔍 Abrindo Drive com busca por ' + p.id);
+    setTimeout(()=>window.open('https://drive.google.com/drive/search?q=' + encodeURIComponent(p.id), '_blank', 'noopener,noreferrer'), 300);
   }
 }
 
@@ -3192,6 +3228,15 @@ function handleDropUpload(event, processId, docKey, docLabel) {
   if (file) processUploadFile(file, processId, docKey, docLabel);
 }
 
+function abrirUploadCusto(processId, custoKey) {
+  const p = S.processos.find(x => x.id === processId);
+  const labels = {maritimo:'Custo Marítimo',frete:'Frete Rodoviário',certificado:'Certificado de Origem',
+    armazem:'Armazém',porto:'Porto / Taxas',despachante:'Despachante',servicos:'Serviços de Terceiros',
+    impostos:'Impostos',produto:'Produto',transportadora:'Transportadora (DACTE/MDF)'};
+  const docKey = 'custo_' + custoKey;
+  abrirUploadDoc(processId, docKey, '🧾 Comprovante: ' + (labels[custoKey]||custoKey));
+}
+
 function salvarLinkDoc(processId, docKey) {
   const link = sanitizeUrl(document.getElementById('doc-link-input')?.value?.trim() || '');
   if (!link) { showToast('⚠️ Cole um link válido'); return; }
@@ -3206,6 +3251,32 @@ function salvarLinkDoc(processId, docKey) {
   showToast('✅ Documento salvo!');
 }
 
+
+// Auto-update process status based on dates
+function autoUpdateStatus() {
+  const today = new Date(); today.setHours(0,0,0,0);
+  S.processos.forEach(p => {
+    const parseDate = s => { if(!s) return null; const [d,m,y]=s.split('/'); return new Date(y,m-1,d); };
+    const dtArmazem = parseDate(p.logEmbarque);  // chegada armazem
+    const dtPorto   = parseDate(p.saida);         // entrada porto / saida
+    const dtNavio   = parseDate(p.logChegada);    // saida navio / chegada destino
+    if (dtNavio && today >= dtNavio && p.status !== 'No Destino' && p.status !== 'Concluído') {
+      p.status = 'Embarcado';
+    } else if (dtPorto && today >= dtPorto && p.status === 'No Armazém') {
+      p.status = 'No Porto';
+    } else if (dtArmazem && today >= dtArmazem && p.status === 'A Coletar') {
+      p.status = 'No Armazém';
+    }
+    // Auto cambio status
+    if (p.cambioRecebimento && p.cambioFechamento) {
+      p.cambioStatus = 'Liquidado';
+    } else if (p.cambioFechamento) {
+      p.cambioStatus = 'Pré Embarque Enviado';
+    } else if (!p.cambioRecebimento && !p.cambioFechamento) {
+      if (p.cambioInvoice > 0) p.cambioStatus = 'Aguardando';
+    }
+  });
+}
 // ═══════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════
