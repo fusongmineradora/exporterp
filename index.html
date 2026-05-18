@@ -2017,6 +2017,9 @@ function renderLancamentos(back, tabsHtml){
         const legacy = p[field+'_status'] || '';
         let status = hasComprovante(docs) ? 'Pago' : normalizeStatus(legacy);
         if (legacy === 'Cancelado') status = 'Cancelado';
+        // Empresa por custo: usa o vínculo salvo individualmente em p.docs._costEmpresa[field]
+        // (não faz auto-fill com logTransportadora — cada custo tem seu próprio fornecedor)
+        const empresaCusto = (p.docs && p.docs._costEmpresa && p.docs._costEmpresa[field]) || '';
         computedEntries.push({
           id: 'auto_' + field + '_' + p.id,
           _computed: true,
@@ -2027,7 +2030,7 @@ function renderLancamentos(back, tabsHtml){
           descricao: label + ' — ' + p.id,
           valor: p[field]||0,
           data: p.embarque||'',
-          empresa: p.logTransportadora || '',
+          empresa: empresaCusto,
           categoria: label,
           vinculo: 'processo',
           vinculoId: p.id,
@@ -2586,7 +2589,8 @@ function abrirModalAutoLancamento(f) {
     valorAtual = p[f.field] || 0;
     statusAtual = normalizeStatus(p[f.field+'_status'] || 'Em Aberto');
     dataAtual = p.embarque || '';
-    empresaAtual = p.logTransportadora || '';
+    // Empresa individual por custo (não usa logTransportadora globalmente)
+    empresaAtual = (p.docs && p.docs._costEmpresa && p.docs._costEmpresa[f.field]) || '';
     observacaoAtual = (p.docs && p.docs._costObs && p.docs._costObs[f.field]) || '';
     categoriaLabel = PROCESS_COST_FIELDS[f.field] || f.field;
     vinculoLabel = 'Processo';
@@ -2654,11 +2658,35 @@ function abrirModalAutoLancamento(f) {
         </div>
       ` : ''}
 
-      ${f.kind==='auto-cost' ? `
-        <div class="ig"><label class="lbl">Transportadora / Fornecedor</label>
-          <input type="text" id="al_empresa" value="${escHtml(empresaAtual)}" placeholder="Nome do fornecedor"/>
-        </div>
-      ` : ''}
+      ${f.kind==='auto-cost' ? (() => {
+        // Agrupa todos os cadastros por tipo
+        const grupos = {
+          'Clientes': (S.clientes||[]).map(c => c.nome),
+          'Transportadoras': (S.fornecedores||[]).filter(x=>x.tipo==='Transportadora').map(x=>x.nome),
+          'Despachantes': (S.fornecedores||[]).filter(x=>x.tipo==='Despachante').map(x=>x.nome),
+          'Agentes de Carga': (S.fornecedores||[]).filter(x=>x.tipo==='Agente').map(x=>x.nome),
+          'Armazéns': (S.fornecedores||[]).filter(x=>x.tipo==='Armazém').map(x=>x.nome),
+          'Serviços de Terceiros': (S.fornecedores||[]).filter(x=>x.tipo==='Serviço' || x.tipo==='Serviços' || x.tipo==='Servicos').map(x=>x.nome),
+          'Outros': (S.fornecedores||[]).filter(x=>!['Transportadora','Despachante','Agente','Armazém','Serviço','Serviços','Servicos'].includes(x.tipo)).map(x=>x.nome),
+        };
+        // Verifica se empresaAtual existe em algum cadastro
+        const existeNoCadastro = Object.values(grupos).flat().includes(empresaAtual);
+        return `
+        <div class="ig">
+          <label class="lbl" style="display:flex;justify-content:space-between;align-items:center">
+            <span>Transportadora / Fornecedor</span>
+            <button type="button" onclick="abrirModalCadastro('fornecedor','Transportadora')" style="background:transparent;border:1px solid var(--accent2);color:var(--accent2);padding:2px 8px;border-radius:6px;font-size:9.5px;cursor:pointer;letter-spacing:0">+ Novo cadastro</button>
+          </label>
+          <select id="al_empresa">
+            <option value="">— Selecione um cadastro —</option>
+            ${empresaAtual && !existeNoCadastro ? `<option value="${escHtml(empresaAtual)}" selected>⚠️ ${escHtml(empresaAtual)} (não está no cadastro)</option>` : ''}
+            ${Object.entries(grupos).map(([grupo, lista]) => {
+              if (!lista.length) return '';
+              return `<optgroup label="${grupo}">${lista.map(nome=>`<option value="${escHtml(nome)}" ${nome===empresaAtual?'selected':''}>${escHtml(nome)}</option>`).join('')}</optgroup>`;
+            }).join('')}
+          </select>
+        </div>`;
+      })() : ''}
 
       <div class="ig"><label class="lbl">Observação</label>
         <textarea id="al_observacao" rows="2" placeholder="Notas internas">${escHtml(observacaoAtual)}</textarea>
@@ -2705,11 +2733,16 @@ function salvarAutoLancamento() {
     p[field] = valor;
     p[field + '_status'] = status;
     const empresa = sanitize(document.getElementById('al_empresa')?.value || '');
-    if (empresa) p.logTransportadora = empresa;
+    // Salva empresa POR CUSTO (cada custo tem seu próprio fornecedor)
+    if (!p.docs) p.docs = {};
+    if (!p.docs._costEmpresa) p.docs._costEmpresa = {};
+    p.docs._costEmpresa[field] = empresa;
     if (observacao) {
-      if (!p.docs) p.docs = {};
       if (!p.docs._costObs) p.docs._costObs = {};
       p.docs._costObs[field] = observacao;
+    } else if (p.docs._costObs && p.docs._costObs[field]) {
+      // Limpa se foi apagado
+      delete p.docs._costObs[field];
     }
   } else if (kind === 'auto-fixo') {
     const m = S.custosMensais && S.custosMensais[0];
@@ -3659,6 +3692,19 @@ async function saveToSheets() {
       { sheet: 'CUSTOS_FIXOS', items: S.custosMensais || [] },
     ];
 
+    // FIX: limpa todo o conteúdo das abas ANTES de escrever
+    // (evita linhas-fantasma quando o array tem MENOS itens que antes — ex: após excluir)
+    const clearRanges = data.map(({sheet}) => `${sheet}!A1:ZZ10000`);
+    try {
+      await sheetsAPI('POST', `/${SHEET_ID}/values:batchClear`, {
+        ranges: clearRanges
+      });
+    } catch(clearErr) {
+      // Se o clear falhar, ainda tenta gravar (não é fatal — pode ser primeira vez)
+      console.warn('Clear ranges error (não fatal):', clearErr.message);
+    }
+
+    // Agora escreve os dados (cabeçalho + linhas)
     const updates = data.map(({sheet, items}) => {
       const headers = headerData[sheet];
       const rows = [headers, ...items.map(item => toRow(item, headers))];
