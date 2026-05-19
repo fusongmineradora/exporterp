@@ -875,6 +875,18 @@ function closeSidebarMobile(){
   if (sb) sb.classList.remove('mobile-open');
 }
 
+// Máscara de input de data: digita só números, formata automaticamente para dd/mm/aaaa
+function _maskDateInput(input){
+  if (!input) return;
+  let v = String(input.value || '').replace(/\D/g, '');  // só dígitos
+  if (v.length > 8) v = v.slice(0, 8);
+  let out = '';
+  if (v.length >= 1) out = v.slice(0, 2);
+  if (v.length >= 3) out += '/' + v.slice(2, 4);
+  if (v.length >= 5) out += '/' + v.slice(4, 8);
+  input.value = out;
+}
+
 function goBack(){
   if(navHistory.length===0) return;
   const prev=navHistory.pop();
@@ -2462,6 +2474,8 @@ function buildAllEntries(opts={}) {
         let status = hasComprovante(docs) ? 'Pago' : normalizeStatus(legacy);
         if (legacy === 'Cancelado') status = 'Cancelado';
         const empresaCusto = (p.docs && p.docs._costEmpresa && p.docs._costEmpresa[field]) || '';
+        // Data individual por custo (fallback: p.embarque legado)
+        const dataCusto = (p.docs && p.docs._costData && p.docs._costData[field]) || '';
         out.push({
           id: 'auto_' + field + '_' + p.id,
           _computed: true,
@@ -2471,7 +2485,7 @@ function buildAllEntries(opts={}) {
           tipo: 'Despesa',
           descricao: label + ' — ' + p.id,
           valor,
-          data: p.embarque||'',
+          data: dataCusto,
           empresa: empresaCusto,
           categoria: label,
           vinculo: 'processo',
@@ -2495,6 +2509,8 @@ function buildAllEntries(opts={}) {
         if (!opts.filtroMesFixoId && valor === 0) return;
         const docs = (m.docs && m.docs[field]) ? m.docs[field] : {};
         const status = hasComprovante(docs) ? 'Pago' : 'Em Aberto';
+        // Data individual por custo fixo
+        const dataFixa = (m.docs && m.docs._fixoData && m.docs._fixoData[field]) || '';
         out.push({
           id: 'auto_fixo_' + field + '_' + (m.id || mi),
           _computed: true,
@@ -2503,7 +2519,7 @@ function buildAllEntries(opts={}) {
           tipo: 'Despesa',
           descricao: 'Custo Fixo: ' + label,
           valor,
-          data: (m.mes||'')+(m.ano?'/'+m.ano:''),
+          data: dataFixa,
           empresa: '',
           categoria: 'Custo Fixo: ' + label,
           vinculo: 'fixo',
@@ -2903,7 +2919,7 @@ function abrirModalLancamento(id=null){
         </div>
         <div class="ig">
           <label class="lbl">Data</label>
-          <input type="text" id="lf_data" value="${v('data')||new Date().toLocaleDateString('pt-BR')}" placeholder="DD/MM/AAAA" />
+          <input type="text" id="lf_data" value="${v('data')||new Date().toLocaleDateString('pt-BR')}" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10" oninput="_maskDateInput(this)" />
         </div>
       </div>
 
@@ -3153,7 +3169,8 @@ function abrirModalAutoLancamento(f) {
     titulo = (PROCESS_COST_FIELDS[f.field]||f.field) + ' — ' + p.id;
     valorAtual = p[f.field] || 0;
     statusAtual = normalizeStatus(p[f.field+'_status'] || 'Em Aberto');
-    dataAtual = p.embarque || '';
+    // Data salva por custo individual (não usa mais p.embarque)
+    dataAtual = (p.docs && p.docs._costData && p.docs._costData[f.field]) || '';
     // Empresa individual por custo (não usa logTransportadora globalmente)
     empresaAtual = (p.docs && p.docs._costEmpresa && p.docs._costEmpresa[f.field]) || '';
     observacaoAtual = (p.docs && p.docs._costObs && p.docs._costObs[f.field]) || '';
@@ -3166,12 +3183,13 @@ function abrirModalAutoLancamento(f) {
     valorAtual = m[f.field] || 0;
     // Status do custo fixo = derivado do comprovante
     statusAtual = hasComprovante((m.docs && m.docs[f.field]) || {}) ? 'Pago' : 'Em Aberto';
-    dataAtual = (m.mes||'') + (m.ano ? '/'+m.ano : '');
+    // Data salva por custo individual (não usa mais mes/ano)
+    dataAtual = (m.docs && m.docs._fixoData && m.docs._fixoData[f.field]) || '';
     empresaAtual = '';
     observacaoAtual = (m.docs && m.docs._obs && m.docs._obs[f.field]) || '';
     categoriaLabel = 'Custo Fixo: ' + (FIXED_COST_FIELDS[f.field]||f.field);
     vinculoLabel = 'Custo Fixo Mensal';
-    vinculoId = m.mes || '';
+    vinculoId = (m.mes||'') + (m.ano ? '/'+m.ano : '');
   }
 
   // Status unificado para todos os tipos
@@ -3203,7 +3221,7 @@ function abrirModalAutoLancamento(f) {
           <input type="number" id="al_valor" value="${valorAtual}" step="0.01" placeholder="0,00"/>
         </div>
         <div class="ig"><label class="lbl">Data ${f.kind==='auto-cambio'?'do Recebimento':''}</label>
-          <input type="text" id="al_data" value="${escHtml(dataAtual)}" placeholder="DD/MM/AAAA"/>
+          <input type="text" id="al_data" value="${escHtml(dataAtual)}" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10" oninput="_maskDateInput(this)"/>
         </div>
       </div>
 
@@ -3303,6 +3321,9 @@ function salvarAutoLancamento() {
     if (!p.docs) p.docs = {};
     if (!p.docs._costEmpresa) p.docs._costEmpresa = {};
     p.docs._costEmpresa[field] = empresa;
+    // Salva data POR CUSTO no formato dd/mm/aaaa
+    if (!p.docs._costData) p.docs._costData = {};
+    p.docs._costData[field] = data;
     if (observacao) {
       if (!p.docs._costObs) p.docs._costObs = {};
       p.docs._costObs[field] = observacao;
@@ -3315,8 +3336,11 @@ function salvarAutoLancamento() {
     const m = (S.custosMensais||[]).find(x => String(x.id) === String(fixoId)) || (S.custosMensais||[])[0];
     if (!m) { showToast('⚠️ Custo fixo não encontrado'); return; }
     m[field] = valor;
+    if (!m.docs) m.docs = {};
+    // Salva data POR CUSTO FIXO individual no formato dd/mm/aaaa
+    if (!m.docs._fixoData) m.docs._fixoData = {};
+    m.docs._fixoData[field] = data;
     if (observacao) {
-      if (!m.docs) m.docs = {};
       if (!m.docs._obs) m.docs._obs = {};
       m.docs._obs[field] = observacao;
     }
