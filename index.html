@@ -1317,94 +1317,206 @@ function renderProcessoForm(p){
   </div>`;
 }
 function renderRastreamento(){
+  // ── URLS DE TRACKING POR COMPANHIA ──
+  // Cada companhia tem URL pública gratuita que aceita o container direto na query
   const trackUrl = (companhia, container) => {
-    const c = (container||'').trim();
-    if(!c) return '#';
+    const c = (container||'').trim().toUpperCase().replace(/\s/g,'');
+    if(!c) return null;
     const comp = (companhia||'').toUpperCase();
-    if(comp.includes('MAERSK')) return `https://www.maersk.com/tracking/${c}`;
-    if(comp.includes('COSCO'))  return `https://elines.coscoshipping.com/ebusiness/cargoTracking?trackingType=CONTAINER&number=${c}`;
-    if(comp.includes('MSC'))    return `https://www.msc.com/track-a-shipment?agencyPath=msc&searchNumber=${c}`;
-    if(comp.includes('CMA') || comp.includes('CGM')) return `https://www.cma-cgm.com/ebusiness/tracking/search?number=${c}`;
-    if(comp.includes('HAPAG')) return `https://www.hapag-lloyd.com/en/online-business/track/track-by-container-solution.html?container=${c}`;
-    if(comp.includes('EVERGREEN')) return `https://www.evergreen-shipping.us/aboutus/StaticPages/CargoTrackingMain.aspx?bl=${c}`;
-    if(comp.includes('ONE')) return `https://ecomm.one-line.com/one-ecom/manage-shipment/cargo-tracking?term=${c}`;
-    // Fallback: search Google for "<container> tracking"
-    return `https://www.google.com/search?q=${encodeURIComponent(c + ' container tracking ' + (companhia||''))}`;
+    if(comp.includes('MAERSK'))                    return `https://www.maersk.com/tracking/${encodeURIComponent(c)}`;
+    if(comp.includes('COSCO'))                     return `https://elines.coscoshipping.com/ebusiness/cargoTracking?trackingType=CONTAINER&number=${encodeURIComponent(c)}`;
+    if(comp.includes('MSC') || comp.includes('MEDITERRANEAN')) return `https://www.msc.com/track-a-shipment?agencyPath=msc&searchNumber=${encodeURIComponent(c)}`;
+    if(comp.includes('CMA') || comp.includes('CGM'))           return `https://www.cma-cgm.com/ebusiness/tracking/search?number=${encodeURIComponent(c)}`;
+    if(comp.includes('HAPAG'))                     return `https://www.hapag-lloyd.com/en/online-business/track/track-by-container-solution.html?container=${encodeURIComponent(c)}`;
+    if(comp.includes('YANG') || comp.includes('YML')) return `https://e-solution.yangming.com/e-service/Track_trace/track_trace_cargo_tracking.aspx?rdolType=BL&q=${encodeURIComponent(c)}`;
+    return null;
   };
+
+  // Cross-carrier (caso a companhia não esteja na lista, ou pra comparação)
+  const trackTraceUrl = c => `https://www.track-trace.com/container/${encodeURIComponent((c||'').toUpperCase())}`;
+  const shipsGoUrl    = c => `https://shipsgo.com/iframe-tracking?type=container&containerNumber=${encodeURIComponent((c||'').toUpperCase())}`;
+
   const compIcon = (companhia) => {
     const comp = (companhia||'').toUpperCase();
     if(comp.includes('MAERSK')) return '🔵';
-    if(comp.includes('COSCO')) return '🔴';
-    if(comp.includes('MSC')) return '🟡';
-    if(comp.includes('CMA') || comp.includes('CGM')) return '🟢';
-    if(comp.includes('HAPAG')) return '🟠';
+    if(comp.includes('COSCO'))  return '🔴';
+    if(comp.includes('MSC') || comp.includes('MEDITERRANEAN')) return '🟡';
+    if(comp.includes('CMA') || comp.includes('CGM'))  return '🟢';
+    if(comp.includes('HAPAG'))  return '🟠';
+    if(comp.includes('YANG'))   return '🟣';
     return '🚢';
   };
+  const compNome = (companhia) => {
+    const comp = (companhia||'').toUpperCase();
+    if(comp.includes('MAERSK'))  return 'Maersk';
+    if(comp.includes('COSCO'))   return 'COSCO';
+    if(comp.includes('MSC'))     return 'MSC';
+    if(comp.includes('CMA'))     return 'CMA CGM';
+    if(comp.includes('HAPAG'))   return 'Hapag-Lloyd';
+    if(comp.includes('YANG'))    return 'Yang Ming';
+    return companhia || 'Companhia';
+  };
+
+  // Filtra processos em trânsito (qualquer status que indique carga em movimento)
+  const emTransito = S.processos.filter(p => {
+    const s = p.status||'';
+    return ['Embarcado','No Porto','No Armazém','Indo para Armazém'].includes(s);
+  });
+
+  // Função copy-to-clipboard que também abre o link
+  // (Em alguns navegadores o tracking falha sem cookies, ter o número copiado ajuda)
+  if (!window._erpCopyAndOpen) {
+    window._erpCopyAndOpen = function(text, url) {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).catch(()=>{});
+        }
+      } catch(e) {}
+      if (url) window.open(url, '_blank', 'noopener,noreferrer');
+      showToast('📋 ' + text + ' copiado');
+    };
+  }
+
   return `
   ${backBtn()}
   <div class="page-header">
-    <div class="page-title">Rastreamento de Cargas</div>
-    <div style="color:var(--muted);font-size:11px">Atualização em tempo real via companhias marítimas</div>
+    <div>
+      <div class="page-title">Rastreamento de Containers</div>
+      <div style="color:var(--muted);font-size:11px;margin-top:2px">${emTransito.length} ${emTransito.length===1?'carga em trânsito':'cargas em trânsito'} · Tracking oficial gratuito</div>
+    </div>
   </div>
-  ${S.processos.filter(p=>p.status==='Embarcado'||p.status==='No Porto').map(p=>`
-    <div class="card">
-      <div class="card-title">
-        <div class="card-title-left">
-          ${compIcon(p.companhia)} ${p.container}
-          <span style="color:var(--muted);font-weight:400;font-size:11px">· ${p.id} · ${p.produto}</span>
-        </div>
-        <div style="display:flex;gap:8px">
-          ${badge(p.status)}
-          <a href="${trackUrl(p.companhia, p.container)}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">🔍 Rastrear no site</a>
-        </div>
-      </div>
-      <div class="g2">
-        <div>
-          <div class="g2" style="margin-bottom:12px">
-            ${F('Companhia',p.companhia)}${F('Booking',p.booking,true)}
-            ${F('Origem',p.pol)}${F('Destino',p.pod)}
-            ${F('Saída',p.saida)}${F('Previsão ETA','—')}
-          </div>
-        </div>
-        <div>
-          <div style="font-size:10px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:10px">Linha do Tempo</div>
 
-          <div style="height:4px;background:var(--border);border-radius:4px;margin-bottom:14px;overflow:hidden">
-            <div style="height:100%;width:${p.status==='Embarcado'?75:p.status==='No Porto'?55:p.status==='No Armazém'?30:8}%;background:var(--accent2);border-radius:4px;transition:width 0.4s"></div>
-          </div>
+  ${emTransito.length === 0 ? `
+    <div class="card" style="text-align:center;padding:50px 20px">
+      <div style="font-size:48px;margin-bottom:14px">📡</div>
+      <div style="color:var(--text);font-size:15px;font-weight:600;margin-bottom:6px">Nenhuma carga em trânsito</div>
+      <div style="color:var(--muted2);font-size:12px">Quando um processo estiver com status "Indo para Armazém", "No Armazém", "No Porto" ou "Embarcado", ele aparecerá aqui automaticamente.</div>
+    </div>
+  ` : emTransito.map(p => {
+    const trackingOk = trackUrl(p.companhia, p.container);
+    const containerLimpo = (p.container||'').trim().toUpperCase();
+    const hasContainer = containerLimpo.length > 0;
+    const compLabel = compNome(p.companhia);
 
-          <div style="display:flex;gap:0;margin-bottom:14px">
-            ${[
-              {label:'Coleta',date:p.logEmbarque,done:true},
-              {label:'Armazém',date:p.logChegada,done:['No Armazém','No Porto','Embarcado'].includes(p.status)},
-              {label:'Porto',date:p.logPorto,done:['No Porto','Embarcado'].includes(p.status)},
-              {label:'Mar',date:p.saida,done:p.status==='Embarcado',active:p.status==='Embarcado'},
-              {label:'Destino',date:'—',done:false},
-            ].map(s=>`
-              <div style="flex:1;text-align:center">
-                <div style="width:10px;height:10px;border-radius:50%;margin:0 auto 4px;background:${s.done?'var(--accent2)':'var(--border2)'};${s.active?'box-shadow:0 0 0 3px rgba(14,165,233,0.25)':''}"></div>
-                <div style="font-size:10px;color:${s.active?'var(--accent)':s.done?'var(--muted3)':'var(--muted)'};font-weight:${s.active?'600':'400'}">${s.label}</div>
-                <div style="font-size:9px;color:var(--muted);margin-top:1px">${s.date}</div>
-              </div>`).join('')}
+    return `
+    <div class="card" style="margin-bottom:14px;padding:0;overflow:hidden">
+      <!-- HEADER do card -->
+      <div style="padding:14px 18px;background:linear-gradient(135deg,rgba(14,165,233,0.08),rgba(34,225,192,0.06));border-bottom:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px">
+              <span style="font-size:22px">${compIcon(p.companhia)}</span>
+              <span style="font-family:'Outfit',sans-serif;font-weight:800;font-size:17px;color:var(--text)">${escHtml(p.id)}</span>
+              <span style="color:var(--muted2);font-size:13px">— ${escHtml(p.produto||'')}</span>
+              ${badge(p.status)}
+            </div>
+            <div style="font-size:11px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap">
+              <span>🛳️ ${escHtml(compLabel)}</span>
+              ${p.pol||p.origem ? `<span>🛫 ${escHtml(p.pol||p.origem)}</span>` : ''}
+              ${p.pod||p.destino ? `<span>🛬 ${escHtml(p.pod||p.destino)}</span>` : ''}
+              ${p.saida ? `<span>📅 Saída ${escHtml(p.saida)}</span>` : ''}
+            </div>
           </div>
         </div>
       </div>
-      <div style="margin-top:12px;padding:10px 14px;background:var(--bg);border-radius:8px;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:8px">
-        ℹ️ Para rastreamento em tempo real, clique em "Rastrear no site" — a API da ${p.companhia} será integrada na Fase 2.
-        <a href="${trackUrl(p.companhia, p.container)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);font-size:11px;text-decoration:none;margin-left:auto">Abrir rastreamento →</a>
+
+      <!-- CONTAINER NUMBER em destaque -->
+      <div style="padding:16px 18px;background:var(--bg);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px">
+          <div style="font-size:9.5px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;font-weight:600;margin-bottom:4px">📦 Número do Container</div>
+          ${hasContainer ?
+            `<div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:18px;color:var(--accent);letter-spacing:1px">${escHtml(containerLimpo)}</div>` :
+            `<div style="font-size:13px;color:var(--yellow)">⚠️ Container não informado — preencha no processo</div>`
+          }
+        </div>
+        ${hasContainer ? `
+          <button class="btn btn-secondary btn-sm" onclick="_erpCopyAndOpen('${escHtml(containerLimpo)}', null)" title="Copiar para área de transferência" style="white-space:nowrap">
+            📋 Copiar
+          </button>
+        ` : ''}
       </div>
-    </div>`).join('')||`
-    <div class="card" style="text-align:center;padding:40px">
-      <div style="font-size:40px;margin-bottom:12px">📡</div>
-      <div style="color:var(--muted2);font-size:14px">Nenhuma carga em trânsito no momento</div>
-    </div>`}
-  ${S.processos.filter(p=>p.status!=='Embarcado'&&p.status!=='No Porto').length>0?`
-  <div class="sec-divider"><div class="sec-divider-line"></div><div class="sec-divider-label">Outros Processos</div><div class="sec-divider-line"></div></div>
-  ${S.processos.filter(p=>p.status!=='Embarcado'&&p.status!=='No Porto').map(p=>`
-    <div class="proc-row" style="opacity:0.6">
-      <div><div class="proc-id">${p.id} · ${p.container}</div><div style="color:var(--muted);font-size:11px">${p.pol} → ${p.pod}</div></div>
-      ${badge(p.status)}
-    </div>`).join('')}`:''}`;
+
+      <!-- BOTÕES DE TRACKING -->
+      ${hasContainer ? `
+      <div style="padding:14px 18px">
+        <div style="font-size:9.5px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;font-weight:600;margin-bottom:10px">🔗 Rastrear este container</div>
+
+        ${trackingOk ? `
+          <!-- Botão principal: companhia oficial -->
+          <a href="${trackingOk}" target="_blank" rel="noopener noreferrer"
+             onclick="_erpCopyAndOpen('${escHtml(containerLimpo)}', null)"
+             style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#0EA5E9,#22e1c0);color:#fff;padding:14px 16px;border-radius:10px;text-decoration:none;font-weight:700;margin-bottom:10px;box-shadow:0 4px 12px rgba(14,165,233,0.25)">
+            <span style="display:flex;align-items:center;gap:10px">
+              <span style="font-size:20px">${compIcon(p.companhia)}</span>
+              <span>
+                <div style="font-size:14px">Rastrear no ${escHtml(compLabel)}</div>
+                <div style="font-size:10.5px;opacity:0.85;font-weight:400">Site oficial · Dados em tempo real</div>
+              </span>
+            </span>
+            <span style="font-size:18px">↗</span>
+          </a>
+        ` : `
+          <div style="background:rgba(234,179,8,0.08);border:1px solid rgba(234,179,8,0.3);padding:12px 14px;border-radius:10px;margin-bottom:10px;font-size:12px;color:var(--yellow)">
+            ⚠️ Companhia "${escHtml(p.companhia||'(não informada)')}" não tem URL pré-configurada. Use os trackers genéricos abaixo.
+          </div>
+        `}
+
+        <!-- Fallbacks cross-carrier -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <a href="${trackTraceUrl(containerLimpo)}" target="_blank" rel="noopener noreferrer"
+             onclick="_erpCopyAndOpen('${escHtml(containerLimpo)}', null)"
+             class="btn btn-secondary btn-sm" style="flex:1;min-width:140px;text-align:center;text-decoration:none">
+            🌐 Track-Trace (multi-carrier)
+          </a>
+          <a href="${shipsGoUrl(containerLimpo)}" target="_blank" rel="noopener noreferrer"
+             onclick="_erpCopyAndOpen('${escHtml(containerLimpo)}', null)"
+             class="btn btn-secondary btn-sm" style="flex:1;min-width:140px;text-align:center;text-decoration:none">
+            🚢 ShipsGo (multi-carrier)
+          </a>
+        </div>
+
+        <div style="margin-top:10px;font-size:10.5px;color:var(--muted);line-height:1.5">
+          💡 O número do container é copiado automaticamente ao clicar. Cole se o site não preencher sozinho.
+        </div>
+      </div>
+      ` : `
+      <div style="padding:14px 18px;font-size:12px;color:var(--muted)">
+        <div style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);padding:10px 14px;border-radius:8px;color:var(--red)">
+          Para rastrear, preencha o número do container no detalhe do processo.
+        </div>
+      </div>
+      `}
+
+      <!-- LINHA DO TEMPO (resumo do progresso) -->
+      <div style="padding:14px 18px;background:var(--bg);border-top:1px solid var(--border)">
+        <div style="font-size:9.5px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;font-weight:600;margin-bottom:10px">📍 Progresso no ERP</div>
+        <div style="height:4px;background:var(--border);border-radius:4px;margin-bottom:14px;overflow:hidden">
+          <div style="height:100%;width:${p.status==='Embarcado'?80:p.status==='No Porto'?60:p.status==='No Armazém'?40:p.status==='Indo para Armazém'?20:5}%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:4px;transition:width 0.4s"></div>
+        </div>
+        <div style="display:flex;gap:0">
+          ${[
+            {label:'Coleta', date:p.logEmbarque, done:['Indo para Armazém','No Armazém','No Porto','Embarcado'].includes(p.status)},
+            {label:'Trânsito', date:'', done:['Indo para Armazém','No Armazém','No Porto','Embarcado'].includes(p.status), active:p.status==='Indo para Armazém'},
+            {label:'Armazém', date:p.logChegada, done:['No Armazém','No Porto','Embarcado'].includes(p.status), active:p.status==='No Armazém'},
+            {label:'Porto', date:p.logPorto, done:['No Porto','Embarcado'].includes(p.status), active:p.status==='No Porto'},
+            {label:'Mar', date:p.saida, done:p.status==='Embarcado', active:p.status==='Embarcado'},
+          ].map(s=>`
+            <div style="flex:1;text-align:center">
+              <div style="width:10px;height:10px;border-radius:50%;margin:0 auto 4px;background:${s.done?'var(--accent2)':'var(--border2)'};${s.active?'box-shadow:0 0 0 3px rgba(14,165,233,0.25)':''}"></div>
+              <div style="font-size:10px;color:${s.active?'var(--accent)':s.done?'var(--text)':'var(--muted)'};font-weight:${s.active?'600':'400'}">${s.label}</div>
+              <div style="font-size:9px;color:var(--muted);margin-top:1px">${escHtml(s.date||'—')}</div>
+            </div>`).join('')}
+        </div>
+      </div>
+    </div>`;
+  }).join('')}
+
+  ${emTransito.length > 0 ? `
+  <div style="margin-top:18px;padding:14px;background:var(--bg);border:1px dashed var(--border2);border-radius:10px;font-size:11.5px;color:var(--muted);line-height:1.6">
+    <strong style="color:var(--text)">ℹ️ Como funciona o rastreamento</strong><br>
+    O sistema gera links diretos para o site oficial de cada companhia marítima, já com o número do container preenchido. O tracking é feito pela companhia (Maersk, COSCO, etc.) — não pelo ERP. Em casos de transbordo, o tracking oficial sabe disso e mostra a jornada completa.
+  </div>
+  ` : ''}`;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1595,9 +1707,11 @@ function renderCustos(){
     }
     if (!S.fixoMesAtivo) S.fixoMesAtivo = String(S.custosMensais[0].id || 0);
     if (!S.mesExpanded) S.mesExpanded = new Set();
-    // Garante que o mês mais recente está expandido por padrão na primeira visualização
-    if (S.mesExpanded.size === 0 && S.custosMensais.length > 0) {
+    // Garante que o mês mais recente é expandido APENAS UMA VEZ (na primeira visita).
+    // Sem essa flag, retrair o único mês existente faria size===0 e re-expandiria sozinho.
+    if (!S._mesExpandedInit && S.custosMensais.length > 0) {
       S.mesExpanded.add(String(S.custosMensais[0].id));
+      S._mesExpandedInit = true;
     }
 
     return `
@@ -2537,10 +2651,11 @@ function renderLancamentos(back, tabsHtml){
       return b.localeCompare(a);
     });
 
-    // Estado de expansão: por padrão, mês mais recente expandido
+    // Estado de expansão: por padrão, mês mais recente expandido (apenas na primeira visita)
     if (!S.extratoMesExpanded) S.extratoMesExpanded = new Set();
-    if (S.extratoMesExpanded.size === 0 && chaves.length > 0) {
+    if (!S._extratoMesExpandedInit && chaves.length > 0) {
       S.extratoMesExpanded.add(chaves[0]);
+      S._extratoMesExpandedInit = true;
     }
 
     // Botão expandir/retrair tudo (entre os filtros e os meses)
