@@ -419,8 +419,8 @@ const S = {
   page:'dashboard', sub:null, editMode:false, createMode:false,
   filter:null, cadastroTab:'clientes', custosTab:'processo', cambioTab:'lista',
   processos:[{
-    id:'FS260096',embarque:'07',status:'Embarcado',
-    invoiceNum:'INV-2026-096',contratoNum:'CT-2026-096',
+    id:'FS260096',embarque:'09',status:'Embarcado',
+    invoiceNum:'Invoice - FS260096',contratoNum:'Contrato - FS260096',
     cliente:'Xiamen Xingchangsheng Trading Co., Ltd',
     usci:'91350200MAC3AELY6H',
     clienteAdd:'Unit 3E3, Xiangyu Building, No. 22, Xiangxing Fourth Road, Xiamen Area (Bonded Area), China (Fujian) Pilot Free Trade Zone',
@@ -449,20 +449,7 @@ const S = {
   clientes:[{id:1,nome:'Xiamen Xingchangsheng Trading Co., Ltd',usci:'91350200MAC3AELY6H',end:'Unit 3E3, Xiangyu Building, No. 22, Xiangxing Fourth Road, Xiamen Area',tel:'15306007310',email:'3875472674@qq.com',tipo:'Cliente'}],
   fornecedores:[{id:1,nome:'Italiana Transportes LTDA',tipo:'Transportadora',cnpj:'46.003.223/0001-03',ie:'192994630',cep:'48960000',end:'Rodovia da aroeira, 208 - Jaguarari/BA',email:'Italianatransporte@gmail.com',banco:'Banco do Brasil',agencia:'2196-2',conta:'25629-3',pix:'46003223000103'}],
   custosMensais:[{id:1,mes:'Maio/2026',contador:1500,aluguel:2000,software:500,internet:200,telefone:150,impostos:800,outros:0}],
-  lancamentos:[
-    {id:1,tipo:'Receita',descricao:'Câmbio recebido — FS260096',valor:27000,data:'10/05/2026',
-     vinculo:'processo',vinculoId:'FS260096',empresa:'Xiamen Xingchangsheng Trading Co., Ltd',
-     categoria:'Câmbio',status:'Confirmado',
-     docs:{comprovante:'',fatura:'',nfe:'',nfeChave:'',outros:''},observacao:''},
-    {id:2,tipo:'Despesa',descricao:'Frete marítimo MAERSK',valor:6350,data:'05/05/2026',
-     vinculo:'processo',vinculoId:'FS260096',empresa:'MAERSK',
-     categoria:'Marítimo',status:'Pago',
-     docs:{comprovante:'',fatura:'',nfe:'',nfeChave:'',outros:''},observacao:''},
-    {id:3,tipo:'Despesa',descricao:'Italiana Transportes — Frete rodoviário',valor:11500,data:'20/04/2026',
-     vinculo:'cadastro',vinculoId:'Italiana Transportes LTDA',empresa:'Italiana Transportes LTDA',
-     categoria:'Frete Rodoviário',status:'Pago',
-     docs:{comprovante:'',fatura:'',nfe:'',nfeChave:'',outros:''},observacao:''},
-  ],
+  lancamentos:[],
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -1127,7 +1114,7 @@ function renderProcessoForm(p){
   const baseEmb=9; const baseProc=260096;
   const nextEmb=isEdit?(p.embarque||''):(String(baseEmb+(nextNum-baseProc)).padStart(2,'0'));
   const nextInv=isEdit?p.invoiceNum:'Invoice - '+nextId;
-  const nextCont=isEdit?p.contratoNum:'Sales Contract - '+nextId;
+  const nextCont=isEdit?p.contratoNum:'Contrato - '+nextId;
 
   // Defaults for new vs edit
   const d=(k,def)=>isEdit?(p?.[k]||''):def;
@@ -1158,11 +1145,11 @@ function renderProcessoForm(p){
       <div class="ig"><label class="lbl">Número do Processo</label>
         <input type="text" id="f_id" value="${nextId}" readonly style="background:var(--bg3);color:var(--accent);font-family:'JetBrains Mono',monospace;font-weight:700;cursor:default"/>
       </div>
-      <div class="ig"><label class="lbl">Invoice</label>
-        <input type="text" id="f_invoiceNum" value="${nextInv}" readonly style="background:var(--bg3);color:var(--muted3);font-family:'JetBrains Mono',monospace;cursor:default"/>
+      <div class="ig"><label class="lbl">Invoice <span style="font-size:9px;color:var(--muted)">(editável)</span></label>
+        <input type="text" id="f_invoiceNum" value="${nextInv}" style="font-family:'JetBrains Mono',monospace"/>
       </div>
-      <div class="ig"><label class="lbl">Contrato</label>
-        <input type="text" id="f_contratoNum" value="${nextCont}" readonly style="background:var(--bg3);color:var(--muted3);font-family:'JetBrains Mono',monospace;cursor:default"/>
+      <div class="ig"><label class="lbl">Contrato <span style="font-size:9px;color:var(--muted)">(editável)</span></label>
+        <input type="text" id="f_contratoNum" value="${nextCont}" style="font-family:'JetBrains Mono',monospace"/>
       </div>
     </div>
     <div class="g2">
