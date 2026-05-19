@@ -39,6 +39,7 @@ body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;displ
 
 /* ── SIDEBAR ── */
 #sidebar{width:220px;min-height:100vh;background:var(--bg2);border-right:1px solid var(--border);padding:24px 14px;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;flex-shrink:0;z-index:100;box-shadow:4px 0 24px rgba(0,0,0,0.15);}
+.logo-area-mini{display:none;} /* só aparece no mobile (definido na media query) */
 .logo{margin-bottom:32px;padding:0 6px;}
 .logo-mark{font-family:'Outfit',sans-serif;font-weight:800;font-size:17px;color:var(--accent);letter-spacing:-0.5px;display:flex;align-items:center;gap:8px;}
 .logo-mark span{background:linear-gradient(135deg,var(--accent),var(--accent3));-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
@@ -1097,7 +1098,7 @@ function renderDashboard(){
   <div class="g3">
     <div class="card card-click" onclick="nav('cadastro')">
       <div class="card-title"><div class="card-title-left">🗂️ Cadastro</div><span style="color:var(--muted);font-size:9px">ACESSAR →</span></div>
-      ${[['Clientes',S.clientes.length,'🏢'],['Fornecedores',S.fornecedores.filter(f=>f.tipo==='Transportadora').length,'🚚'],['Despachantes',S.fornecedores.filter(f=>f.tipo==='Despachante').length,'📋']].map(([l,c,i])=>`
+      ${[['Clientes',S.clientes.length,'🏢'],['Transportadoras',S.fornecedores.filter(f=>f.tipo==='Transportadora').length,'🚚'],['Despachantes',S.fornecedores.filter(f=>f.tipo==='Despachante').length,'📋'],['Fornecedores',S.fornecedores.filter(f=>f.tipo==='Fornecedor').length,'📦']].map(([l,c,i])=>`
         <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
           <span style="color:var(--muted2)">${i} ${l}</span><span style="color:var(--accent);font-weight:700">${c}</span>
         </div>`).join('')}
@@ -2210,21 +2211,23 @@ function excluirMesFixo(mesId){
 // ═══════════════════════════════════════════════════════════
 function renderCadastro(){
   const tab = S.cadastroTab;
-  const tipos = ['clientes','transportadoras','despachantes','agentes','armazens','servicos'];
+  const tipos = ['clientes','transportadoras','despachantes','agentes','armazens','servicos','fornecedores'];
   const labels = {
     'clientes':'🏢 Clientes',
     'transportadoras':'🚚 Transportadoras',
     'despachantes':'📋 Despachantes',
     'agentes':'🚢 Agentes de Carga',
     'armazens':'🏭 Armazéns',
-    'servicos':'🔧 Serviços de Terceiros'
+    'servicos':'🔧 Serviços de Terceiros',
+    'fornecedores':'📦 Fornecedores'
   };
   const tipoMap = {
     'transportadoras':'Transportadora',
     'despachantes':'Despachante',
     'agentes':'Agente de Carga',
     'armazens':'Armazém',
-    'servicos':'Serviço de Terceiros'
+    'servicos':'Serviço de Terceiros',
+    'fornecedores':'Fornecedor'
   };
 
   const tabsHtml = `<div style="display:flex;flex-wrap:wrap;gap:4px;background:var(--bg3);padding:4px;border-radius:10px;margin-bottom:16px">
@@ -2254,7 +2257,7 @@ function renderCadastro(){
     const lista = S.fornecedores.filter(f=>f.tipo===tipo);
     if(lista.length === 0) return `
       <div class="card" style="text-align:center;padding:30px;color:var(--muted)">
-        <div style="font-size:32px;margin-bottom:10px">${{Transportadora:'🚚',Despachante:'📋','Agente de Carga':'🚢','Armazém':'🏭','Serviço de Terceiros':'🔧'}[tipo]||'🗂️'}</div>
+        <div style="font-size:32px;margin-bottom:10px">${{Transportadora:'🚚',Despachante:'📋','Agente de Carga':'🚢','Armazém':'🏭','Serviço de Terceiros':'🔧',Fornecedor:'📦'}[tipo]||'🗂️'}</div>
         <div>Nenhum ${tipo.toLowerCase()} cadastrado ainda.</div>
         <button class="btn btn-primary" style="margin-top:14px" onclick="abrirModalCadastro('fornecedor','${tipo}')">+ Adicionar ${tipo}</button>
       </div>`;
@@ -3266,7 +3269,8 @@ function abrirModalAutoLancamento(f) {
           'Agentes de Carga': (S.fornecedores||[]).filter(x=>x.tipo==='Agente').map(x=>x.nome),
           'Armazéns': (S.fornecedores||[]).filter(x=>x.tipo==='Armazém').map(x=>x.nome),
           'Serviços de Terceiros': (S.fornecedores||[]).filter(x=>x.tipo==='Serviço' || x.tipo==='Serviços' || x.tipo==='Servicos').map(x=>x.nome),
-          'Outros': (S.fornecedores||[]).filter(x=>!['Transportadora','Despachante','Agente','Armazém','Serviço','Serviços','Servicos'].includes(x.tipo)).map(x=>x.nome),
+          'Fornecedores': (S.fornecedores||[]).filter(x=>x.tipo==='Fornecedor').map(x=>x.nome),
+          'Outros': (S.fornecedores||[]).filter(x=>!['Transportadora','Despachante','Agente','Armazém','Serviço','Serviços','Servicos','Fornecedor'].includes(x.tipo)).map(x=>x.nome),
         };
         // Verifica se empresaAtual existe em algum cadastro
         const existeNoCadastro = Object.values(grupos).flat().includes(empresaAtual);
@@ -4023,7 +4027,7 @@ function attachEvents(){
   if(cadBtn){
     cadBtn.addEventListener('click', ()=>{
       const t = S.cadastroTab;
-      const tipoMap2 = {transportadoras:'Transportadora',despachantes:'Despachante',agentes:'Agente de Carga',armazens:'Armazém',servicos:'Serviço de Terceiros'};
+      const tipoMap2 = {transportadoras:'Transportadora',despachantes:'Despachante',agentes:'Agente de Carga',armazens:'Armazém',servicos:'Serviço de Terceiros',fornecedores:'Fornecedor'};
       if(t==='clientes') abrirModalCadastro('cliente');
       else abrirModalCadastro('fornecedor', tipoMap2[t]||'');
     });
