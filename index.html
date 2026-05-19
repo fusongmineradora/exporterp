@@ -887,6 +887,14 @@ function _maskDateInput(input){
   input.value = out;
 }
 
+// Ícone dinâmico de transporte conforme etapa do processo
+// Caminhão 🚛 até "No Armazém" (inclusive) — Navio 🚢 a partir de "No Porto"
+function _statusIcon(status){
+  const truckPhases = ['A Coletar', 'Indo para Armazém', 'No Armazém', '', null, undefined];
+  if (truckPhases.includes(status)) return '🚛';
+  return '🚢';
+}
+
 function goBack(){
   if(navHistory.length===0) return;
   const prev=navHistory.pop();
@@ -987,7 +995,7 @@ function renderDashboard(){
         <span style="color:var(--muted);font-size:9px;letter-spacing:1px">VER TUDO →</span>
       </div>
       ${ps.map(p=>{
-        const progMap={'A Coletar':8,'No Armazém':30,'No Porto':55,'Embarcado':75};
+        const progMap={'A Coletar':8,'Indo para Armazém':20,'No Armazém':40,'No Porto':60,'Embarcado':80};
         const prog=progMap[p.status]||0;
         const stepsMap=[
           {label:'Coleta',done:['No Armazém','No Porto','Embarcado','A Coletar'].includes(p.status)},
@@ -1016,7 +1024,7 @@ function renderDashboard(){
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px">
             <span style="color:var(--muted3)">${(p.pol||'').split(',')[0]}</span>
             <div style="flex:1;height:1px;background:var(--border2);position:relative">
-              <div style="position:absolute;top:-5px;left:${prog}%;transform:translateX(-50%);color:var(--accent2);font-size:11px">✈</div>
+              <div style="position:absolute;top:-9px;left:${prog}%;transform:translateX(-50%);font-size:15px;text-shadow:0 2px 4px rgba(0,0,0,0.15)">${_statusIcon(p.status)}</div>
             </div>
             <span style="color:var(--muted3)">${(p.pod||'').split(',')[0]}</span>
           </div>
@@ -1625,9 +1633,16 @@ function renderRastreamento(){
       <!-- LINHA DO TEMPO (resumo do progresso) -->
       <div style="padding:14px 18px;background:var(--bg);border-top:1px solid var(--border)">
         <div style="font-size:9.5px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;font-weight:600;margin-bottom:10px">📍 Progresso no ERP</div>
-        <div style="height:4px;background:var(--border);border-radius:4px;margin-bottom:14px;overflow:hidden">
-          <div style="height:100%;width:${p.status==='Embarcado'?80:p.status==='No Porto'?60:p.status==='No Armazém'?40:p.status==='Indo para Armazém'?20:5}%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:4px;transition:width 0.4s"></div>
-        </div>
+        ${(() => {
+          const progPct = p.status==='Embarcado'?80:p.status==='No Porto'?60:p.status==='No Armazém'?40:p.status==='Indo para Armazém'?20:5;
+          return `
+          <div style="position:relative;margin-bottom:14px;height:22px">
+            <div style="position:absolute;top:9px;left:0;right:0;height:4px;background:var(--border);border-radius:4px;overflow:hidden">
+              <div style="height:100%;width:${progPct}%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:4px;transition:width 0.4s"></div>
+            </div>
+            <div style="position:absolute;top:-2px;left:${progPct}%;transform:translateX(-50%);font-size:18px;text-shadow:0 2px 4px rgba(0,0,0,0.18);transition:left 0.4s">${_statusIcon(p.status)}</div>
+          </div>`;
+        })()}
         <div style="display:flex;gap:0">
           ${[
             {label:'Coleta', date:p.logEmbarque, done:['Indo para Armazém','No Armazém','No Porto','Embarcado'].includes(p.status)},
