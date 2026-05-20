@@ -111,6 +111,7 @@ html.light ::-webkit-scrollbar-thumb{background:var(--border2);}
 .badge-arm{background:#b388ff22;color:#b388ff;border:1px solid #b388ff44;}
 .badge-transit{background:#22c55e22;color:#22c55e;border:1px solid #22c55e44;}
 .badge-col{background:#3d608022;color:#6a90b0;border:1px solid #3d608044;}
+.badge-cancelado{background:#ef444422;color:#ef4444;border:1px solid #ef444444;text-decoration:line-through;text-decoration-color:#ef4444aa;}
 .badge-tipo{background:var(--bg3);color:var(--muted3);border:1px solid var(--border2);font-size:9px;}
 
 /* ── BUTTONS ── */
@@ -559,7 +560,7 @@ const S = {
     cambioInvoice:5400,cambioRecebido:5380,cambioIOF:27,cambioSpread:54,
     cambioTaxa:5.00,cambioReais:27000,
     cambioFechamento:'06/05/2026',cambioRecebimento:'10/05/2026',
-    cambioBanco:'Itaú',cambioStatus:'Liquidado',
+    cambioBanco:'Itaú',cambioStatus:'Pago',
     dueNumero:'26260500000001',dueChave:'35260500000000000000550010000000011000000010',
     docs:{invoice:false,contrato:false,packingList:false,bl:false,due:false,nfe:false,comprovantes:false,certOrigem:false},
   }],
@@ -607,7 +608,7 @@ const hasComprovante = docs => {
 };
 
 const badge = s=>{
-  const m={'Embarcado':'emb','No Porto':'porto','No Armazém':'arm','Indo para Armazém':'transit','A Coletar':'col','No Destino':'emb','Concluído':'emb','Cancelado':'col'};
+  const m={'Embarcado':'emb','No Porto':'porto','No Armazém':'arm','Indo para Armazém':'transit','A Coletar':'col','No Destino':'emb','Concluído':'emb','Cancelado':'cancelado'};
   const i={'Embarcado':'🚢','No Porto':'⚓','No Armazém':'🏭','Indo para Armazém':'🚚','A Coletar':'📦','No Destino':'🏁','Concluído':'✅','Cancelado':'❌'};
   return `<span class="badge badge-${m[s]||'col'}">${i[s]||'📦'} ${s}</span>`;
 };
@@ -618,11 +619,86 @@ const IG=(l,k,v,type='text',opts=null,ph='')=>{
   return `<div class="ig"><label class="lbl">${l}</label><input type="${type}" id="f_${k}" value="${v||''}" placeholder="${ph}"/></div>`;
 };
 const showToast=(msg='')=>{const t=document.getElementById('toast');if(msg){const span=t.querySelector('span')||t;span.textContent=msg;}t.style.display='block';setTimeout(()=>t.style.display='none',2200);};
-// ── INPUT SANITIZATION ──
-const sanitize=s=>String(s||'').replace(/[<>"'`]/g,'').trim();
+
+// ── UI MODALS (substituem alert/confirm/prompt nativos, ruins em mobile) ──
+// Retornam Promises. Uso: const ok = await uiConfirm('Excluir?');
+function _uiCloseModal(){const m=document.getElementById('ui-modal');if(m)m.remove();}
+function uiAlert(msg, title='Aviso'){
+  return new Promise(resolve => {
+    _uiCloseModal();
+    const modal=document.createElement('div');
+    modal.id='ui-modal';
+    modal.className='modal-overlay';
+    modal.innerHTML=`<div class="modal" style="max-width:420px;width:92%">
+      <div class="modal-title">${escHtml(title)}</div>
+      <div style="color:var(--muted2);font-size:13px;line-height:1.5;margin-bottom:18px;white-space:pre-line">${escHtml(msg)}</div>
+      <div style="display:flex;justify-content:flex-end">
+        <button class="btn btn-primary" id="ui-ok">OK</button>
+      </div></div>`;
+    document.body.appendChild(modal);
+    const close=()=>{_uiCloseModal();resolve();};
+    document.getElementById('ui-ok').onclick=close;
+    modal.addEventListener('keydown',e=>{if(e.key==='Escape'||e.key==='Enter')close();});
+    setTimeout(()=>document.getElementById('ui-ok')?.focus(),50);
+  });
+}
+function uiConfirm(msg, title='Confirmar', okLabel='Confirmar', cancelLabel='Cancelar'){
+  return new Promise(resolve => {
+    _uiCloseModal();
+    const modal=document.createElement('div');
+    modal.id='ui-modal';
+    modal.className='modal-overlay';
+    modal.innerHTML=`<div class="modal" style="max-width:440px;width:92%">
+      <div class="modal-title">${escHtml(title)}</div>
+      <div style="color:var(--muted2);font-size:13px;line-height:1.5;margin-bottom:18px;white-space:pre-line">${escHtml(msg)}</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-secondary" id="ui-cancel">${escHtml(cancelLabel)}</button>
+        <button class="btn btn-primary" id="ui-ok">${escHtml(okLabel)}</button>
+      </div></div>`;
+    document.body.appendChild(modal);
+    const done=v=>{_uiCloseModal();resolve(v);};
+    document.getElementById('ui-ok').onclick=()=>done(true);
+    document.getElementById('ui-cancel').onclick=()=>done(false);
+    modal.addEventListener('keydown',e=>{if(e.key==='Escape')done(false);if(e.key==='Enter')done(true);});
+    setTimeout(()=>document.getElementById('ui-ok')?.focus(),50);
+  });
+}
+function uiPrompt(msg, defaultValue='', title='Digite'){
+  return new Promise(resolve => {
+    _uiCloseModal();
+    const modal=document.createElement('div');
+    modal.id='ui-modal';
+    modal.className='modal-overlay';
+    modal.innerHTML=`<div class="modal" style="max-width:440px;width:92%">
+      <div class="modal-title">${escHtml(title)}</div>
+      <div style="color:var(--muted2);font-size:13px;line-height:1.5;margin-bottom:12px">${escHtml(msg)}</div>
+      <div class="ig"><input type="text" id="ui-input" value="${escHtml(String(defaultValue||''))}" style="font-size:14px"/></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+        <button class="btn btn-secondary" id="ui-cancel">Cancelar</button>
+        <button class="btn btn-primary" id="ui-ok">OK</button>
+      </div></div>`;
+    document.body.appendChild(modal);
+    const inp=document.getElementById('ui-input');
+    const done=v=>{_uiCloseModal();resolve(v);};
+    document.getElementById('ui-ok').onclick=()=>done(inp.value);
+    document.getElementById('ui-cancel').onclick=()=>done(null);
+    inp.addEventListener('keydown',e=>{if(e.key==='Enter')done(inp.value);if(e.key==='Escape')done(null);});
+    setTimeout(()=>{inp?.focus();inp?.select();},50);
+  });
+}
+// Sanitize remove apenas caracteres perigosos de injeção HTML/JS.
+// Apóstrofes e aspas são MANTIDAS porque escHtml() escapa na renderização.
+// Preserva nomes legítimos como "L'Oréal", "O'Hara", endereços com aspas, etc.
+const sanitize=s=>String(s||'').replace(/[<>`]/g,'').trim();
 const sanitizeUrl=s=>{
   const u=String(s||'').trim();
   return (u.startsWith('http://') || u.startsWith('https://')) ? u : '';
+};
+
+// #G + #16 — IDs únicos. Usa crypto.randomUUID se disponível, fallback robusto.
+const genId = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
 };
 
 const updateSB=()=>{
@@ -640,7 +716,7 @@ let _loginAttempts = 0;
 let _loginBlockedUntil = 0;
 
 function handleGoogleLogin(response) {
-  // Rate limit: max 5 attempts per 5 minutes
+  // Rate limit: max 5 tentativas em 5 minutos (#3 corrigido: bloqueia ANTES de processar)
   if(Date.now() < _loginBlockedUntil) {
     document.getElementById('login-error').textContent = '⏳ Muitas tentativas. Aguarde alguns minutos.';
     document.getElementById('login-error').style.display = 'block';
@@ -650,6 +726,9 @@ function handleGoogleLogin(response) {
   if(_loginAttempts > 5) {
     _loginBlockedUntil = Date.now() + (5 * 60 * 1000);
     _loginAttempts = 0;
+    document.getElementById('login-error').textContent = '⏳ Muitas tentativas. Aguarde alguns minutos.';
+    document.getElementById('login-error').style.display = 'block';
+    return;
   }
   try {
     // Decode JWT token from Google
@@ -663,9 +742,27 @@ function handleGoogleLogin(response) {
       return;
     }
 
-    if (!ALLOWED_EMAILS.includes(email.toLowerCase())) {
+    if (!ALLOWED_EMAILS.includes(email)) {
       document.getElementById('login-error').style.display = 'block';
       return;
+    }
+
+    // #5 — Reset de estado quando há troca de usuário
+    // Evita que dados do user anterior fiquem visíveis se loadFromSheets falhar
+    const prevUser = sessionStorage.getItem('erp-user');
+    if (prevUser) {
+      try {
+        const parsed = JSON.parse(prevUser);
+        if (parsed.email && parsed.email !== email) {
+          // Troca de conta — zera dados locais
+          S.processos = [];
+          S.clientes = [];
+          S.fornecedores = [];
+          S.lancamentos = [];
+          S.custosMensais = [];
+          S.sub = null;
+        }
+      } catch(e) {}
     }
 
     // Store session
@@ -697,6 +794,7 @@ function handleGoogleLogin(response) {
           scheduleTokenRenewal();
           await setupSheets();
           await loadFromSheets();
+          await checkLocalBackup();  // #A
         } else {
           // Mostra banner pedindo conexão (sem disparar pop-up automaticamente)
           mostrarBannerConexaoDrive();
@@ -752,17 +850,22 @@ function mostrarBannerConexaoDrive() {
 function updateUserInfo(name, email, picture) {
   const footer = document.querySelector('.sidebar-footer');
   if (footer) {
+    // Remove bloco anterior (evita duplicar avatar em re-login na mesma aba)
+    footer.querySelector('.user-info')?.remove();
     const userDiv = document.createElement('div');
+    userDiv.className = 'user-info';
     userDiv.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 0;border-top:1px solid var(--border);margin-top:8px';
-    const img = document.createElement('img');
-    img.src = picture;
-    img.style.cssText = 'width:28px;height:28px;border-radius:50%;flex-shrink:0';
-    img.onerror = function(){ this.style.display='none'; };
+    if (picture) {
+      const img = document.createElement('img');
+      img.src = picture;
+      img.style.cssText = 'width:28px;height:28px;border-radius:50%;flex-shrink:0';
+      img.onerror = function(){ this.style.display='none'; };
+      userDiv.appendChild(img);
+    }
     const info = document.createElement('div');
     info.style.cssText = 'min-width:0';
     info.innerHTML = '<div style="font-size:11px;font-weight:600;color:var(--muted3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+sanitize(name)+'</div>'
       + '<div style="font-size:9px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+sanitize(email)+'</div>';
-    userDiv.appendChild(img);
     userDiv.appendChild(info);
     footer.appendChild(userDiv);
   }
@@ -776,6 +879,7 @@ function checkSession() {
       if(parsed.expires && Date.now() > parsed.expires){
         sessionStorage.removeItem('erp-user');
         sessionStorage.removeItem('erp-gtoken');
+        sessionStorage.removeItem('drive-consented');  // #6
         return false;
       }
       const {name, email, picture} = parsed;
@@ -791,7 +895,10 @@ function checkSession() {
         if (restoreTokenFromStorage()) {
           // Token ainda válido — agenda renovação automática
           scheduleTokenRenewal();
-          try { await loadFromSheets(); } catch(e) {}
+          try {
+            await loadFromSheets();
+            await checkLocalBackup();  // #A — confere se há backup local mais novo
+          } catch(e) {}
           return;
         }
         // Sem token salvo → mostra banner pra usuário clicar (sem auto-popup)
@@ -852,7 +959,12 @@ const NAV_HISTORY_MAX = 50;
 
 function nav(page,sub=null){
   if(S.page) {
-    navHistory.push({page:S.page,sub:S.sub,editMode:S.editMode,createMode:S.createMode,filter:S.filter,custosTab:S.custosTab,cambioTab:S.cambioTab,cadastroTab:S.cadastroTab,lancFiltro:S.lancFiltro});
+    navHistory.push({
+      page:S.page, sub:S.sub, editMode:S.editMode, createMode:S.createMode,
+      filter:S.filter, custosTab:S.custosTab, cambioTab:S.cambioTab,
+      cadastroTab:S.cadastroTab, lancFiltro:S.lancFiltro,
+      lancFiltros: S.lancFiltros ? {...S.lancFiltros} : null  // #8 — snapshot dos filtros
+    });
     // Limit history size to avoid memory growth
     if(navHistory.length > NAV_HISTORY_MAX) navHistory.shift();
   }
@@ -860,8 +972,8 @@ function nav(page,sub=null){
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   const nb=document.getElementById('nav-'+page);
   if(nb) nb.classList.add('active');
-  // Retrai a sidebar automaticamente no mobile após navegação
-  closeSidebarMobile();
+  // Retrai a sidebar automaticamente no mobile após navegação (no-op no desktop)
+  if (window.innerWidth < 800) closeSidebarMobile();
   render(); updateSB();
 }
 
@@ -877,10 +989,23 @@ function closeSidebarMobile(){
 }
 
 // Máscara de input de data: digita só números, formata automaticamente para dd/mm/aaaa
+// #27 — limita dia 1-31 e mês 1-12 enquanto digita (não impede ano inválido — flexível para anos antigos)
 function _maskDateInput(input){
   if (!input) return;
   let v = String(input.value || '').replace(/\D/g, '');  // só dígitos
   if (v.length > 8) v = v.slice(0, 8);
+  // Limita dia (primeiros 2 dígitos) a 01-31
+  if (v.length >= 2) {
+    const dd = parseInt(v.slice(0,2), 10);
+    if (dd > 31) v = '31' + v.slice(2);
+    else if (dd === 0 && v.length === 2) v = '01';
+  }
+  // Limita mês (dígitos 3-4) a 01-12
+  if (v.length >= 4) {
+    const mm = parseInt(v.slice(2,4), 10);
+    if (mm > 12) v = v.slice(0,2) + '12' + v.slice(4);
+    else if (mm === 0) v = v.slice(0,2) + '01' + v.slice(4);
+  }
   let out = '';
   if (v.length >= 1) out = v.slice(0, 2);
   if (v.length >= 3) out += '/' + v.slice(2, 4);
@@ -902,6 +1027,8 @@ function goBack(){
   S.page=prev.page; S.sub=prev.sub; S.editMode=prev.editMode;
   S.createMode=prev.createMode; S.filter=prev.filter;
   S.custosTab=prev.custosTab||'processo'; S.cambioTab=prev.cambioTab||'lista'; S.cadastroTab=prev.cadastroTab||'clientes'; S.lancFiltro=prev.lancFiltro||'todos';
+  // #8 — restaura filtros do extrato
+  if (prev.lancFiltros) S.lancFiltros = {...prev.lancFiltros};
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   const nb=document.getElementById('nav-'+S.page);
   if(nb) nb.classList.add('active');
@@ -950,12 +1077,12 @@ function renderDashboard(){
       <div style="color:var(--muted);font-size:11px;">${new Date().toLocaleDateString('pt-BR',{weekday:'long',day:'2-digit',month:'long',year:'numeric'})}</div>
     </div>
     <div style="display:flex;gap:6px;align-items:center">
-      <button onclick="S.custosTab='lancamentos';abrirModalLancamento();nav('custos')"
-        style="background:var(--bg3);color:var(--muted3);border:1px solid var(--border2);border-radius:7px;padding:5px 11px;font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-family:'Inter',sans-serif">
+      <button onclick="S.custosTab='lancamentos';nav('custos');setTimeout(()=>abrirModalLancamento(null,'Receita'),50)"
+        style="background:var(--bg3);color:var(--green);border:1px solid var(--border2);border-radius:7px;padding:5px 11px;font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-family:'Inter',sans-serif">
         💰 Receita
       </button>
-      <button onclick="S.custosTab='lancamentos';abrirModalLancamento();nav('custos')"
-        style="background:var(--bg3);color:var(--muted3);border:1px solid var(--border2);border-radius:7px;padding:5px 11px;font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-family:'Inter',sans-serif">
+      <button onclick="S.custosTab='lancamentos';nav('custos');setTimeout(()=>abrirModalLancamento(null,'Despesa'),50)"
+        style="background:var(--bg3);color:var(--red);border:1px solid var(--border2);border-radius:7px;padding:5px 11px;font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-family:'Inter',sans-serif">
         💸 Despesa
       </button>
     </div>
@@ -1098,7 +1225,7 @@ function renderDashboard(){
   <div class="g3">
     <div class="card card-click" onclick="nav('cadastro')">
       <div class="card-title"><div class="card-title-left">🗂️ Cadastro</div><span style="color:var(--muted);font-size:9px">ACESSAR →</span></div>
-      ${[['Clientes',S.clientes.length,'🏢'],['Transportadoras',S.fornecedores.filter(f=>f.tipo==='Transportadora').length,'🚚'],['Despachantes',S.fornecedores.filter(f=>f.tipo==='Despachante').length,'📋'],['Fornecedores',S.fornecedores.filter(f=>f.tipo==='Fornecedor').length,'📦']].map(([l,c,i])=>`
+      ${[['Clientes',S.clientes.length,'🏢'],['Fornecedores',S.fornecedores.filter(f=>f.tipo==='Transportadora').length,'🚚'],['Despachantes',S.fornecedores.filter(f=>f.tipo==='Despachante').length,'📋']].map(([l,c,i])=>`
         <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
           <span style="color:var(--muted2)">${i} ${l}</span><span style="color:var(--accent);font-weight:700">${c}</span>
         </div>`).join('')}
@@ -1227,7 +1354,7 @@ function renderProcessoDetalhe(p){
         ${F('Taxa Cambial','R$ '+(p.cambioTaxa||0).toFixed(2))}${F('Valor em Reais','R$ '+fmt(p.cambioReais))}
         ${F('Fechamento',p.cambioFechamento)}${F('Recebimento',p.cambioRecebimento)}
       </div>
-      ${F('Banco',p.cambioBanco)} ${F('Status Câmbio',p.cambioStatus)}
+      ${F('Banco',p.cambioBanco)} ${F('Status Câmbio',normalizeStatus(p.cambioStatus||'Em Aberto'))}
       <div class="sec-divider"><div class="sec-divider-line"></div><div class="sec-divider-label">DU-E</div><div class="sec-divider-line"></div></div>
       ${F('Número DU-E',p.dueNumero,true)}${F('Chave de Acesso',p.dueChave,true)}
       <div class="lucro-box">
@@ -1263,20 +1390,24 @@ function renderProcessoDetalhe(p){
 function renderProcessoForm(p){
   const isEdit=!!p;
 
-  // Auto-generate next process number
-  const lastId=S.processos.length>0?S.processos[S.processos.length-1].id:'FS260096';
-  const lastNum=parseInt(lastId.replace('FS',''))||260096;
-  const nextNum=isEdit?parseInt(p.id.replace('FS','')):lastNum+1;
-  const nextId=isEdit?p.id:'FS'+nextNum;
-  const baseEmb=9; const baseProc=260096;
-  const nextEmb=isEdit?(p.embarque||''):(String(baseEmb+(nextNum-baseProc)).padStart(2,'0'));
-  const nextInv=isEdit?p.invoiceNum:'Invoice - '+nextId;
-  const nextCont=isEdit?p.contratoNum:'Contrato - '+nextId;
+  // Auto-generate next process number — usa MÁXIMO existente (não o último, que pode estar fora de ordem após carregar do Sheets)
+  const allNums = S.processos
+    .map(x => parseInt(String(x.id||'').replace(/^FS/i,''), 10))
+    .filter(n => !isNaN(n) && n > 0);
+  const lastNum = allNums.length > 0 ? Math.max(...allNums) : 260095;
+  const nextNum = isEdit ? parseInt(String(p.id||'').replace(/^FS/i,''),10) : lastNum + 1;
+  const nextId = isEdit ? p.id : 'FS' + nextNum;
+  const baseEmb = 9; const baseProc = 260096;
+  const nextEmb = isEdit ? (p.embarque||'') : (String(baseEmb + (nextNum-baseProc)).padStart(2,'0'));
+  const nextInv = isEdit ? p.invoiceNum : 'Invoice - ' + nextId;
+  const nextCont = isEdit ? p.contratoNum : 'Contrato - ' + nextId;
 
-  // Defaults for new vs edit
-  const d=(k,def)=>isEdit?(p?.[k]||''):def;
-  const lastP=S.processos.length>0?S.processos[S.processos.length-1]:{};
-  const dc=(k)=>isEdit?(p?.[k]||0):(lastP[k]||0);
+  // Defaults for new vs edit — usa o processo de MAIOR id (último cronologicamente) para herdar dados
+  const d = (k,def) => isEdit ? (p?.[k]||'') : def;
+  const lastP = allNums.length > 0
+    ? S.processos.find(x => parseInt(String(x.id||'').replace(/^FS/i,''),10) === lastNum) || {}
+    : {};
+  const dc = (k) => isEdit ? (p?.[k]||0) : (lastP[k]||0);
 
   const statuses=['Embarcado','No Porto','No Armazém','A Coletar'];
   const incoterms=['CFR','FOB','CIF','EXW','DAP','DDP'];
@@ -1378,7 +1509,7 @@ function renderProcessoForm(p){
     <div id="containers-wrapper" style="margin-bottom:12px">
       <label class="lbl" style="margin-bottom:8px;display:block">Números dos Containers</label>
       <div id="containers-list" style="display:flex;flex-direction:column;gap:8px">
-        ${Array.from({length:containerQty},(_,i)=>'<div style="display:flex;align-items:center;gap:8px"><div style="width:22px;height:22px;border-radius:6px;background:var(--accent2);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">'+(i+1)+'</div><input type="text" id="f_container_'+i+'" value="'+escHtml(containerNums[i]||'')+'" placeholder="Ex: MSKU5529672" style="font-family:\'JetBrains Mono\',monospace;font-size:12px"/></div>').join('')}
+        ${Array.from({length:containerQty},(_,i)=>'<div style="display:flex;align-items:center;gap:8px"><div style="width:22px;height:22px;border-radius:6px;background:var(--accent2);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">'+(i+1)+'</div><input type="text" id="f_container_'+i+'" value="'+escHtml(containerNums[i]||'')+'" placeholder="Ex: MSKU5529672" inputmode="text" autocapitalize="characters" autocorrect="off" spellcheck="false" style="font-family:\'JetBrains Mono\',monospace;font-size:12px;text-transform:uppercase"/></div>').join('')}
       </div>
     </div>
     <div class="g3">
@@ -1507,16 +1638,15 @@ function renderRastreamento(){
     return ['Embarcado','No Porto','No Armazém','Indo para Armazém'].includes(s);
   });
 
-  // Função copy-to-clipboard que também abre o link
-  // (Em alguns navegadores o tracking falha sem cookies, ter o número copiado ajuda)
+  // Função copy-to-clipboard
+  // Os <a href> abrem o site por conta própria; aqui só copiamos o número
   if (!window._erpCopyAndOpen) {
-    window._erpCopyAndOpen = function(text, url) {
+    window._erpCopyAndOpen = function(text) {
       try {
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(text).catch(()=>{});
         }
       } catch(e) {}
-      if (url) window.open(url, '_blank', 'noopener,noreferrer');
       showToast('📋 ' + text + ' copiado');
     };
   }
@@ -1574,7 +1704,7 @@ function renderRastreamento(){
           }
         </div>
         ${hasContainer ? `
-          <button class="btn btn-secondary btn-sm" onclick="_erpCopyAndOpen('${escHtml(containerLimpo)}', null)" title="Copiar para área de transferência" style="white-space:nowrap">
+          <button class="btn btn-secondary btn-sm" onclick="_erpCopyAndOpen('${escHtml(containerLimpo)}')" title="Copiar para área de transferência" style="white-space:nowrap">
             📋 Copiar
           </button>
         ` : ''}
@@ -1588,7 +1718,7 @@ function renderRastreamento(){
         ${trackingOk ? `
           <!-- Botão principal: companhia oficial -->
           <a href="${trackingOk}" target="_blank" rel="noopener noreferrer"
-             onclick="_erpCopyAndOpen('${escHtml(containerLimpo)}', null)"
+             onclick="_erpCopyAndOpen('${escHtml(containerLimpo)}')"
              style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#0EA5E9,#22e1c0);color:#fff;padding:14px 16px;border-radius:10px;text-decoration:none;font-weight:700;margin-bottom:10px;box-shadow:0 4px 12px rgba(14,165,233,0.25)">
             <span style="display:flex;align-items:center;gap:10px">
               <span style="font-size:20px">${compIcon(p.companhia)}</span>
@@ -1608,12 +1738,12 @@ function renderRastreamento(){
         <!-- Fallbacks cross-carrier -->
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <a href="${trackTraceUrl(containerLimpo)}" target="_blank" rel="noopener noreferrer"
-             onclick="_erpCopyAndOpen('${escHtml(containerLimpo)}', null)"
+             onclick="_erpCopyAndOpen('${escHtml(containerLimpo)}')"
              class="btn btn-secondary btn-sm" style="flex:1;min-width:140px;text-align:center;text-decoration:none">
             🌐 Track-Trace (multi-carrier)
           </a>
           <a href="${shipsGoUrl(containerLimpo)}" target="_blank" rel="noopener noreferrer"
-             onclick="_erpCopyAndOpen('${escHtml(containerLimpo)}', null)"
+             onclick="_erpCopyAndOpen('${escHtml(containerLimpo)}')"
              class="btn btn-secondary btn-sm" style="flex:1;min-width:140px;text-align:center;text-decoration:none">
             🚢 ShipsGo (multi-carrier)
           </a>
@@ -1753,7 +1883,8 @@ function renderCambio(){
     </div>` : ps.map(p=>{
       const lucro = (p.cambioReais||0) - tc(p);
       const nomeCliente = p.cliente ? p.cliente.split(' ').slice(0,3).join(' ') : p.id;
-      const statusClass = p.cambioStatus==='Liquidado'?'badge-emb':p.cambioStatus==='Pré-embarque enviado'?'badge-porto':'badge-col';
+      const statusNorm = normalizeStatus(p.cambioStatus||'Em Aberto');
+      const statusClass = statusNorm==='Pago'?'badge-emb':statusNorm==='Cancelado'?'badge-cancelado':'badge-porto';
       const valorReais = parseFloat(p.cambioReais)||0;
       const valorInvoice = parseFloat(p.cambioInvoice)||0;
       const taxa = parseFloat(p.cambioTaxa)||0;
@@ -1765,7 +1896,7 @@ function renderCambio(){
         <div class="card-title">
           <div class="card-title-left">💱 ${escHtml(p.id)} — <span style="font-weight:400;color:var(--muted2)">${escHtml(nomeCliente)}</span></div>
           <div style="display:flex;gap:8px;align-items:center">
-            <span class="badge ${statusClass}">${escHtml(normalizeStatus(p.cambioStatus||'Em Aberto'))}</span>
+            <span class="badge ${statusClass}">${escHtml(statusNorm)}</span>
             <button class="btn btn-secondary btn-xs" onclick="gerarExtratoCambio('${escHtml(p.id)}')">📑 PDF</button>
           </div>
         </div>
@@ -1851,7 +1982,7 @@ function renderCustos(){
       const hoje = new Date();
       const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
       S.custosMensais = [{
-        id: Date.now(),
+        id: genId(),
         mes: meses[hoje.getMonth()], ano: hoje.getFullYear(),
         contador:0, aluguel:0, software:0, internet:0, telefone:0, impostos:0, outros:0, docs:{}
       }];
@@ -2165,7 +2296,7 @@ function novoMesFixo(){
   }
   // Copia valores do mês anterior (mas zera docs)
   const novo = {
-    id: Date.now(),
+    id: genId(),
     mes: nextMesNome, ano: nextAno,
     contador: (ult?.contador)||0, aluguel: (ult?.aluguel)||0,
     software: (ult?.software)||0, internet: (ult?.internet)||0,
@@ -2180,12 +2311,12 @@ function novoMesFixo(){
   render();
 }
 
-function editarMesFixo(mesId){
+async function editarMesFixo(mesId){
   const m = (S.custosMensais||[]).find(x => String(x.id) === String(mesId));
   if (!m) return;
-  const nome = prompt('Nome do mês (ex: "Maio"):', m.mes || '');
+  const nome = await uiPrompt('Nome do mês (ex: "Maio"):', m.mes || '', 'Editar mês');
   if (nome === null) return;
-  const ano = prompt('Ano (ex: 2026):', m.ano || new Date().getFullYear());
+  const ano = await uiPrompt('Ano (ex: 2026):', m.ano || new Date().getFullYear(), 'Editar mês');
   if (ano === null) return;
   m.mes = String(nome).trim();
   m.ano = parseInt(ano,10) || new Date().getFullYear();
@@ -2193,12 +2324,12 @@ function editarMesFixo(mesId){
   render();
 }
 
-function excluirMesFixo(mesId){
-  if (S.custosMensais.length <= 1) { alert('Não é possível excluir o único mês existente.'); return; }
+async function excluirMesFixo(mesId){
+  if (S.custosMensais.length <= 1) { await uiAlert('Não é possível excluir o único mês existente.'); return; }
   const idx = S.custosMensais.findIndex(x => String(x.id) === String(mesId));
   if (idx < 0) return;
   const m = S.custosMensais[idx];
-  if (!confirm('Excluir o mês "' + (m.mes||'') + '/' + (m.ano||'') + '"?\n\nIsso remove todos os valores e comprovantes deste mês. Não pode ser desfeito.')) return;
+  if (!await uiConfirm('Excluir o mês "' + (m.mes||'') + '/' + (m.ano||'') + '"?\n\nIsso remove todos os valores e comprovantes deste mês. Não pode ser desfeito.', 'Excluir mês', 'Excluir', 'Cancelar')) return;
   S.custosMensais.splice(idx, 1);
   S.fixoMesAtivo = String(S.custosMensais[0].id);
   showToast('✅ Mês excluído');
@@ -2211,23 +2342,21 @@ function excluirMesFixo(mesId){
 // ═══════════════════════════════════════════════════════════
 function renderCadastro(){
   const tab = S.cadastroTab;
-  const tipos = ['clientes','transportadoras','despachantes','agentes','armazens','servicos','fornecedores'];
+  const tipos = ['clientes','transportadoras','despachantes','agentes','armazens','servicos'];
   const labels = {
     'clientes':'🏢 Clientes',
     'transportadoras':'🚚 Transportadoras',
     'despachantes':'📋 Despachantes',
     'agentes':'🚢 Agentes de Carga',
     'armazens':'🏭 Armazéns',
-    'servicos':'🔧 Serviços de Terceiros',
-    'fornecedores':'📦 Fornecedores'
+    'servicos':'🔧 Serviços de Terceiros'
   };
   const tipoMap = {
     'transportadoras':'Transportadora',
     'despachantes':'Despachante',
     'agentes':'Agente de Carga',
     'armazens':'Armazém',
-    'servicos':'Serviço de Terceiros',
-    'fornecedores':'Fornecedor'
+    'servicos':'Serviço de Terceiros'
   };
 
   const tabsHtml = `<div style="display:flex;flex-wrap:wrap;gap:4px;background:var(--bg3);padding:4px;border-radius:10px;margin-bottom:16px">
@@ -2257,7 +2386,7 @@ function renderCadastro(){
     const lista = S.fornecedores.filter(f=>f.tipo===tipo);
     if(lista.length === 0) return `
       <div class="card" style="text-align:center;padding:30px;color:var(--muted)">
-        <div style="font-size:32px;margin-bottom:10px">${{Transportadora:'🚚',Despachante:'📋','Agente de Carga':'🚢','Armazém':'🏭','Serviço de Terceiros':'🔧',Fornecedor:'📦'}[tipo]||'🗂️'}</div>
+        <div style="font-size:32px;margin-bottom:10px">${{Transportadora:'🚚',Despachante:'📋','Agente de Carga':'🚢','Armazém':'🏭','Serviço de Terceiros':'🔧'}[tipo]||'🗂️'}</div>
         <div>Nenhum ${tipo.toLowerCase()} cadastrado ainda.</div>
         <button class="btn btn-primary" style="margin-top:14px" onclick="abrirModalCadastro('fornecedor','${tipo}')">+ Adicionar ${tipo}</button>
       </div>`;
@@ -2371,7 +2500,7 @@ function abrirModalCadastro(kind, tipo='', idx=null){
   setTimeout(()=>document.getElementById('cad_nome')?.focus(), 100);
 }
 
-function salvarCadastro(){
+async function salvarCadastro(){
   const modal = document.getElementById('cad-modal');
   if(!modal) return;
   const kind = modal.dataset.kind;
@@ -2381,12 +2510,18 @@ function salvarCadastro(){
   const gv = id => { const el=document.getElementById(id); return el ? sanitize(el.value) : ''; };
 
   const nome = gv('cad_nome');
-  if(!nome){ alert('Informe o nome/razão social.'); return; }
+  if(!nome){ await uiAlert('Informe o nome/razão social.'); return; }
 
   if(kind === 'cliente'){
     const obj = { nome, usci:gv('cad_usci'), tel:gv('cad_tel'), email:gv('cad_email'), end:gv('cad_end') };
-    if(idx !== null) S.clientes[idx] = {...S.clientes[idx], ...obj};
-    else { obj.id = Date.now(); S.clientes.push(obj); }
+    if(idx !== null) {
+      S.clientes[idx] = {...S.clientes[idx], ...obj};
+      logAction('editar', 'CLIENTES', S.clientes[idx].id, nome);
+    } else {
+      obj.id = genId();
+      S.clientes.push(obj);
+      logAction('criar', 'CLIENTES', obj.id, nome);
+    }
   } else {
     const obj = {
       nome, tipo,
@@ -2395,8 +2530,14 @@ function salvarCadastro(){
       banco:gv('cad_banco'), agencia:gv('cad_agencia'), conta:gv('cad_conta'),
       pix:gv('cad_pix')
     };
-    if(idx !== null) S.fornecedores[idx] = {...S.fornecedores[idx], ...obj};
-    else { obj.id = Date.now(); S.fornecedores.push(obj); }
+    if(idx !== null) {
+      S.fornecedores[idx] = {...S.fornecedores[idx], ...obj};
+      logAction('editar', 'FORNECEDORES', S.fornecedores[idx].id, tipo+': '+nome);
+    } else {
+      obj.id = genId();
+      S.fornecedores.push(obj);
+      logAction('criar', 'FORNECEDORES', obj.id, tipo+': '+nome);
+    }
   }
 
   modal.remove();
@@ -2410,11 +2551,37 @@ function editarCadastro(kind, idx){
   abrirModalCadastro(kind, tipo, idx);
 }
 
-function excluirCadastro(kind, idx){
+async function excluirCadastro(kind, idx){
   const nome = kind==='cliente' ? S.clientes[idx]?.nome : S.fornecedores[idx]?.nome;
-  if(!confirm('Excluir "'+nome+'"? Esta ação não pode ser desfeita.')) return;
-  if(kind==='cliente') S.clientes.splice(idx,1);
-  else S.fornecedores.splice(idx,1);
+  if(!nome) return;
+
+  // Detecta referências em processos, lançamentos e logística
+  const refs = [];
+  if (kind === 'cliente') {
+    const procs = S.processos.filter(p => p.cliente === nome).map(p => p.id);
+    if (procs.length) refs.push(procs.length+' processo(s): '+procs.slice(0,5).join(', ')+(procs.length>5?'...':''));
+  } else {
+    const procsLog = S.processos.filter(p => p.logTransportadora === nome).map(p => p.id);
+    if (procsLog.length) refs.push(procsLog.length+' processo(s) como transportadora: '+procsLog.slice(0,5).join(', ')+(procsLog.length>5?'...':''));
+  }
+  const lancRefs = (S.lancamentos||[]).filter(l => l.empresa === nome).length;
+  if (lancRefs) refs.push(lancRefs+' lançamento(s) com este nome');
+
+  let msg = 'Excluir "'+nome+'"? Esta ação não pode ser desfeita.';
+  if (refs.length) {
+    msg += '\n\n⚠️ Atenção: este cadastro está referenciado em:\n• ' + refs.join('\n• ') + '\n\nOs nomes nos registros não serão removidos, mas perdem o vínculo com o cadastro.';
+  }
+  if(!await uiConfirm(msg, 'Excluir cadastro', 'Excluir mesmo assim', 'Cancelar')) return;
+
+  if(kind==='cliente') {
+    const removed = S.clientes[idx];
+    S.clientes.splice(idx,1);
+    logAction('excluir', 'CLIENTES', removed?.id, nome);
+  } else {
+    const removed = S.fornecedores[idx];
+    S.fornecedores.splice(idx,1);
+    logAction('excluir', 'FORNECEDORES', removed?.id, (removed?.tipo||'')+': '+nome);
+  }
   showToast();
   scheduleAutoSave();
   render();
@@ -2646,18 +2813,24 @@ function renderLancamentos(back, tabsHtml){
     }
     S.lancFiltro = null;
   }
-  const F = S.lancFiltros;
+  const flt = S.lancFiltros;
 
   // Extrair valores únicos para os dropdowns
   const dateToMesKey = d => {
     if (!d) return '';
-    const m1 = String(d).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/); // DD/MM/AAAA
+    const s = String(d).trim();
+    const m1 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); // DD/MM/AAAA
     if (m1) return m1[3] + '-' + m1[2].padStart(2,'0');
-    const m2 = String(d).match(/^(\w+)\/(\d{4})$/); // Mes/AAAA literal
+    const m2 = s.match(/^(\w+)\/(\d{4})$/); // Mes/AAAA literal
     if (m2) {
       const mesesNum = {janeiro:'01',fevereiro:'02','março':'03',marco:'03',abril:'04',maio:'05',junho:'06',julho:'07',agosto:'08',setembro:'09',outubro:'10',novembro:'11',dezembro:'12'};
       const n = mesesNum[m2[1].toLowerCase()];
       if (n) return m2[2] + '-' + n;
+    }
+    const m3 = s.match(/^(\d{1,2})\/(\d{4})$/); // M/AAAA numérico
+    if (m3) {
+      const mm = parseInt(m3[1],10);
+      if (mm >= 1 && mm <= 12) return m3[2] + '-' + String(mm).padStart(2,'0');
     }
     return '';
   };
@@ -2672,14 +2845,14 @@ function renderLancamentos(back, tabsHtml){
 
   // Aplica filtros
   const lista = allEntries.filter(l => {
-    if (F.tipo !== 'todos') {
-      if (F.tipo === '_manual' && l._computed) return false;
-      if (F.tipo === '_auto' && !l._computed) return false;
-      if (!['_manual','_auto'].includes(F.tipo) && l.tipo !== F.tipo) return false;
+    if (flt.tipo !== 'todos') {
+      if (flt.tipo === '_manual' && l._computed) return false;
+      if (flt.tipo === '_auto' && !l._computed) return false;
+      if (!['_manual','_auto'].includes(flt.tipo) && l.tipo !== flt.tipo) return false;
     }
-    if (F.status !== 'todos' && l.status !== F.status) return false;
-    if (F.mes !== 'todos' && dateToMesKey(l.data) !== F.mes) return false;
-    if (F.processo !== 'todos' && l.vinculoId !== F.processo) return false;
+    if (flt.status !== 'todos' && l.status !== flt.status) return false;
+    if (flt.mes !== 'todos' && dateToMesKey(l.data) !== flt.mes) return false;
+    if (flt.processo !== 'todos' && l.vinculoId !== flt.processo) return false;
     return true;
   });
 
@@ -2704,7 +2877,7 @@ function renderLancamentos(back, tabsHtml){
 
   const docsCount = d => d ? Object.values(d).filter(v=>v&&v.length>0).length : 0;
 
-  const hasActiveFilter = F.tipo!=='todos' || F.status!=='todos' || F.mes!=='todos' || F.processo!=='todos';
+  const hasActiveFilter = flt.tipo!=='todos' || flt.status!=='todos' || flt.mes!=='todos' || flt.processo!=='todos';
 
   return `
   ${back}
@@ -2743,39 +2916,39 @@ function renderLancamentos(back, tabsHtml){
       <div style="flex:1;min-width:150px">
         <div style="color:var(--muted);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px">Tipo</div>
         <select onchange="S.lancFiltros.tipo=this.value;render()" style="font-size:12px;padding:7px 8px">
-          <option value="todos" ${F.tipo==='todos'?'selected':''}>📊 Todos</option>
-          <option value="Receita" ${F.tipo==='Receita'?'selected':''}>💰 Receitas</option>
-          <option value="Despesa" ${F.tipo==='Despesa'?'selected':''}>💸 Despesas</option>
-          <option value="Transferência" ${F.tipo==='Transferência'?'selected':''}>🔄 Transferências</option>
-          <option value="Reembolso" ${F.tipo==='Reembolso'?'selected':''}>↩️ Reembolsos</option>
-          <option value="_manual" ${F.tipo==='_manual'?'selected':''}>✏️ Só manuais</option>
-          <option value="_auto" ${F.tipo==='_auto'?'selected':''}>⚙️ Só automáticos</option>
+          <option value="todos" ${flt.tipo==='todos'?'selected':''}>📊 Todos</option>
+          <option value="Receita" ${flt.tipo==='Receita'?'selected':''}>💰 Receitas</option>
+          <option value="Despesa" ${flt.tipo==='Despesa'?'selected':''}>💸 Despesas</option>
+          <option value="Transferência" ${flt.tipo==='Transferência'?'selected':''}>🔄 Transferências</option>
+          <option value="Reembolso" ${flt.tipo==='Reembolso'?'selected':''}>↩️ Reembolsos</option>
+          <option value="_manual" ${flt.tipo==='_manual'?'selected':''}>✏️ Só manuais</option>
+          <option value="_auto" ${flt.tipo==='_auto'?'selected':''}>⚙️ Só automáticos</option>
         </select>
       </div>
 
       <div style="flex:1;min-width:140px">
         <div style="color:var(--muted);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px">Status</div>
         <select onchange="S.lancFiltros.status=this.value;render()" style="font-size:12px;padding:7px 8px">
-          <option value="todos" ${F.status==='todos'?'selected':''}>Todos</option>
-          <option value="Em Aberto" ${F.status==='Em Aberto'?'selected':''}>🟡 Em Aberto</option>
-          <option value="Pago" ${F.status==='Pago'?'selected':''}>🟢 Pago</option>
-          <option value="Cancelado" ${F.status==='Cancelado'?'selected':''}>⚫ Cancelado</option>
+          <option value="todos" ${flt.status==='todos'?'selected':''}>Todos</option>
+          <option value="Em Aberto" ${flt.status==='Em Aberto'?'selected':''}>🟡 Em Aberto</option>
+          <option value="Pago" ${flt.status==='Pago'?'selected':''}>🟢 Pago</option>
+          <option value="Cancelado" ${flt.status==='Cancelado'?'selected':''}>⚫ Cancelado</option>
         </select>
       </div>
 
       <div style="flex:1;min-width:140px">
         <div style="color:var(--muted);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px">Mês</div>
         <select onchange="S.lancFiltros.mes=this.value;render()" style="font-size:12px;padding:7px 8px">
-          <option value="todos" ${F.mes==='todos'?'selected':''}>Todos</option>
-          ${mesesDisp.map(k => `<option value="${k}" ${F.mes===k?'selected':''}>${mesKeyToLabel(k)}</option>`).join('')}
+          <option value="todos" ${flt.mes==='todos'?'selected':''}>Todos</option>
+          ${mesesDisp.map(k => `<option value="${k}" ${flt.mes===k?'selected':''}>${mesKeyToLabel(k)}</option>`).join('')}
         </select>
       </div>
 
       <div style="flex:1;min-width:140px">
         <div style="color:var(--muted);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px">Processo</div>
         <select onchange="S.lancFiltros.processo=this.value;render()" style="font-size:12px;padding:7px 8px">
-          <option value="todos" ${F.processo==='todos'?'selected':''}>Todos</option>
-          ${processosDisp.map(id => `<option value="${escHtml(id)}" ${F.processo===id?'selected':''}>${escHtml(id)}</option>`).join('')}
+          <option value="todos" ${flt.processo==='todos'?'selected':''}>Todos</option>
+          ${processosDisp.map(id => `<option value="${escHtml(id)}" ${flt.processo===id?'selected':''}>${escHtml(id)}</option>`).join('')}
         </select>
       </div>
 
@@ -2883,7 +3056,7 @@ function renderLancamentos(back, tabsHtml){
   })()}`;
 }
 
-function abrirModalLancamento(id=null){
+function abrirModalLancamento(id=null, tipoInicial=null){
   const existing=document.getElementById('lanc-modal');
   if(existing) existing.remove();
 
@@ -2893,6 +3066,8 @@ function abrirModalLancamento(id=null){
     : null;
   const v = k => l ? escHtml(String(l[k]||'')) : '';
   const vd = k => l&&l.docs ? escHtml(String(l.docs[k]||'')) : '';
+  // #24 — tipo inicial vem do botão do dashboard (Receita/Despesa) ou default Despesa
+  const tipoDefault = (l && l.tipo) || tipoInicial || 'Despesa';
 
   const processoOpts = S.processos.map(p=>p.id);
   const cadastroOpts = [...S.clientes.map(c=>c.nome), ...S.fornecedores.map(f=>f.nome)];
@@ -2915,13 +3090,13 @@ function abrirModalLancamento(id=null){
         ${['Receita','Despesa','Transferência','Reembolso'].map(t=>{
           const icons={'Receita':'💰','Despesa':'💸','Transferência':'🔄','Reembolso':'↩️'};
           const colors={'Receita':'var(--green)','Despesa':'var(--red)','Transferência':'var(--accent)','Reembolso':'var(--yellow)'};
-          const sel = v('tipo')===t || (!l&&t==='Despesa');
+          const sel = tipoDefault===t;
           return `<button onclick="document.querySelectorAll('.tipo-btn').forEach(b=>{b.style.borderColor='var(--border2)';b.style.color='var(--muted2)'});this.style.borderColor='${colors[t]}';this.style.color='${colors[t]}';document.getElementById('lf_tipo').value='${t}'"
             class="tipo-btn btn btn-secondary" style="flex:1;font-size:11px;border-color:${sel?colors[t]:'var(--border2)'};color:${sel?colors[t]:'var(--muted2)'};padding:8px 6px">
             ${icons[t]}<br><span style="font-size:10px">${t}</span>
           </button>`;
         }).join('')}
-        <input type="hidden" id="lf_tipo" value="${v('tipo')||'Despesa'}" />
+        <input type="hidden" id="lf_tipo" value="${tipoDefault}" />
       </div>
 
       <!-- OBRIGATÓRIOS -->
@@ -2944,7 +3119,7 @@ function abrirModalLancamento(id=null){
       <div class="ig">
         <label class="lbl">Status</label>
         <select id="lf_status">
-          ${['Confirmado','Pago','Pendente','Cancelado'].map(t=>`<option${v('status')===t?' selected':''}>${t}</option>`).join('')}
+          ${STATUS_OPTIONS.map(t=>`<option${normalizeStatus(v('status')||'Em Aberto')===t?' selected':''}>${t}</option>`).join('')}
         </select>
       </div>
 
@@ -3021,7 +3196,7 @@ function abrirModalLancamento(id=null){
   setTimeout(()=>document.getElementById('lf_descricao')?.focus(),100);
 }
 
-function salvarLancamento(idx){
+async function salvarLancamento(idx){
   const getV = id => { const el=document.getElementById(id); return el ? sanitize(el.value) : ''; };
   const getTipo = () => { const el=document.getElementById('lf_tipo'); return el ? el.value : 'Despesa'; };
   const getUrl = id => { const el=document.getElementById(id); return el ? sanitizeUrl(el.value) : ''; };
@@ -3034,7 +3209,7 @@ function salvarLancamento(idx){
 
   const obj = {
     tipo: getTipo(),
-    status: getV('lf_status'),
+    status: normalizeStatus(getV('lf_status')),
     descricao: getV('lf_descricao'),
     valor: parseFloat(document.getElementById('lf_valor')?.value)||0,
     data: getV('lf_data'),
@@ -3052,26 +3227,30 @@ function salvarLancamento(idx){
     }
   };
 
-  if(!obj.descricao){ alert('Informe a descrição do lançamento.'); return; }
-  if(!obj.valor || obj.valor<=0){ alert('Informe um valor válido maior que zero.'); return; }
+  if(!obj.descricao){ await uiAlert('Informe a descrição do lançamento.'); return; }
+  if(!obj.valor || obj.valor<=0){ await uiAlert('Informe um valor válido maior que zero.'); return; }
 
   if(!S.lancamentos) S.lancamentos = [];
 
   // idx aqui é o ID estável do lançamento (não o índice do array filtrado)
   // String vazia ou null = novo lançamento
+  let isEdit = false;
   if(idx && idx !== 'null' && idx !== 'undefined'){
     const realIdx = S.lancamentos.findIndex(l => String(l.id) === String(idx));
     if(realIdx >= 0){
       obj.id = S.lancamentos[realIdx].id;
       S.lancamentos[realIdx] = obj;
+      isEdit = true;
     } else {
-      obj.id = Date.now();
+      obj.id = genId();
       S.lancamentos.unshift(obj);
     }
   } else {
-    obj.id = Date.now();
+    obj.id = genId();
     S.lancamentos.unshift(obj);
   }
+  logAction(isEdit?'editar':'criar', 'EXTRATO_CAIXA', obj.id,
+    `${obj.tipo}: ${obj.descricao} (R$ ${obj.valor.toFixed(2)})`);
 
   document.getElementById('lanc-modal').remove();
   S.custosTab = 'lancamentos';
@@ -3131,20 +3310,22 @@ function editarLancamento(id){
   abrirModalAutoLancamento(f);
 }
 
-function excluirLancamento(id){
+async function excluirLancamento(id){
   const f = findLancamento(id);
   if(!f){ showToast('⚠️ Lançamento não encontrado'); return; }
   if(f.kind === 'manual'){
-    if(!confirm('Excluir este lançamento manual?')) return;
+    if(!await uiConfirm('Excluir este lançamento manual?', 'Excluir lançamento', 'Excluir', 'Cancelar')) return;
     const idx = S.lancamentos.findIndex(l => String(l.id) === String(id));
     if(idx < 0) return;
+    const removed = S.lancamentos[idx];
     S.lancamentos.splice(idx,1);
+    logAction('excluir', 'EXTRATO_CAIXA', removed.id, (removed.tipo||'')+': '+(removed.descricao||'')+' R$ '+(removed.valor||0).toFixed(2));
     showToast('✅ Lançamento excluído'); scheduleAutoSave(); render();
     return;
   }
   // Câmbio é obrigatório em todo processo — não pode ser excluído, só editado
   if(f.kind === 'auto-cambio'){
-    alert('⚠️ Câmbio Recebido não pode ser excluído.\n\nTodo processo tem um câmbio obrigatório.\nSe ainda não recebeu, use ✏️ Editar e:\n  • Mude o status para "Aguardando"\n  • Ou zere o valor recebido temporariamente.');
+    await uiAlert('Câmbio Recebido não pode ser excluído.\n\nTodo processo tem um câmbio obrigatório.\nSe ainda não recebeu, use ✏️ Editar e:\n  • Mude o status para "Em Aberto"\n  • Ou zere o valor recebido temporariamente.', '⚠️ Não é permitido');
     return;
   }
   // Auto-cost / auto-fixo: zera o valor (item some do extrato pois só aparece quando >0)
@@ -3156,7 +3337,7 @@ function excluirLancamento(id){
     label = 'Custo Fixo: ' + (FIXED_COST_FIELDS[f.field]||f.field);
     origem = 'O custo fixo "' + (FIXED_COST_FIELDS[f.field]||f.field) + '" será zerado (R$ ' + fmt(f.fixo[f.field]) + ' → R$ 0,00).';
   }
-  if(!confirm(`Excluir "${label}"?\n\n${origem}\n\nContinuar?`)) return;
+  if(!await uiConfirm(`Excluir "${label}"?\n\n${origem}`, 'Confirmar exclusão', 'Excluir', 'Cancelar')) return;
   if(f.kind === 'auto-cost'){ f.processo[f.field] = 0; }
   else if(f.kind === 'auto-fixo'){ f.fixo[f.field] = 0; }
   showToast('✅ Zerado na origem'); scheduleAutoSave(); render();
@@ -3269,8 +3450,7 @@ function abrirModalAutoLancamento(f) {
           'Agentes de Carga': (S.fornecedores||[]).filter(x=>x.tipo==='Agente').map(x=>x.nome),
           'Armazéns': (S.fornecedores||[]).filter(x=>x.tipo==='Armazém').map(x=>x.nome),
           'Serviços de Terceiros': (S.fornecedores||[]).filter(x=>x.tipo==='Serviço' || x.tipo==='Serviços' || x.tipo==='Servicos').map(x=>x.nome),
-          'Fornecedores': (S.fornecedores||[]).filter(x=>x.tipo==='Fornecedor').map(x=>x.nome),
-          'Outros': (S.fornecedores||[]).filter(x=>!['Transportadora','Despachante','Agente','Armazém','Serviço','Serviços','Servicos','Fornecedor'].includes(x.tipo)).map(x=>x.nome),
+          'Outros': (S.fornecedores||[]).filter(x=>!['Transportadora','Despachante','Agente','Armazém','Serviço','Serviços','Servicos'].includes(x.tipo)).map(x=>x.nome),
         };
         // Verifica se empresaAtual existe em algum cadastro
         const existeNoCadastro = Object.values(grupos).flat().includes(empresaAtual);
@@ -3304,7 +3484,7 @@ function abrirModalAutoLancamento(f) {
   setTimeout(()=>document.getElementById('al_valor')?.focus(), 100);
 }
 
-function salvarAutoLancamento() {
+async function salvarAutoLancamento() {
   const modal = document.getElementById('lanc-modal');
   if (!modal) return;
   const kind = modal.dataset.autoKind;
@@ -3315,7 +3495,7 @@ function salvarAutoLancamento() {
   const data = sanitize(document.getElementById('al_data')?.value || '');
   const status = sanitize(document.getElementById('al_status')?.value || '');
   const observacao = sanitize(document.getElementById('al_observacao')?.value || '');
-  if (valor < 0) { alert('Valor não pode ser negativo.'); return; }
+  if (valor < 0) { await uiAlert('Valor não pode ser negativo.'); return; }
 
   if (kind === 'auto-cambio') {
     const p = S.processos.find(x => x.id === procId);
@@ -3644,7 +3824,6 @@ function gerarRelatorioEmbarque(id=null){
 function gerarRelatorioMensal(){
   const doc = initPDF();
   let y = pdfHeader(doc,'Relatório Mensal de Custos','Custos variáveis por processo e fixos mensais');
-  const m = S.custosMensais[0]||{};
 
   y = pdfSection(doc,'CUSTOS VARIÁVEIS POR PROCESSO', y);
   S.processos.forEach(p=>{
@@ -3663,19 +3842,32 @@ function gerarRelatorioMensal(){
     ];
     items.forEach(([l,v,st])=>{
       if((v||0)>0){
-        const statusColor = st==='Pago'?[22,163,74]:st==='Pendente'?[220,38,38]:[100,116,139];
-        y = pdfRow(doc, l+' ('+( st||'Estimativa')+')', 'R$ '+fmt(v), y, statusColor);
+        const stNorm = normalizeStatus(st||'Em Aberto');
+        const statusColor = stNorm==='Pago'?[22,163,74]:stNorm==='Cancelado'?[100,116,139]:[245,158,11];
+        y = pdfRow(doc, l+' ('+stNorm+')', 'R$ '+fmt(v), y, statusColor);
       }
     });
     y = pdfTotal(doc,'Total do Processo','R$ '+fmt(tc(p)),y,[14,165,233]);
   });
 
+  // CUSTOS FIXOS — itera TODOS os meses cadastrados
   if(y>230){ y=pdfNewPage(doc); }
   y = pdfSection(doc,'CUSTOS FIXOS MENSAIS', y);
-  [['Contador',m.contador],['Aluguel Coworking',m.aluguel],['Software',m.software],
-   ['Internet',m.internet],['Telefone',m.telefone],['Impostos',m.impostos],['Outros',m.outros]
-  ].forEach(([l,v])=>{ if((v||0)>0) y=pdfRow(doc,l,'R$ '+fmt(v),y,[251,146,60]); });
-  y = pdfTotal(doc,'Total Fixos Mensais','R$ '+fmt(tcm(m)),y,[251,146,60]);
+  let totalFixosGeral = 0;
+  (S.custosMensais||[]).forEach(m => {
+    if(y>240){ y=pdfNewPage(doc); }
+    const mesLabel = (m.mes||'—') + (m.ano?'/'+m.ano:'');
+    y = pdfSection(doc, mesLabel, y);
+    [['Contador',m.contador],['Aluguel Coworking',m.aluguel],['Software',m.software],
+     ['Internet',m.internet],['Telefone',m.telefone],['Impostos',m.impostos],['Outros',m.outros]
+    ].forEach(([l,v])=>{ if((v||0)>0) y=pdfRow(doc,l,'R$ '+fmt(v),y,[251,146,60]); });
+    const totalMes = tcm(m);
+    y = pdfTotal(doc,'Total '+mesLabel,'R$ '+fmt(totalMes),y,[251,146,60]);
+    totalFixosGeral += totalMes;
+  });
+  if((S.custosMensais||[]).length > 1) {
+    y = pdfTotal(doc,'TOTAL GERAL FIXOS','R$ '+fmt(totalFixosGeral),y,[251,146,60]);
+  }
 
   doc.save(`Custos_Mensal_${new Date().toLocaleDateString('pt-BR').replace(/\//g,'-')}.pdf`);
   showToast();
@@ -3736,7 +3928,7 @@ function gerarExtratoCambio(id=null){
     y = pdfRow(doc,'IOF','R$ '+fmt(p.cambioIOF),y,[220,38,38]);
     y = pdfRow(doc,'Spread Bancário','R$ '+fmt(p.cambioSpread),y,[220,38,38]);
     y = pdfRow(doc,'Data de Recebimento',p.cambioRecebimento||'—',y);
-    y = pdfRow(doc,'Status',p.cambioStatus||'—',y,[22,163,74]);
+    y = pdfRow(doc,'Status',normalizeStatus(p.cambioStatus||'Em Aberto'),y,[22,163,74]);
     y = pdfTotal(doc,'Valor Líquido Recebido (R$)','R$ '+fmt(p.cambioReais),y,[22,163,74]);
   });
 
@@ -3747,10 +3939,10 @@ function gerarExtratoCambio(id=null){
 function gerarRelatorioContabilidade(){
   const doc = initPDF();
   let y = pdfHeader(doc,'Relatório de Contabilidade','Todas as entradas e saídas — para o contador');
-  const m = S.custosMensais[0]||{};
   const totalR = S.processos.reduce((a,p)=>a+(p.cambioReais||0),0);
   const totalC = S.processos.reduce((a,p)=>a+tc(p),0);
-  const totalF = tcm(m);
+  // Soma TODOS os meses fixos (não apenas o primeiro)
+  const totalF = (S.custosMensais||[]).reduce((a,m)=>a+tcm(m),0);
 
   // Lançamentos avulsos: excluir os vinculados a câmbio de processo (já contados em cambioReais)
   // para evitar double-count
@@ -3784,9 +3976,13 @@ function gerarRelatorioContabilidade(){
 
   if(y>220){ y=pdfNewPage(doc); }
   y = pdfSection(doc,'SAÍDAS — Custos Fixos Mensais', y);
-  [['Contador',m.contador],['Aluguel Coworking',m.aluguel],['Software',m.software],
-   ['Internet',m.internet],['Telefone',m.telefone],['Impostos',m.impostos],['Outros',m.outros]
-  ].forEach(([l,v])=>{ if((v||0)>0) y=pdfRow(doc,l,'R$ '+fmt(v),y,[251,146,60]); });
+  (S.custosMensais||[]).forEach(m => {
+    if(y>240){ y=pdfNewPage(doc); }
+    const mesLabel = (m.mes||'—') + (m.ano?'/'+m.ano:'');
+    [['Contador',m.contador],['Aluguel Coworking',m.aluguel],['Software',m.software],
+     ['Internet',m.internet],['Telefone',m.telefone],['Impostos',m.impostos],['Outros',m.outros]
+    ].forEach(([l,v])=>{ if((v||0)>0) y=pdfRow(doc,mesLabel+' · '+l,'R$ '+fmt(v),y,[251,146,60]); });
+  });
   y = pdfTotal(doc,'Total Fixos','R$ '+fmt(totalF),y,[251,146,60]);
 
   if(lancAvulsos.length>0){
@@ -3819,57 +4015,8 @@ function gerarRelatorioContabilidade(){
 // ═══════════════════════════════════════════════════════════
 // EVENTS
 // ═══════════════════════════════════════════════════════════
-function anexarDoc(processId,docKey){
-  // Remove any existing modal
-  const existing=document.getElementById('doc-modal');
-  if(existing) existing.remove();
+// (anexarDoc / confirmarDoc removidos — substituídos por abrirUploadDoc / salvarLinkDoc)
 
-  const docLabels={invoice:'Invoice',contrato:'Contrato',packingList:'Packing List',
-    bl:'BL - Bill of Lading',due:'DU-E',nfe:'NF-e',comprovantes:'Comprovantes',certOrigem:'Certificado de Origem'};
-  const label=docLabels[docKey]||docKey;
-
-  // Build modal without nested template literals to avoid syntax issues
-  const modal=document.createElement('div');
-  modal.id='doc-modal';
-  modal.className='modal-overlay';
-  modal.dataset.pid=processId;
-  modal.dataset.dkey=docKey;
-
-  const div=document.createElement('div');
-  div.className='modal';
-  div.innerHTML='<div class="modal-title">📎 Anexar Documento</div>'
-    +'<div style="color:var(--muted2);font-size:12px;margin-bottom:16px"><strong style="color:var(--accent)">'+label+'</strong> — Processo '+processId+'</div>'
-    +'<div class="ig"><label class="lbl">Link do Google Drive</label>'
-    +'<input type="url" id="modal-link" placeholder="Cole aqui o link do Google Drive..." style="font-size:13px"/></div>'
-    +'<div style="color:var(--muted);font-size:11px;margin-bottom:16px">💡 Abra a pasta do processo no Drive, faça upload do arquivo e copie o link de compartilhamento.</div>'
-    +'<div style="display:flex;gap:8px;justify-content:flex-end">'
-    +'<button class="btn btn-secondary" id="modal-cancel-btn">Cancelar</button>'
-    +'<button class="btn btn-primary" onclick="confirmarDoc()">✅ Salvar Link</button>'
-    +'</div>';
-  modal.appendChild(div);
-  document.body.appendChild(modal);
-  setTimeout(()=>{
-    const inp=document.getElementById('modal-link');
-    if(inp) inp.focus();
-    const cb=document.getElementById('modal-cancel-btn');
-    if(cb) cb.onclick=()=>document.getElementById('doc-modal').remove();
-  },50);
-}
-
-function confirmarDoc(processId,docKey){
-  // Read from dataset if not passed directly
-  const modal=document.getElementById('doc-modal');
-  const pid = processId || (modal && modal.dataset.pid);
-  const dkey = docKey || (modal && modal.dataset.dkey);
-  const link=document.getElementById('modal-link')?.value?.trim();
-  if(!link){alert('Cole um link válido do Google Drive.');return;}
-  if(!link.startsWith('http')){alert('Link inválido. Use um link do Google Drive.');return;}
-  const p=S.processos.find(x=>x.id===pid);
-  if(p){if(!p.docs)p.docs={};p.docs[dkey]=link;}
-  if(modal) modal.remove();
-  scheduleAutoSave();
-  showToast('✅ Documento salvo!'); render();
-}
 
 // ── FORM HELPERS ──────────────────────────────────────────
 function autoPreencherCliente(nome){
@@ -3893,7 +4040,7 @@ function atualizarContainers(qty){
   list.innerHTML = Array.from({length:qty},(_,i)=>
     '<div style="display:flex;align-items:center;gap:8px">'
     +'<div style="width:22px;height:22px;border-radius:6px;background:var(--accent2);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">'+(i+1)+'</div>'
-    +'<input type="text" id="f_container_'+i+'" value="'+(vals[i]||'')+'" class="container-input" placeholder="Ex: MSKU5529672"/>'
+    +'<input type="text" id="f_container_'+i+'" value="'+escHtml(vals[i]||'')+'" placeholder="Ex: MSKU5529672" inputmode="text" autocapitalize="characters" autocorrect="off" spellcheck="false" style="font-family:\'JetBrains Mono\',monospace;font-size:12px;text-transform:uppercase"/>'
     +'</div>'
   ).join('');
 }
@@ -4000,16 +4147,16 @@ function attachEvents(){
   // Salvar câmbio
   const saveCambio = document.getElementById('btn-salvar-cambio');
   if(saveCambio){
-    saveCambio.addEventListener('click',()=>{
+    saveCambio.addEventListener('click',async ()=>{
       const gv = id=>{ const el=document.getElementById(id); return el?sanitize(el.value):''; };
       const gn = id=>{ const el=document.getElementById(id); return parseFloat(el?.value)||0; };
       const procId = gv('nc_processo');
-      if(!procId){ alert('Selecione um processo válido.'); return; }
+      if(!procId){ await uiAlert('Selecione um processo válido.'); return; }
       const p = S.processos.find(x=>x.id===procId);
-      if(!p){ alert('Processo "'+procId+'" não encontrado.'); return; }
+      if(!p){ await uiAlert('Processo "'+procId+'" não encontrado.'); return; }
       const obj = {
         invoiceNum:gv('nc_invoiceNum'), contratoNum:gv('nc_contratoNum'),
-        cambioBanco:gv('nc_banco'), cambioStatus:gv('nc_status'),
+        cambioBanco:gv('nc_banco'), cambioStatus:normalizeStatus(gv('nc_status')),
         cambioInvoice:gn('nc_invoiceVal'), cambioTaxa:gn('nc_taxa'),
         cambioFechamento:gv('nc_fechamento'), dueNumero:gv('nc_due'),
         dueChave:gv('nc_chave'), cambioRecebimento:gv('nc_recebimento'),
@@ -4018,6 +4165,7 @@ function attachEvents(){
       };
       Object.assign(p, obj);
       S.cambioTab='lista';
+      logAction('editar', 'PROCESSOS', procId, 'câmbio R$ '+(obj.cambioReais||0).toFixed(2)+' ['+obj.cambioStatus+']');
       showToast(); scheduleAutoSave(); render();
     });
   }
@@ -4027,14 +4175,14 @@ function attachEvents(){
   if(cadBtn){
     cadBtn.addEventListener('click', ()=>{
       const t = S.cadastroTab;
-      const tipoMap2 = {transportadoras:'Transportadora',despachantes:'Despachante',agentes:'Agente de Carga',armazens:'Armazém',servicos:'Serviço de Terceiros',fornecedores:'Fornecedor'};
+      const tipoMap2 = {fornecedores:'Fornecedor',transportadoras:'Transportadora',despachantes:'Despachante',agentes:'Agente de Carga',armazens:'Armazém',servicos:'Serviço de Terceiros'};
       if(t==='clientes') abrirModalCadastro('cliente');
       else abrirModalCadastro('fornecedor', tipoMap2[t]||'');
     });
   }
 
   const saveBtn=document.getElementById('btn-save-proc');
-  if(saveBtn) saveBtn.addEventListener('click',()=>{
+  if(saveBtn) saveBtn.addEventListener('click',async ()=>{
     const fields=['id','invoiceNum','contratoNum','status','embarque','peso',
       'cliente','usci','clienteTel','clienteEmail','clienteAdd',
       'ncm','produto','moeda','pol','pod','origem','destino','incoterm','pagamento',
@@ -4057,24 +4205,44 @@ function attachEvents(){
       const sel=document.getElementById('f_'+k+'_status');
       if(sel) obj[k+'_status']=sel.value;
     });
-    if(!obj.id){alert('Informe o número do processo!');return;}
+    if(!obj.id){await uiAlert('Informe o número do processo!');return;}
     const idx=S.processos.findIndex(p=>p.id===obj.id);
+    const isNovo = idx < 0;
     if(idx>=0) S.processos[idx]={...S.processos[idx],...obj};
     else S.processos.push({...obj,docs:{}});
     S.sub=S.processos.find(p=>p.id===obj.id);
     S.editMode=false; S.createMode=false;
+    logAction(isNovo?'criar':'editar', 'PROCESSOS', obj.id, (obj.cliente||'')+' · '+(obj.produto||''));
     showToast(); scheduleAutoSave(); render();
-    // Auto-create Drive folder for new/existing process
+    // Auto-create Drive folder for new/existing process — só dispara render se ainda relevante
     setTimeout(()=>{
       const savedP = S.processos.find(x=>x.id===obj.id);
       if(savedP && !savedP?.docs?._folderId && window._sheetsToken){
-        criarPastaProcesso(savedP).then(()=>render());
+        criarPastaProcesso(savedP).then(()=>{
+          // Só re-renderiza se o usuário ainda está vendo esse processo
+          if (S.page === 'processos' && S.sub?.id === obj.id) render();
+        });
       }
     }, 500); updateSB();
   });
 }
 
-function logoutUser(){
+async function logoutUser(){
+  // Garante que mudanças pendentes vão para o Sheets antes de sair
+  try {
+    if (_saveTimer) {
+      clearTimeout(_saveTimer);
+      _saveTimer = null;
+      if (window._sheetsToken) await saveToSheets();
+    }
+    // Flush do audit log pendente
+    if (_logQueue.length > 0 && window._sheetsToken) {
+      clearTimeout(_logFlushTimer);
+      await _flushLogQueue();
+    }
+    logAction('logout', 'SESSAO', '', 'usuário deslogou');
+    if (window._sheetsToken && _logQueue.length > 0) await _flushLogQueue();
+  } catch(e) {}
   sessionStorage.removeItem('erp-user');
   sessionStorage.removeItem('erp-gtoken');
   sessionStorage.removeItem('drive-consented');
@@ -4239,7 +4407,7 @@ function scheduleTokenRenewal() {
 }
 
 // Generic Sheets API call
-async function sheetsAPI(method, endpoint, body=null) {
+async function sheetsAPI(method, endpoint, body=null, _retry=false) {
   const token = await getAccessToken();
   const opts = {
     method,
@@ -4251,11 +4419,35 @@ async function sheetsAPI(method, endpoint, body=null) {
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(SHEETS_API + endpoint, opts);
   if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error?.message || 'Sheets API error');
+    // #20 — Token expirado/inválido: tenta renovar uma vez e refazer
+    if ((res.status === 401 || res.status === 403) && !_retry) {
+      window._sheetsToken = null;
+      window._sheetsTokenExpiry = 0;
+      try { sessionStorage.removeItem('erp-gtoken'); } catch(e) {}
+      // Refaz com novo token
+      return sheetsAPI(method, endpoint, body, true);
+    }
+    const err = await res.json().catch(()=>({}));
+    const msg = err.error?.message || 'Sheets API error ' + res.status;
+    const e = new Error(msg);
+    e.status = res.status;
+    throw e;
   }
   return res.json();
 }
+
+// ── J + C — Schema centralizado das abas ──────────────────
+// Fonte única da verdade. Mudança aqui afeta setupSheets, saveToSheets e loadFromSheets.
+// LOG é nova aba para audit trail (#F).
+const SHEET_SCHEMA = {
+  PROCESSOS: ["id","embarque","status","cliente","usci","clienteTel","clienteEmail","clienteAdd","produto","ncm","moeda","pol","pod","origem","destino","incoterm","pagamento","peso","companhia","booking","qtdContainer","containers","saida","deadlineCarga","deadlineDraft","logCidade","logTransportadora","logEmbarque","logChegada","logArmazem","logModalidade","logVazio","logPorto","logEnd","custoMaritimo","custoMaritimo_status","custoFrete","custoFrete_status","custoCertificado","custoCertificado_status","custoArmazem","custoArmazem_status","custoPorto","custoPorto_status","custoDespachante","custoDespachante_status","custoServTerceiros","custoServTerceiros_status","custoImpostos","custoImpostos_status","custoProduto","custoProduto_status","cambioInvoice","cambioTaxa","cambioReais","cambioIOF","cambioSpread","cambioRecebido","cambioFechamento","cambioRecebimento","cambioBanco","cambioStatus","dueNumero","dueChave","invoiceNum","contratoNum","docs"],
+  CLIENTES: ["id","nome","usci","tel","email","end"],
+  FORNECEDORES: ["id","tipo","nome","cnpj","ie","cep","email","end","banco","agencia","conta","pix"],
+  EXTRATO_CAIXA: ["id","data","tipo","descricao","valor","empresa","vinculo","vinculoId","categoria","status","observacao","docs"],
+  CUSTOS_FIXOS: ["id","mes","ano","contador","aluguel","software","internet","telefone","impostos","outros","docs"],
+  CONFIG: ["chave","valor"],
+  LOG: ["timestamp","usuario","acao","tabela","registroId","resumo"]
+};
 
 // ── SETUP: Create sheets if they don't exist ──────────────
 async function setupSheets() {
@@ -4285,7 +4477,7 @@ async function setupSheets() {
       }
     }
 
-    const needed = ['PROCESSOS', 'CLIENTES', 'FORNECEDORES', 'EXTRATO_CAIXA', 'CUSTOS_FIXOS', 'CONFIG'];
+    const needed = Object.keys(SHEET_SCHEMA);  // J — vem do schema centralizado
     const toCreate = needed.filter(n => !existing.includes(n));
 
     if (toCreate.length > 0) {
@@ -4294,9 +4486,8 @@ async function setupSheets() {
       });
     }
 
-    // Write headers for each sheet
-    const headerData = {"PROCESSOS": ["id", "embarque", "status", "cliente", "usci", "clienteTel", "clienteEmail", "clienteAdd", "produto", "ncm", "moeda", "pol", "pod", "origem", "destino", "incoterm", "pagamento", "peso", "companhia", "booking", "qtdContainer", "containers", "saida", "deadlineCarga", "deadlineDraft", "logCidade", "logTransportadora", "logEmbarque", "logChegada", "logArmazem", "logModalidade", "logVazio", "logPorto", "logEnd", "custoMaritimo", "custoMaritimo_status", "custoFrete", "custoFrete_status", "custoCertificado", "custoCertificado_status", "custoArmazem", "custoArmazem_status", "custoPorto", "custoPorto_status", "custoDespachante", "custoDespachante_status", "custoServTerceiros", "custoServTerceiros_status", "custoImpostos", "custoImpostos_status", "custoProduto", "custoProduto_status", "cambioInvoice", "cambioTaxa", "cambioReais", "cambioIOF", "cambioSpread", "cambioRecebido", "cambioFechamento", "cambioRecebimento", "cambioBanco", "cambioStatus", "dueNumero", "dueChave", "invoiceNum", "contratoNum", "docs"], "CLIENTES": ["id", "nome", "usci", "tel", "email", "end"], "FORNECEDORES": ["id", "tipo", "nome", "cnpj", "ie", "cep", "email", "end", "banco", "agencia", "conta", "pix"], "EXTRATO_CAIXA": ["id", "data", "tipo", "descricao", "valor", "empresa", "vinculo", "vinculoId", "categoria", "status", "observacao", "docs"], "CUSTOS_FIXOS": ["id", "mes", "ano", "contador", "aluguel", "software", "internet", "telefone", "impostos", "outros", "docs"], "CONFIG": ["chave", "valor"]};
-    const updates = Object.entries(headerData).map(([sheet, cols]) => ({
+    // J — escreve headers a partir do schema centralizado (não duplica mais)
+    const updates = Object.entries(SHEET_SCHEMA).map(([sheet, cols]) => ({
       range: `${sheet}!A1`,
       values: [cols]
     }));
@@ -4318,6 +4509,32 @@ async function loadFromSheets() {
     const res = await sheetsAPI('GET',
       `/${SHEET_ID}/values:batchGet?ranges=${ranges.join('&ranges=')}&majorDimension=ROWS`
     );
+
+    // #C — Validação de schema: compara headers da planilha com os esperados.
+    // Se não bater, avisa o usuário e usa apenas os campos que reconhece (não corrompe).
+    const schemaIssues = [];
+    res.valueRanges.forEach((vr, idx) => {
+      const sheetName = ranges[idx];
+      const expected = SHEET_SCHEMA[sheetName];
+      if (!expected || !vr?.values?.length) return;
+      const actual = vr.values[0];
+      // Detecta colunas faltando ou em ordem diferente
+      const missing = expected.filter(h => !actual.includes(h));
+      const extra = actual.filter(h => !expected.includes(h));
+      if (missing.length || extra.length) {
+        schemaIssues.push({sheet: sheetName, missing, extra});
+      }
+    });
+    if (schemaIssues.length > 0) {
+      // Log no console + toast discreto. Não bloqueia o load.
+      console.warn('Schema mismatch detectado:', schemaIssues);
+      const summary = schemaIssues.map(s =>
+        `${s.sheet}: ${s.missing.length?'faltam '+s.missing.length:''}${s.missing.length&&s.extra.length?', ':''}${s.extra.length?'extras '+s.extra.length:''}`
+      ).join(' | ');
+      showToast('⚠️ Schema divergente: ' + summary);
+    }
+
+    // Parser usa headers REAIS da planilha (preserva flexibilidade)
     const parse = (vr) => {
       if (!vr?.values || vr.values.length < 2) return [];
       const headers = vr.values[0];
@@ -4335,7 +4552,12 @@ async function loadFromSheets() {
        'cambioInvoice','cambioTaxa','cambioReais','cambioIOF','cambioSpread','cambioRecebido'
       ].forEach(k => { p[k] = parseFloat(p[k]) || 0; });
       if (p.containers && typeof p.containers === 'string') {
-        try { p.containers = JSON.parse(p.containers); } catch(e) { p.containers = [p.container||'']; }
+        try {
+          const parsed = JSON.parse(p.containers);
+          p.containers = Array.isArray(parsed) && parsed.length > 0 ? parsed : [p.container||''];
+        } catch(e) { p.containers = [p.container||'']; }
+      } else if (!Array.isArray(p.containers) || p.containers.length === 0) {
+        p.containers = [p.container||''];
       }
       if (p.docs && typeof p.docs === 'string') {
         try { p.docs = JSON.parse(p.docs); } catch(e) { p.docs = {}; }
@@ -4383,7 +4605,7 @@ async function saveToSheets() {
       return v === null || v === undefined ? '' : String(v);
     });
 
-    const headerData = {"PROCESSOS": ["id", "embarque", "status", "cliente", "usci", "clienteTel", "clienteEmail", "clienteAdd", "produto", "ncm", "moeda", "pol", "pod", "origem", "destino", "incoterm", "pagamento", "peso", "companhia", "booking", "qtdContainer", "containers", "saida", "deadlineCarga", "deadlineDraft", "logCidade", "logTransportadora", "logEmbarque", "logChegada", "logArmazem", "logModalidade", "logVazio", "logPorto", "logEnd", "custoMaritimo", "custoMaritimo_status", "custoFrete", "custoFrete_status", "custoCertificado", "custoCertificado_status", "custoArmazem", "custoArmazem_status", "custoPorto", "custoPorto_status", "custoDespachante", "custoDespachante_status", "custoServTerceiros", "custoServTerceiros_status", "custoImpostos", "custoImpostos_status", "custoProduto", "custoProduto_status", "cambioInvoice", "cambioTaxa", "cambioReais", "cambioIOF", "cambioSpread", "cambioRecebido", "cambioFechamento", "cambioRecebimento", "cambioBanco", "cambioStatus", "dueNumero", "dueChave", "invoiceNum", "contratoNum", "docs"], "CLIENTES": ["id", "nome", "usci", "tel", "email", "end"], "FORNECEDORES": ["id", "tipo", "nome", "cnpj", "ie", "cep", "email", "end", "banco", "agencia", "conta", "pix"], "EXTRATO_CAIXA": ["id", "data", "tipo", "descricao", "valor", "empresa", "vinculo", "vinculoId", "categoria", "status", "observacao", "docs"], "CUSTOS_FIXOS": ["id", "mes", "ano", "contador", "aluguel", "software", "internet", "telefone", "impostos", "outros", "docs"], "CONFIG": ["chave", "valor"]};
+    const headerData = SHEET_SCHEMA;  // J — usa o schema centralizado
     const data = [
       { sheet: 'PROCESSOS', items: S.processos },
       { sheet: 'CLIENTES', items: S.clientes },
@@ -4425,13 +4647,108 @@ async function saveToSheets() {
 
 // ── AUTO-SAVE: Save after every state change ──────────────
 let _saveTimer = null;
+
+// #F — Audit log. Escreve assincronamente na aba LOG. Fila local para não bloquear UI.
+// Append-only: usa values:append (não rewrite). Falha silenciosa se rede cair.
+const _logQueue = [];
+let _logFlushTimer = null;
+function logAction(acao, tabela, registroId, resumo='') {
+  try {
+    const user = JSON.parse(sessionStorage.getItem('erp-user')||'{}');
+    _logQueue.push([
+      new Date().toISOString(),
+      user.email || '?',
+      acao,         // criar | editar | excluir
+      tabela,       // PROCESSOS | CLIENTES | ...
+      String(registroId||''),
+      String(resumo||'').slice(0, 500)  // limita tamanho
+    ]);
+    clearTimeout(_logFlushTimer);
+    _logFlushTimer = setTimeout(_flushLogQueue, 3000);
+  } catch(e) {}
+}
+async function _flushLogQueue() {
+  if (_logQueue.length === 0 || !window._sheetsToken) return;
+  const batch = _logQueue.splice(0, _logQueue.length);
+  try {
+    await sheetsAPI('POST',
+      `/${SHEET_ID}/values/LOG!A:F:append?valueInputOption=RAW`,
+      { values: batch }
+    );
+  } catch(e) {
+    // Re-enfileira em caso de falha (até 100 entradas, depois descarta)
+    if (_logQueue.length < 100) _logQueue.unshift(...batch);
+    console.warn('Log flush error:', e.message);
+  }
+}
+
 function scheduleAutoSave() {
+  // #A — Mirror local imediato (síncrono, não espera debounce nem rede)
+  // Protege contra: queda de internet, browser fechado antes do save remoto, falha do Sheets
+  try {
+    const backup = {
+      processos: S.processos, clientes: S.clientes, fornecedores: S.fornecedores,
+      lancamentos: S.lancamentos, custosMensais: S.custosMensais,
+      savedAt: Date.now()
+    };
+    localStorage.setItem('erp-local-backup', JSON.stringify(backup));
+  } catch(e) {
+    // Quota excedida? Tenta limpar backup antigo e seguir em frente
+    try { localStorage.removeItem('erp-local-backup'); } catch(_) {}
+  }
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
     if (sessionStorage.getItem('erp-user') && window._sheetsToken) {
       saveToSheets();
     }
   }, 2000); // 2 second debounce
+}
+
+// #A — Detecta se há backup local mais recente que o que veio do Sheets
+// Chamado após loadFromSheets. Se backup local tem dados E é mais novo, oferece restaurar.
+async function checkLocalBackup() {
+  try {
+    const raw = localStorage.getItem('erp-local-backup');
+    if (!raw) return;
+    const backup = JSON.parse(raw);
+    if (!backup || !backup.savedAt) return;
+
+    // Conta itens no backup vs estado atual
+    const backupCount = (backup.processos?.length||0) + (backup.lancamentos?.length||0);
+    const currentCount = (S.processos?.length||0) + (S.lancamentos?.length||0);
+
+    // Oferece restaurar se:
+    //  • backup tem dados E
+    //  • backup tem MAIS itens que o atual (sinal de perda no remoto)
+    //  • backup foi salvo nas últimas 24h (mais antigo provavelmente desatualizado)
+    const idade = Date.now() - backup.savedAt;
+    const dentroPrazo = idade < 24 * 60 * 60 * 1000;
+
+    if (backupCount > currentCount && dentroPrazo) {
+      const minutos = Math.round(idade / 60000);
+      const ok = await uiConfirm(
+        `Foi detectado um backup local com mais dados que a planilha:\n\n` +
+        `• Backup local: ${backup.processos?.length||0} processos, ${backup.lancamentos?.length||0} lançamentos\n` +
+        `• Planilha atual: ${S.processos?.length||0} processos, ${S.lancamentos?.length||0} lançamentos\n\n` +
+        `Salvo há ${minutos} minuto(s). Restaurar do backup?`,
+        'Backup local disponível',
+        'Restaurar backup',
+        'Manter atual'
+      );
+      if (ok) {
+        if (backup.processos?.length) S.processos = backup.processos;
+        if (backup.clientes?.length) S.clientes = backup.clientes;
+        if (backup.fornecedores?.length) S.fornecedores = backup.fornecedores;
+        if (backup.lancamentos?.length) S.lancamentos = backup.lancamentos;
+        if (backup.custosMensais?.length) S.custosMensais = backup.custosMensais;
+        showToast('✅ Backup restaurado — salvando na planilha');
+        if (window._sheetsToken) saveToSheets();
+        render();
+      }
+    }
+  } catch(e) {
+    console.warn('checkLocalBackup:', e.message);
+  }
 }
 
 // ── SYNC INDICATOR ────────────────────────────────────────
@@ -4504,7 +4821,7 @@ async function getRootFolderId() {
   const id = await getOrCreateFolder(ROOT_FOLDER_NAME);
   window._rootFolderId = id;
   // Save to CONFIG sheet
-  saveConfig('drive_root_folder_id', id);
+  saveConfig('drive_root_folder_id', id).catch(()=>{});  // #21 — não-fatal
   return id;
 }
 
@@ -5021,12 +5338,12 @@ function salvarLinkDocLanc(){
   showToast('✅ Link salvo!');
 }
 
-function removerDocLanc(){
+async function removerDocLanc(){
   const modal = document.getElementById('upload-modal');
   if (!modal) return;
   const id = modal.dataset.lancId;
   const docKey = modal.dataset.docKey;
-  if (!confirm('Remover este anexo? O arquivo continua no Drive — apenas o vínculo será removido.')) return;
+  if (!await uiConfirm('Remover este anexo? O arquivo continua no Drive — apenas o vínculo será removido.', 'Remover anexo', 'Remover', 'Cancelar')) return;
   setLancDocUrl(id, docKey, '');
   modal.remove();
   if (window._sheetsToken) saveToSheets(); else scheduleAutoSave();
@@ -5107,13 +5424,14 @@ function autoUpdateStatus() {
       p.status = 'A Coletar';
     }
 
-    // Auto cambio status
-    if (p.cambioRecebimento && p.cambioFechamento) {
-      p.cambioStatus = 'Liquidado';
-    } else if (p.cambioFechamento) {
-      p.cambioStatus = 'Pré Embarque Enviado';
-    } else if (!p.cambioRecebimento && !p.cambioFechamento) {
-      if ((p.cambioInvoice||0) > 0) p.cambioStatus = 'Aguardando';
+    // Auto cambio status — usa SEMPRE o conjunto unificado (Em Aberto / Pago / Cancelado)
+    // Não sobrescreve se já está Cancelado (intervenção manual)
+    if (p.cambioStatus !== 'Cancelado') {
+      if (p.cambioRecebimento && (p.cambioReais||0) > 0) {
+        p.cambioStatus = 'Pago';
+      } else {
+        p.cambioStatus = 'Em Aberto';
+      }
     }
   });
 }
@@ -5134,6 +5452,28 @@ try {
 if(location.protocol !== 'file:' && location.protocol !== 'https:' && location.hostname !== 'localhost'){
   // production environment must use HTTPS
 }
+// ── ESC fecha qualquer modal aberto ──
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  // Ordem de prioridade: modais customizados ui-modal já tratam ESC sozinhos
+  const ids = ['lanc-modal','cad-modal','upload-modal','doc-modal'];
+  for (const id of ids) {
+    const m = document.getElementById(id);
+    if (m) { m.remove(); return; }
+  }
+});
+
+// #A — Aviso ao fechar/recarregar a aba se houver save pendente
+// (a confirmação nativa do browser dá chance de o usuário cancelar e deixar o auto-save terminar)
+window.addEventListener('beforeunload', e => {
+  if (_saveTimer) {
+    // Há mudanças não sincronizadas — backup local protege, mas avisa
+    e.preventDefault();
+    e.returnValue = 'Mudanças não foram sincronizadas com o Google Sheets ainda. Esperar mais alguns segundos antes de sair?';
+    return e.returnValue;
+  }
+});
+
 if (!checkSession()) {
   // Show login screen - Google GIS will handle it
   applyTheme();
