@@ -703,8 +703,7 @@ const genId = () => {
 
 const updateSB=()=>{
   document.getElementById('sb-count').textContent=S.processos.length;
-  const transitStatuses=['Embarcado','No Porto','No Armazém','Indo para Armazém'];
-  document.getElementById('sb-transit').textContent=S.processos.filter(p=>transitStatuses.includes(p.status)).length;
+  document.getElementById('sb-transit').textContent=S.processos.filter(p=>p.status==='Indo para Armazém').length;
 };
 
 // ═══════════════════════════════════════════════════════════
