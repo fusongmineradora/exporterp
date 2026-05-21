@@ -260,45 +260,6 @@ select option{background:var(--bg2);}
 .status-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:4px;}
 
 @keyframes spin{to{transform:rotate(360deg)}}
-
-/* ── LOADING SKELETON (#5) ── */
-/* Shimmer puro CSS — gradient diagonal animado da esquerda pra direita.
-   Cor base segue var(--bg3) pra encaixar nos dois temas. */
-@keyframes shimmer {
-  0%   { background-position: -200px 0; }
-  100% { background-position: calc(200px + 100%) 0; }
-}
-.skel {
-  background: var(--bg3);
-  background-image: linear-gradient(
-    90deg,
-    var(--bg3) 0px,
-    var(--border) 60px,
-    var(--bg3) 120px
-  );
-  background-size: 200px 100%;
-  background-repeat: no-repeat;
-  animation: shimmer 1.4s ease-in-out infinite;
-  border-radius: 6px;
-  display: inline-block;
-  vertical-align: middle;
-}
-.skel-line { height: 12px; width: 100%; }
-.skel-line-sm { height: 10px; width: 60%; }
-.skel-line-lg { height: 18px; width: 40%; }
-.skel-stat { height: 28px; width: 70%; }
-.skel-card {
-  background: var(--bg2);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 18px;
-  margin-bottom: 12px;
-}
-.skel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 18px; }
-.skel-row { display: flex; gap: 14px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); }
-.skel-row:last-child { border-bottom: none; }
-.skel-circle { width: 36px; height: 36px; border-radius: 50%; }
-
 /* ── LOGIN SCREEN ── */
 #login-screen{
   position:fixed;inset:0;background:#07101f;z-index:9999;
@@ -484,12 +445,8 @@ select option{background:var(--bg2);}
   <div class="nav-section">Gestão</div>
   <button class="nav-btn" onclick="nav('cadastro')" id="nav-cadastro"><span class="nav-icon">🗂️</span><span>Cadastro</span></button>
   <button class="nav-btn" onclick="nav('relatorios')" id="nav-relatorios"><span class="nav-icon">📑</span><span>Relatórios</span></button>
-  <button class="nav-btn" onclick="nav('lixeira')" id="nav-lixeira"><span class="nav-icon">🗑️</span><span>Lixeira</span><span id="sb-trash-badge" style="margin-left:auto;background:var(--red);color:#fff;border-radius:10px;padding:1px 7px;font-size:9px;font-weight:700;display:none">0</span></button>
   <button class="sb-action-btn" onclick="saveToSheets()" style="width:100%;margin-bottom:6px;background:transparent;border:1px solid var(--accent2);border-radius:8px;padding:7px;color:var(--accent2);font-size:11px;cursor:pointer;font-family:'Inter',sans-serif;display:flex;align-items:center;justify-content:center;gap:5px">
     <span>☁️</span><span class="sb-action-text">Salvar agora</span>
-  </button>
-  <button class="sb-action-btn" onclick="backupAgora()" style="width:100%;margin-bottom:6px;background:transparent;border:1px solid var(--border);border-radius:8px;padding:7px;color:var(--muted);font-size:11px;cursor:pointer;font-family:'Inter',sans-serif;display:flex;align-items:center;justify-content:center;gap:5px" title="Criar backup JSON no Drive agora" onmouseover="this.style.color='var(--accent)';this.style.borderColor='var(--accent)'" onmouseout="this.style.color='var(--muted)';this.style.borderColor='var(--border)'">
-    <span>💾</span><span class="sb-action-text">Backup agora</span>
   </button>
   <button class="sb-action-btn" onclick="reconectarDrive()" style="width:100%;margin-bottom:6px;background:transparent;border:1px solid var(--border);border-radius:8px;padding:7px;color:var(--muted);font-size:11px;cursor:pointer;font-family:'Inter',sans-serif;display:flex;align-items:center;justify-content:center;gap:5px" title="Use se houver erro ao acessar o Google Drive" onmouseover="this.style.color='var(--accent)';this.style.borderColor='var(--accent)'" onmouseout="this.style.color='var(--muted)';this.style.borderColor='var(--border)'">
     <span>🔗</span><span class="sb-action-text">Reconectar Drive</span>
@@ -578,8 +535,7 @@ select option{background:var(--bg2);}
 // ═══════════════════════════════════════════════════════════
 const S = {
   page:'dashboard', sub:null, editMode:false, createMode:false,
-  filter:null, cadastroTab:'clientes', custosTab:'processo', cambioTab:'lista', lixeiraTab:'processos',
-  trash:{ processos:[], clientes:[], fornecedores:[], lancamentos:[], custosMensais:[] },
+  filter:null, cadastroTab:'clientes', custosTab:'processo', cambioTab:'lista',
   processos:[{
     id:'FS260096',embarque:'09',status:'Embarcado',
     invoiceNum:'Invoice - FS260096',contratoNum:'Contrato - FS260096',
@@ -748,13 +704,6 @@ const genId = () => {
 const updateSB=()=>{
   document.getElementById('sb-count').textContent=S.processos.length;
   document.getElementById('sb-transit').textContent=S.processos.filter(p=>p.status==='Embarcado').length;
-  // #2 — badge da lixeira na sidebar
-  const badge = document.getElementById('sb-trash-badge');
-  if (badge) {
-    const n = trashCount();
-    badge.textContent = n;
-    badge.style.display = n > 0 ? 'inline-block' : 'none';
-  }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -843,18 +792,14 @@ function handleGoogleLogin(response) {
       try {
         if (restoreTokenFromStorage()) {
           scheduleTokenRenewal();
-          S.isLoading = true; render();  // #5 mostra skeleton enquanto carrega
           await setupSheets();
           await loadFromSheets();
-          S.isLoading = false; render();
           await checkLocalBackup();  // #A
-          checkAndRunDailyBackup();  // #3 — fire-and-forget
         } else {
           // Mostra banner pedindo conexão (sem disparar pop-up automaticamente)
           mostrarBannerConexaoDrive();
         }
       } catch(e) {
-        S.isLoading = false; render();
         console.warn('Sheets init:', e);
       }
     }, 400);
@@ -885,14 +830,12 @@ function mostrarBannerConexaoDrive() {
     banner.remove();
     try {
       await getAccessToken();
-      S.isLoading = true; render();  // #5 skeleton durante load
+      showSyncIndicator('Carregando dados...');
       await setupSheets();
       await loadFromSheets();
-      S.isLoading = false; render();
+      hideSyncIndicator();
       showToast('✅ Conectado ao Google Drive');
-      checkAndRunDailyBackup();  // #3 — fire-and-forget
     } catch(e) {
-      S.isLoading = false;
       showToast('⚠️ ' + (e.message || 'Erro ao conectar. Tente novamente.'));
       // Recoloca o banner para nova tentativa
       mostrarBannerConexaoDrive();
@@ -953,12 +896,9 @@ function checkSession() {
           // Token ainda válido — agenda renovação automática
           scheduleTokenRenewal();
           try {
-            S.isLoading = true; render();  // #5 skeleton durante load
             await loadFromSheets();
-            S.isLoading = false; render();
             await checkLocalBackup();  // #A — confere se há backup local mais novo
-            checkAndRunDailyBackup();  // #3 — fire-and-forget
-          } catch(e) { S.isLoading = false; render(); }
+          } catch(e) {}
           return;
         }
         // Sem token salvo → mostra banner pra usuário clicar (sem auto-popup)
@@ -1099,87 +1039,6 @@ const backBtn=()=>navHistory.length>0
   ? `<button class="btn btn-secondary btn-sm" onclick="goBack()" style="display:inline-flex;align-items:center;gap:6px;margin-bottom:18px"><span style="font-size:15px">←</span> Voltar</button>`
   : '';
 
-// ═══════════════════════════════════════════════════════════
-// LOADING SKELETON (#5)
-// Renderiza placeholders pulsantes enquanto loadFromSheets() roda.
-// Ativado por S.isLoading = true. Cada página tem seu skeleton específico
-// — dashboard mostra stat cards, processos mostra linhas de tabela, etc.
-// ═══════════════════════════════════════════════════════════
-function skeletonFor(page) {
-  const card = (inner) => `<div class="skel-card">${inner}</div>`;
-  const line = (cls='skel-line') => `<span class="skel ${cls}"></span>`;
-  const row = () => `<div class="skel-row">
-    <span class="skel skel-circle"></span>
-    <div style="flex:1;display:flex;flex-direction:column;gap:6px">
-      ${line('skel-line-lg')}${line('skel-line-sm')}
-    </div>
-    ${line('skel-line-sm')}
-  </div>`;
-
-  // Header genérico (título + sub) que aparece em quase toda página
-  const header = `<div style="margin-bottom:20px">
-    ${line('skel-line-lg')}<br>
-    <div style="margin-top:8px">${line('skel-line-sm')}</div>
-  </div>`;
-
-  switch(page) {
-    case 'dashboard':
-      // 4 stat cards + 2 cards maiores
-      return header + `
-        <div class="skel-grid">
-          ${card(line('skel-line-sm') + '<div style="margin-top:10px">' + line('skel-stat') + '</div>').repeat(4)}
-        </div>
-        <div class="skel-grid">
-          ${card('<div style="display:flex;flex-direction:column;gap:10px">' +
-            line('skel-line-lg') + line() + line() + line('skel-line-sm') +
-          '</div>').repeat(2)}
-        </div>`;
-
-    case 'processos':
-    case 'rastreamento':
-      // Lista de linhas (8 placeholders)
-      return header + card(Array(8).fill(0).map(row).join(''));
-
-    case 'cambio':
-    case 'custos':
-      // Tabs + lista
-      return header + `
-        <div style="display:flex;gap:6px;margin-bottom:16px">
-          ${line('skel-line-sm').replace('skel-line-sm','skel" style="height:32px;width:90px;border-radius:8px')}
-          ${line('skel-line-sm').replace('skel-line-sm','skel" style="height:32px;width:90px;border-radius:8px')}
-          ${line('skel-line-sm').replace('skel-line-sm','skel" style="height:32px;width:90px;border-radius:8px')}
-        </div>
-        ${card(Array(6).fill(0).map(row).join(''))}`;
-
-    case 'cadastro':
-      // Tabs + grade de cards
-      return header + `
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
-          ${Array(6).fill(0).map(()=>`<span class="skel" style="height:32px;width:120px;border-radius:8px"></span>`).join('')}
-        </div>
-        <div class="skel-grid">
-          ${card(line('skel-line-lg') + '<div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">' +
-            line() + line() + line('skel-line-sm') +
-          '</div>').repeat(6)}
-        </div>`;
-
-    case 'relatorios':
-      return header + `<div class="skel-grid">
-        ${card(line('skel-line-lg') + '<div style="margin-top:12px">' + line('skel-line-sm') + '</div>').repeat(6)}
-      </div>`;
-
-    case 'lixeira':
-      return header + `
-        <div style="display:flex;gap:6px;margin-bottom:16px">
-          ${Array(3).fill(0).map(()=>`<span class="skel" style="height:32px;width:140px;border-radius:8px"></span>`).join('')}
-        </div>
-        ${card(Array(5).fill(0).map(row).join(''))}`;
-
-    default:
-      return header + card(line() + '<br>' + line() + '<br>' + line('skel-line-sm'));
-  }
-}
-
 function render(){
   autoUpdateStatus();
   // reapply backgrounds after innerHTML changes
@@ -1188,16 +1047,10 @@ function render(){
   if(mainEl) mainEl.style.background = isLight ? '#F1F5F9' : '#0a0f1e';
   const fab=document.getElementById('dash-fab');
   if(fab) fab.style.display=S.page==='dashboard'?'none':'flex';
-  const pages={dashboard:renderDashboard,processos:renderProcessos,rastreamento:renderRastreamento,cambio:renderCambio,custos:renderCustos,cadastro:renderCadastro,relatorios:renderRelatorios,lixeira:renderLixeira};
+  const pages={dashboard:renderDashboard,processos:renderProcessos,rastreamento:renderRastreamento,cambio:renderCambio,custos:renderCustos,cadastro:renderCadastro,relatorios:renderRelatorios};
   const fn=pages[S.page];
   const mainEl2 = document.getElementById('main');
   if(mainEl2) mainEl2.style.display = 'block';
-  // #5 — Skeleton durante carregamento inicial. Pula a função da página e mostra placeholders.
-  // Não chama attachEvents() (não há handlers num skeleton) e não roda makeFabDraggable.
-  if (S.isLoading) {
-    document.getElementById('main').innerHTML = skeletonFor(S.page);
-    return;
-  }
   if(fn) document.getElementById('main').innerHTML=fn();
   attachEvents();
   makeFabDraggable();
@@ -2422,7 +2275,7 @@ function atualizarValorFixo(mesId, field, valor){
   const m = (S.custosMensais||[]).find(x => String(x.id) === String(mesId));
   if (!m) return;
   m[field] = parseFloat(valor) || 0;
-  scheduleAutoSave('custosMensais');
+  scheduleAutoSave();
   updateSB();
   render();
 }
@@ -2454,7 +2307,7 @@ function novoMesFixo(){
   S.custosMensais.unshift(novo);
   S.fixoMesAtivo = String(novo.id);
   showToast('✅ ' + novo.mes + '/' + novo.ano + ' criado');
-  scheduleAutoSave('custosMensais');
+  scheduleAutoSave();
   render();
 }
 
@@ -2467,7 +2320,7 @@ async function editarMesFixo(mesId){
   if (ano === null) return;
   m.mes = String(nome).trim();
   m.ano = parseInt(ano,10) || new Date().getFullYear();
-  scheduleAutoSave('custosMensais');
+  scheduleAutoSave();
   render();
 }
 
@@ -2476,12 +2329,11 @@ async function excluirMesFixo(mesId){
   const idx = S.custosMensais.findIndex(x => String(x.id) === String(mesId));
   if (idx < 0) return;
   const m = S.custosMensais[idx];
-  if (!await uiConfirm('Mover o mês "' + (m.mes||'') + '/' + (m.ano||'') + '" para a lixeira?\n\nVocê pode restaurar em Lixeira → Custos Fixos. Itens com mais de '+TRASH_RETENTION_DAYS+' dias são removidos definitivamente.', 'Mover para lixeira', 'Mover', 'Cancelar')) return;
-  softDelete('custosMensais', m.id);
-  S.fixoMesAtivo = String(S.custosMensais[0]?.id || '');
-  logAction('excluir', 'CUSTOS_FIXOS', m.id, (m.mes||'')+'/'+(m.ano||''));
-  showToast('🗑️ Mês movido para lixeira');
-  scheduleAutoSave('custosMensais');
+  if (!await uiConfirm('Excluir o mês "' + (m.mes||'') + '/' + (m.ano||'') + '"?\n\nIsso remove todos os valores e comprovantes deste mês. Não pode ser desfeito.', 'Excluir mês', 'Excluir', 'Cancelar')) return;
+  S.custosMensais.splice(idx, 1);
+  S.fixoMesAtivo = String(S.custosMensais[0].id);
+  showToast('✅ Mês excluído');
+  scheduleAutoSave();
   render();
 }
 
@@ -2692,7 +2544,7 @@ async function salvarCadastro(){
 
   modal.remove();
   showToast();
-  scheduleAutoSave(kind === 'cliente' ? 'clientes' : 'fornecedores');
+  scheduleAutoSave();
   render();
 }
 
@@ -2717,25 +2569,23 @@ async function excluirCadastro(kind, idx){
   const lancRefs = (S.lancamentos||[]).filter(l => l.empresa === nome).length;
   if (lancRefs) refs.push(lancRefs+' lançamento(s) com este nome');
 
-  let msg = 'Mover "'+nome+'" para a lixeira?';
+  let msg = 'Excluir "'+nome+'"? Esta ação não pode ser desfeita.';
   if (refs.length) {
-    msg += '\n\n⚠️ Atenção: este cadastro está referenciado em:\n• ' + refs.join('\n• ') + '\n\nOs nomes nos registros não serão removidos. Você pode restaurar em Lixeira por até '+TRASH_RETENTION_DAYS+' dias.';
-  } else {
-    msg += '\n\nVocê pode restaurar em Lixeira por até '+TRASH_RETENTION_DAYS+' dias.';
+    msg += '\n\n⚠️ Atenção: este cadastro está referenciado em:\n• ' + refs.join('\n• ') + '\n\nOs nomes nos registros não serão removidos, mas perdem o vínculo com o cadastro.';
   }
-  if(!await uiConfirm(msg, 'Mover para lixeira', 'Mover', 'Cancelar')) return;
+  if(!await uiConfirm(msg, 'Excluir cadastro', 'Excluir mesmo assim', 'Cancelar')) return;
 
   if(kind==='cliente') {
     const removed = S.clientes[idx];
-    softDelete('clientes', removed.id);
+    S.clientes.splice(idx,1);
     logAction('excluir', 'CLIENTES', removed?.id, nome);
   } else {
     const removed = S.fornecedores[idx];
-    softDelete('fornecedores', removed.id);
+    S.fornecedores.splice(idx,1);
     logAction('excluir', 'FORNECEDORES', removed?.id, (removed?.tipo||'')+': '+nome);
   }
-  showToast('🗑️ Movido para lixeira');
-  scheduleAutoSave(kind === 'cliente' ? 'clientes' : 'fornecedores');
+  showToast();
+  scheduleAutoSave();
   render();
 }
 
@@ -2782,7 +2632,7 @@ function buildAllEntries(opts={}) {
       if ((p.cambioReais||0) > 0 && !manualOverride.has(`${p.id}::Câmbio`)) {
         const docs = (p.docs && p.docs._lancCambio) ? p.docs._lancCambio : {};
         const legacy = p.cambioStatus || '';
-        let status = hasComprovante(docs) ? 'Pago' : normalizeStatus(legacy);
+        let status = normalizeStatus(legacy) || 'Em Aberto';
         if (legacy === 'Cancelado') status = 'Cancelado';
         out.push({
           id: 'auto_cambio_' + p.id,
@@ -2808,7 +2658,7 @@ function buildAllEntries(opts={}) {
         if (!opts.filtroProcessoId && valor === 0) return;
         const docs = (p.docs && p.docs['_lanc_'+field]) ? p.docs['_lanc_'+field] : {};
         const legacy = p[field+'_status'] || '';
-        let status = hasComprovante(docs) ? 'Pago' : normalizeStatus(legacy);
+        let status = normalizeStatus(legacy) || 'Em Aberto';
         if (legacy === 'Cancelado') status = 'Cancelado';
         const empresaCusto = (p.docs && p.docs._costEmpresa && p.docs._costEmpresa[field]) || '';
         // Data individual por custo (fallback: p.embarque legado)
@@ -2845,7 +2695,8 @@ function buildAllEntries(opts={}) {
         // Quando NÃO filtra, só mostra > 0
         if (!opts.filtroMesFixoId && valor === 0) return;
         const docs = (m.docs && m.docs[field]) ? m.docs[field] : {};
-        const status = hasComprovante(docs) ? 'Pago' : 'Em Aberto';
+        const legacy = (m.docs && m.docs._fixoStatus && m.docs._fixoStatus[field]) || '';
+        const status = normalizeStatus(legacy) || 'Em Aberto';
         // Data individual por custo fixo
         const dataFixa = (m.docs && m.docs._fixoData && m.docs._fixoData[field]) || '';
         out.push({
@@ -3406,7 +3257,7 @@ async function salvarLancamento(idx){
 
   document.getElementById('lanc-modal').remove();
   S.custosTab = 'lancamentos';
-  showToast(); scheduleAutoSave('lancamentos'); render();
+  showToast(); scheduleAutoSave(); render();
 }
 
 // Localiza um lançamento por ID, manual ou automático.
@@ -3466,13 +3317,13 @@ async function excluirLancamento(id){
   const f = findLancamento(id);
   if(!f){ showToast('⚠️ Lançamento não encontrado'); return; }
   if(f.kind === 'manual'){
-    if(!await uiConfirm('Mover este lançamento manual para a lixeira?\n\nVocê pode restaurar em Lixeira por até '+TRASH_RETENTION_DAYS+' dias.', 'Mover para lixeira', 'Mover', 'Cancelar')) return;
+    if(!await uiConfirm('Excluir este lançamento manual?', 'Excluir lançamento', 'Excluir', 'Cancelar')) return;
     const idx = S.lancamentos.findIndex(l => String(l.id) === String(id));
     if(idx < 0) return;
     const removed = S.lancamentos[idx];
-    softDelete('lancamentos', removed.id);
+    S.lancamentos.splice(idx,1);
     logAction('excluir', 'EXTRATO_CAIXA', removed.id, (removed.tipo||'')+': '+(removed.descricao||'')+' R$ '+(removed.valor||0).toFixed(2));
-    showToast('🗑️ Movido para lixeira'); scheduleAutoSave('lancamentos'); render();
+    showToast('✅ Lançamento excluído'); scheduleAutoSave(); render();
     return;
   }
   // Câmbio é obrigatório em todo processo — não pode ser excluído, só editado
@@ -3492,9 +3343,7 @@ async function excluirLancamento(id){
   if(!await uiConfirm(`Excluir "${label}"?\n\n${origem}`, 'Confirmar exclusão', 'Excluir', 'Cancelar')) return;
   if(f.kind === 'auto-cost'){ f.processo[f.field] = 0; }
   else if(f.kind === 'auto-fixo'){ f.fixo[f.field] = 0; }
-  showToast('✅ Zerado na origem');
-  scheduleAutoSave(f.kind === 'auto-cost' ? 'processos' : 'custosMensais');
-  render();
+  showToast('✅ Zerado na origem'); scheduleAutoSave(); render();
 }
 
 // Modal completo para editar lançamento automático — sincroniza com processo/fixo
@@ -3534,8 +3383,8 @@ function abrirModalAutoLancamento(f) {
     const m = f.fixo;
     titulo = 'Custo Fixo: ' + (FIXED_COST_FIELDS[f.field]||f.field);
     valorAtual = m[f.field] || 0;
-    // Status do custo fixo = derivado do comprovante
-    statusAtual = hasComprovante((m.docs && m.docs[f.field]) || {}) ? 'Pago' : 'Em Aberto';
+    // Status do custo fixo lido do que foi salvo (não inferido de anexo)
+    statusAtual = normalizeStatus((m.docs && m.docs._fixoStatus && m.docs._fixoStatus[f.field]) || '') || 'Em Aberto';
     // Data salva por custo individual (não usa mais mes/ano)
     dataAtual = (m.docs && m.docs._fixoData && m.docs._fixoData[f.field]) || '';
     empresaAtual = '';
@@ -3690,6 +3539,9 @@ async function salvarAutoLancamento() {
     if (!m) { showToast('⚠️ Custo fixo não encontrado'); return; }
     m[field] = valor;
     if (!m.docs) m.docs = {};
+    // Salva status POR CUSTO FIXO individual
+    if (!m.docs._fixoStatus) m.docs._fixoStatus = {};
+    m.docs._fixoStatus[field] = status;
     // Salva data POR CUSTO FIXO individual no formato dd/mm/aaaa
     if (!m.docs._fixoData) m.docs._fixoData = {};
     m.docs._fixoData[field] = data;
@@ -3700,7 +3552,7 @@ async function salvarAutoLancamento() {
   }
 
   modal.remove();
-  scheduleAutoSave(kind === 'auto-fixo' ? 'custosMensais' : 'processos');
+  scheduleAutoSave();
   showToast('✅ Alterações salvas');
   render();
 }
@@ -3722,138 +3574,6 @@ function abrirDocLanc(id, docKey){
   //   processos[].docs._lanc_<field>[docKey]                 (custos do processo)
   //   custosMensais[0].docs.<field>[docKey]                  (custos fixos)
   abrirUploadLanc(id, docKey);
-}
-
-// ═══════════════════════════════════════════════════════════
-// LIXEIRA (#2 — soft delete)
-// ═══════════════════════════════════════════════════════════
-const TRASH_LABELS = {
-  processos:     { sing:'Processo',     plur:'Processos',     icon:'📦' },
-  clientes:      { sing:'Cliente',      plur:'Clientes',      icon:'🏢' },
-  fornecedores:  { sing:'Fornecedor',   plur:'Fornecedores',  icon:'🚚' },
-  lancamentos:   { sing:'Lançamento',   plur:'Lançamentos',   icon:'💰' },
-  custosMensais: { sing:'Custo Fixo',   plur:'Custos Fixos',  icon:'📅' },
-};
-function _trashItemTitle(colKey, item) {
-  if (colKey === 'processos')     return (item.id||'') + ' · ' + (item.cliente||'');
-  if (colKey === 'clientes')      return item.nome || '(sem nome)';
-  if (colKey === 'fornecedores')  return (item.tipo?item.tipo+': ':'') + (item.nome||'(sem nome)');
-  if (colKey === 'lancamentos')   return (item.tipo||'')+': '+(item.descricao||'')+' — R$ '+((item.valor||0).toFixed(2));
-  if (colKey === 'custosMensais') return (item.mes||'')+'/'+(item.ano||'');
-  return item.id || '?';
-}
-function _fmtTrashDate(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  const dias = Math.floor((Date.now() - d.getTime()) / 86400000);
-  const restantes = Math.max(0, TRASH_RETENTION_DAYS - dias);
-  const dataStr = d.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
-  return { dataStr, dias, restantes };
-}
-
-function renderLixeira() {
-  _ensureTrash();
-  const total = trashCount();
-  const header = `<div style="margin-bottom:20px">
-    <h2 style="font-family:'Outfit',sans-serif;font-weight:700;font-size:22px;color:var(--text);margin:0">🗑️ Lixeira</h2>
-    <div style="color:var(--muted);font-size:13px;margin-top:6px">
-      ${total === 0
-        ? 'A lixeira está vazia.'
-        : total + ' item(ns) na lixeira. Itens com mais de '+TRASH_RETENTION_DAYS+' dias são removidos definitivamente.'}
-    </div>
-  </div>`;
-
-  if (total === 0) {
-    return header + `<div class="card" style="text-align:center;padding:40px;color:var(--muted)">
-      <div style="font-size:48px;margin-bottom:12px">🗑️</div>
-      <div>Nada por aqui. Itens excluídos aparecem nesta página.</div>
-    </div>`;
-  }
-
-  // Tab por coleção (só mostra as que têm itens)
-  const cols = SOFT_DELETE_COLLECTIONS.filter(c => S.trash[c]?.length > 0);
-  const activeTab = cols.includes(S.lixeiraTab) ? S.lixeiraTab : cols[0];
-  S.lixeiraTab = activeTab;
-
-  const tabsHtml = `<div style="display:flex;flex-wrap:wrap;gap:4px;background:var(--bg3);padding:4px;border-radius:10px;margin-bottom:16px">
-    ${cols.map(c => {
-      const L = TRASH_LABELS[c];
-      const n = S.trash[c].length;
-      return `<button class="tab ${c===activeTab?'active':''}" onclick="S.lixeiraTab='${c}';render()">${L.icon} ${L.plur} (${n})</button>`;
-    }).join('')}
-  </div>`;
-
-  // Lista da aba ativa, ordenada por data de exclusão (mais recente primeiro)
-  const items = [...S.trash[activeTab]].sort((a,b) =>
-    new Date(b.deletedAt||0) - new Date(a.deletedAt||0)
-  );
-
-  const listHtml = items.map(item => {
-    const { dataStr, restantes } = _fmtTrashDate(item.deletedAt);
-    const title = _trashItemTitle(activeTab, item);
-    const alertaPurga = restantes <= 7
-      ? `<span style="color:var(--red);font-weight:600">⚠️ ${restantes}d para purga</span>`
-      : `<span style="color:var(--muted)">${restantes}d até purga</span>`;
-    return `<div class="card" style="display:flex;align-items:center;gap:14px;justify-content:space-between;flex-wrap:wrap">
-      <div style="flex:1;min-width:220px">
-        <div style="font-family:'Outfit',sans-serif;font-weight:600;color:var(--text);font-size:14px;margin-bottom:4px">
-          ${escHtml(title)}
-        </div>
-        <div style="font-size:11px;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap">
-          <span>🕐 Excluído em ${dataStr}</span>
-          ${alertaPurga}
-        </div>
-      </div>
-      <div style="display:flex;gap:6px">
-        <button class="btn btn-secondary btn-xs" onclick="restaurarItem('${activeTab}','${escHtml(String(item.id))}')" title="Restaurar item">↩️ Restaurar</button>
-        <button class="btn btn-danger btn-xs" onclick="excluirDefinitivo('${activeTab}','${escHtml(String(item.id))}')" title="Excluir definitivamente">🔥 Excluir definitivo</button>
-      </div>
-    </div>`;
-  }).join('');
-
-  // Ação em massa: esvaziar a aba ativa
-  const bulkBtn = items.length > 1
-    ? `<div style="margin-top:16px;text-align:right">
-        <button class="btn btn-danger btn-xs" onclick="esvaziarLixeira('${activeTab}')" style="font-size:11px">🔥 Esvaziar ${escHtml(TRASH_LABELS[activeTab].plur)} (${items.length})</button>
-      </div>`
-    : '';
-
-  return header + tabsHtml + listHtml + bulkBtn;
-}
-
-async function restaurarItem(colKey, id) {
-  const item = (S.trash?.[colKey] || []).find(x => String(x.id) === String(id));
-  if (!item) { showToast('⚠️ Item não encontrado'); return; }
-  const title = _trashItemTitle(colKey, item);
-  if (!restoreItem(colKey, id)) { showToast('⚠️ Falha ao restaurar'); return; }
-  logAction('restaurar', STATE_TO_SHEET[colKey].sheet, id, title);
-  showToast('✅ Restaurado');
-  scheduleAutoSave(colKey);
-  render();
-}
-
-async function excluirDefinitivo(colKey, id) {
-  const item = (S.trash?.[colKey] || []).find(x => String(x.id) === String(id));
-  if (!item) { showToast('⚠️ Item não encontrado'); return; }
-  const title = _trashItemTitle(colKey, item);
-  if (!await uiConfirm('Excluir DEFINITIVAMENTE "'+title+'"?\n\nEsta ação é irreversível.', 'Excluir definitivo', 'Excluir', 'Cancelar')) return;
-  if (!hardDeleteFromTrash(colKey, id)) { showToast('⚠️ Falha ao excluir'); return; }
-  logAction('excluir-definitivo', STATE_TO_SHEET[colKey].sheet, id, title);
-  showToast('🔥 Excluído definitivamente');
-  scheduleAutoSave(colKey);
-  render();
-}
-
-async function esvaziarLixeira(colKey) {
-  const trash = S.trash?.[colKey] || [];
-  const n = trash.length;
-  if (n === 0) return;
-  if (!await uiConfirm('Esvaziar a lixeira de '+TRASH_LABELS[colKey].plur+' ('+n+' item(ns))?\n\nEsta ação é irreversível.', 'Esvaziar lixeira', 'Esvaziar', 'Cancelar')) return;
-  S.trash[colKey] = [];
-  logAction('esvaziar-lixeira', STATE_TO_SHEET[colKey].sheet, '', n+' item(ns)');
-  showToast('🔥 Lixeira esvaziada ('+n+')');
-  scheduleAutoSave(colKey);
-  render();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -4452,7 +4172,7 @@ function attachEvents(){
       Object.assign(p, obj);
       S.cambioTab='lista';
       logAction('editar', 'PROCESSOS', procId, 'câmbio R$ '+(obj.cambioReais||0).toFixed(2)+' ['+obj.cambioStatus+']');
-      showToast(); scheduleAutoSave('processos'); render();
+      showToast(); scheduleAutoSave(); render();
     });
   }
 
@@ -4499,7 +4219,7 @@ function attachEvents(){
     S.sub=S.processos.find(p=>p.id===obj.id);
     S.editMode=false; S.createMode=false;
     logAction(isNovo?'criar':'editar', 'PROCESSOS', obj.id, (obj.cliente||'')+' · '+(obj.produto||''));
-    showToast(); scheduleAutoSave('processos'); render();
+    showToast(); scheduleAutoSave(); render();
     // Auto-create Drive folder for new/existing process — só dispara render se ainda relevante
     setTimeout(()=>{
       const savedP = S.processos.find(x=>x.id===obj.id);
@@ -4519,11 +4239,7 @@ async function logoutUser(){
     if (_saveTimer) {
       clearTimeout(_saveTimer);
       _saveTimer = null;
-      if (window._sheetsToken && _dirtyCollections.size > 0) {
-        const snapshot = new Set(_dirtyCollections);
-        _dirtyCollections.clear();
-        await saveToSheets(snapshot);
-      }
+      if (window._sheetsToken) await saveToSheets();
     }
     // Flush do audit log pendente
     if (_logQueue.length > 0 && window._sheetsToken) {
@@ -4730,366 +4446,14 @@ async function sheetsAPI(method, endpoint, body=null, _retry=false) {
 // Fonte única da verdade. Mudança aqui afeta setupSheets, saveToSheets e loadFromSheets.
 // LOG é nova aba para audit trail (#F).
 const SHEET_SCHEMA = {
-  PROCESSOS: ["id","embarque","status","cliente","usci","clienteTel","clienteEmail","clienteAdd","produto","ncm","moeda","pol","pod","origem","destino","incoterm","pagamento","peso","companhia","booking","qtdContainer","containers","saida","deadlineCarga","deadlineDraft","logCidade","logTransportadora","logEmbarque","logChegada","logArmazem","logModalidade","logVazio","logPorto","logEnd","custoMaritimo","custoMaritimo_status","custoFrete","custoFrete_status","custoCertificado","custoCertificado_status","custoArmazem","custoArmazem_status","custoPorto","custoPorto_status","custoDespachante","custoDespachante_status","custoServTerceiros","custoServTerceiros_status","custoImpostos","custoImpostos_status","custoProduto","custoProduto_status","cambioInvoice","cambioTaxa","cambioReais","cambioIOF","cambioSpread","cambioRecebido","cambioFechamento","cambioRecebimento","cambioBanco","cambioStatus","dueNumero","dueChave","invoiceNum","contratoNum","docs","deletedAt","updatedAt","updatedBy"],
-  CLIENTES: ["id","nome","usci","tel","email","end","deletedAt","updatedAt","updatedBy"],
-  FORNECEDORES: ["id","tipo","nome","cnpj","ie","cep","email","end","banco","agencia","conta","pix","deletedAt","updatedAt","updatedBy"],
-  EXTRATO_CAIXA: ["id","data","tipo","descricao","valor","empresa","vinculo","vinculoId","categoria","status","observacao","docs","deletedAt","updatedAt","updatedBy"],
-  CUSTOS_FIXOS: ["id","mes","ano","contador","aluguel","software","internet","telefone","impostos","outros","docs","deletedAt","updatedAt","updatedBy"],
+  PROCESSOS: ["id","embarque","status","cliente","usci","clienteTel","clienteEmail","clienteAdd","produto","ncm","moeda","pol","pod","origem","destino","incoterm","pagamento","peso","companhia","booking","qtdContainer","containers","saida","deadlineCarga","deadlineDraft","logCidade","logTransportadora","logEmbarque","logChegada","logArmazem","logModalidade","logVazio","logPorto","logEnd","custoMaritimo","custoMaritimo_status","custoFrete","custoFrete_status","custoCertificado","custoCertificado_status","custoArmazem","custoArmazem_status","custoPorto","custoPorto_status","custoDespachante","custoDespachante_status","custoServTerceiros","custoServTerceiros_status","custoImpostos","custoImpostos_status","custoProduto","custoProduto_status","cambioInvoice","cambioTaxa","cambioReais","cambioIOF","cambioSpread","cambioRecebido","cambioFechamento","cambioRecebimento","cambioBanco","cambioStatus","dueNumero","dueChave","invoiceNum","contratoNum","docs"],
+  CLIENTES: ["id","nome","usci","tel","email","end"],
+  FORNECEDORES: ["id","tipo","nome","cnpj","ie","cep","email","end","banco","agencia","conta","pix"],
+  EXTRATO_CAIXA: ["id","data","tipo","descricao","valor","empresa","vinculo","vinculoId","categoria","status","observacao","docs"],
+  CUSTOS_FIXOS: ["id","mes","ano","contador","aluguel","software","internet","telefone","impostos","outros","docs"],
   CONFIG: ["chave","valor"],
   LOG: ["timestamp","usuario","acao","tabela","registroId","resumo"]
 };
-
-// #2 — SOFT DELETE: arquitetura "trash isolada".
-// Itens deletados saem de S.coleção e vão pra S.trash.coleção.
-// Vantagem: nenhuma das 144 referências a S.processos / S.clientes etc.
-// precisa ser mudada — elas continuam vendo só os ativos automaticamente.
-// No save, mergeamos [ativos, trash] de volta antes de gravar no Sheets.
-// No load, separamos por deletedAt.
-const TRASH_RETENTION_DAYS = 90;
-const SOFT_DELETE_COLLECTIONS = ['processos','clientes','fornecedores','lancamentos','custosMensais'];
-
-// Mapa coleção → array em S.trash. Inicializa S.trash se ainda não existir.
-function _ensureTrash() {
-  if (!S.trash) S.trash = { processos:[], clientes:[], fornecedores:[], lancamentos:[], custosMensais:[] };
-  SOFT_DELETE_COLLECTIONS.forEach(c => { if (!S.trash[c]) S.trash[c] = []; });
-  return S.trash;
-}
-
-// Move item de S.coleção[idx] para S.trash.coleção, marcando deletedAt.
-function softDelete(colKey, id) {
-  _ensureTrash();
-  const arr = S[colKey];
-  if (!Array.isArray(arr)) return false;
-  const idx = arr.findIndex(x => String(x.id) === String(id));
-  if (idx < 0) return false;
-  const item = arr[idx];
-  item.deletedAt = new Date().toISOString();
-  arr.splice(idx, 1);
-  S.trash[colKey].push(item);
-  return true;
-}
-
-// Move de volta da lixeira para S.coleção, limpando deletedAt.
-function restoreItem(colKey, id) {
-  _ensureTrash();
-  const trash = S.trash[colKey];
-  const idx = trash.findIndex(x => String(x.id) === String(id));
-  if (idx < 0) return false;
-  const item = trash[idx];
-  delete item.deletedAt;
-  trash.splice(idx, 1);
-  if (!Array.isArray(S[colKey])) S[colKey] = [];
-  S[colKey].unshift(item);
-  return true;
-}
-
-// Exclui DEFINITIVAMENTE da lixeira (sem retorno).
-function hardDeleteFromTrash(colKey, id) {
-  _ensureTrash();
-  const trash = S.trash[colKey];
-  const idx = trash.findIndex(x => String(x.id) === String(id));
-  if (idx < 0) return false;
-  trash.splice(idx, 1);
-  return true;
-}
-
-// Purga itens da lixeira com mais de TRASH_RETENTION_DAYS. Chamado pós-load.
-function purgeOldTrash() {
-  _ensureTrash();
-  const cutoff = Date.now() - TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-  let count = 0;
-  SOFT_DELETE_COLLECTIONS.forEach(c => {
-    const trash = S.trash[c];
-    for (let i = trash.length - 1; i >= 0; i--) {
-      const d = trash[i].deletedAt;
-      if (d && new Date(d).getTime() < cutoff) {
-        trash.splice(i, 1);
-        count++;
-      }
-    }
-  });
-  return count;
-}
-
-// Conta total de itens na lixeira (para badge na UI).
-function trashCount() {
-  _ensureTrash();
-  return SOFT_DELETE_COLLECTIONS.reduce((sum, c) => sum + (S.trash[c]?.length || 0), 0);
-}
-
-// ═══════════════════════════════════════════════════════════
-// #4 — DETECÇÃO DE CONFLITO MULTI-USUÁRIO
-// Cada registro tem updatedAt (ISO) + updatedBy (email).
-// Antes de salvar uma aba, re-lê do Sheets e compara registro a registro.
-// Casos:
-//   - Registro só EU mudei      → grava minha versão
-//   - Registro só OUTRO mudou   → adoto a versão dele (não sobrescrevo)
-//   - AMBOS mudamos             → conflito real, modal pergunta
-//   - Registro NOVO (só local)  → grava normal
-//   - Registro DELETADO remoto  → preserva o delete remoto (não ressuscita)
-// ═══════════════════════════════════════════════════════════
-
-// Email do usuário logado, capturado no login. Usado em stamp e mensagens.
-function _currentUser() {
-  try {
-    const u = JSON.parse(sessionStorage.getItem('erp-user') || '{}');
-    return u.email || 'desconhecido';
-  } catch(e) { return 'desconhecido'; }
-}
-
-// Snapshot do estado quando a sessão carregou. Usado para detectar mudanças locais
-// (item.updatedAt > _sessionLoadedAt = mudei localmente nesta sessão).
-let _sessionLoadedAt = 0;
-
-// Marca todos os registros das coleções dirty com updatedAt/updatedBy ANTES de salvar.
-// Só estampa itens "tocados" — heurística: itens sem updatedAt OU updatedAt < _sessionLoadedAt
-// e que estão na coleção dirty. Mais simples: estampa todos da coleção dirty.
-// Esse "todos" é seguro porque o save granular já só toca abas modificadas.
-function _stampDirtyCollections(dirtySet) {
-  const now = new Date().toISOString();
-  const me = _currentUser();
-  dirtySet.forEach(colKey => {
-    const arr = S[colKey];
-    if (!Array.isArray(arr)) return;
-    arr.forEach(item => {
-      // Só estampa se o item tem mudança local (updatedAt vazio ou anterior ao load).
-      // Se item.updatedAt > _sessionLoadedAt, foi tocado nesta sessão → estampa.
-      // Se item.updatedAt < _sessionLoadedAt, está intacto → não estampa.
-      // Como não temos rastreio fino, estampamos todos com updatedAt vazio + os tocados.
-      // Heurística simples: estampa se updatedAt < _sessionLoadedAt OU vazio.
-      const t = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;
-      if (!t || t <= _sessionLoadedAt) {
-        item.updatedAt = now;
-        item.updatedBy = me;
-      }
-    });
-  });
-}
-
-// Lê SÓ as abas dirty do Sheets pra comparar. Retorna { colKey: [registros remotos] }.
-async function _fetchRemoteForCompare(dirtySet) {
-  const sheets = [...dirtySet].map(k => STATE_TO_SHEET[k]?.sheet).filter(Boolean);
-  if (sheets.length === 0) return {};
-  const ranges = sheets.map(s => `ranges=${s}!A1:ZZ10000`).join('&');
-  const res = await sheetsAPI('GET', `/${SHEET_ID}/values:batchGet?${ranges}&valueRenderOption=UNFORMATTED_VALUE`);
-  const out = {};
-  res.valueRanges?.forEach((vr, i) => {
-    const sheet = sheets[i];
-    const colKey = SHEET_TO_STATE[sheet];
-    if (!vr?.values || vr.values.length < 2) { out[colKey] = []; return; }
-    const headers = vr.values[0];
-    out[colKey] = vr.values.slice(1).map(row => {
-      const obj = {};
-      headers.forEach((h, j) => { obj[h] = row[j] || ''; });
-      return obj;
-    });
-  });
-  return out;
-}
-
-// Compara registros locais vs remotos. Retorna { resolved: estado merged, conflicts: [...] }.
-// Cada conflito: { colKey, id, local, remote, fields: [campos divergentes] }
-function _detectConflicts(dirtySet, remoteByCol) {
-  const conflicts = [];
-  const resolved = {};   // colKey → array final (sem conflitos pendentes)
-  const me = _currentUser();
-  const sessionT = _sessionLoadedAt;
-
-  dirtySet.forEach(colKey => {
-    const localAtivos = S[colKey] || [];
-    const localTrash = S.trash?.[colKey] || [];
-    const localAll = [...localAtivos, ...localTrash];      // tudo que vamos enviar
-    const remoteAll = remoteByCol[colKey] || [];
-
-    const remoteById = new Map(remoteAll.map(r => [String(r.id), r]));
-    const localById = new Map(localAll.map(l => [String(l.id), l]));
-    const allIds = new Set([...remoteById.keys(), ...localById.keys()]);
-
-    const finalArr = [];
-    allIds.forEach(id => {
-      const L = localById.get(id);
-      const R = remoteById.get(id);
-
-      // Caso 1: só local (registro novo criado nesta sessão)
-      if (L && !R) { finalArr.push(L); return; }
-      // Caso 2: só remoto (outro usuário criou enquanto eu estava online)
-      if (!L && R) { finalArr.push(R); return; }
-      // Caso 3: existe nos dois. Compara updatedAt.
-      const lT = L.updatedAt ? new Date(L.updatedAt).getTime() : 0;
-      const rT = R.updatedAt ? new Date(R.updatedAt).getTime() : 0;
-
-      // Eu mudei localmente? (updatedAt local > momento do load)
-      const iChanged = lT > sessionT;
-      // Outro mudou no Sheets desde meu load?
-      const otherChanged = rT > sessionT && R.updatedBy && R.updatedBy !== me;
-
-      if (iChanged && otherChanged) {
-        // Conflito real — coleta campos divergentes
-        const skip = new Set(['updatedAt','updatedBy']);
-        const allFields = new Set([...Object.keys(L), ...Object.keys(R)]);
-        const divergent = [];
-        allFields.forEach(f => {
-          if (skip.has(f)) return;
-          const lv = L[f] ?? '';
-          const rv = R[f] ?? '';
-          // Normaliza objetos pra comparação (docs/containers serializados como JSON no Sheets)
-          const lvs = typeof lv === 'object' ? JSON.stringify(lv) : String(lv);
-          const rvs = typeof rv === 'object' ? JSON.stringify(rv) : String(rv);
-          if (lvs !== rvs) divergent.push({ field: f, local: lv, remote: rv });
-        });
-        if (divergent.length === 0) {
-          // Mesmos dados, só timestamps diferentes — sem conflito real
-          finalArr.push(L);
-        } else {
-          conflicts.push({ colKey, id, local: L, remote: R, fields: divergent });
-          // Não inclui no finalArr ainda — espera resolução do usuário
-        }
-      } else if (otherChanged && !iChanged) {
-        // Só outro mudou → adota versão remota (silenciosamente)
-        finalArr.push(R);
-        // Atualiza estado local pra refletir o que veio
-        const arr = S[colKey];
-        const idx = arr.findIndex(x => String(x.id) === id);
-        if (idx >= 0) arr[idx] = R;
-      } else {
-        // Eu mudei (ou nenhum mudou) → minha versão prevalece
-        finalArr.push(L);
-      }
-    });
-
-    resolved[colKey] = finalArr;
-  });
-
-  return { resolved, conflicts };
-}
-
-// Modal que apresenta conflitos campo-a-campo e devolve a resolução.
-// Retorna Promise<{colKey, id, mergedItem} | null> (null = cancelar tudo).
-function _resolveConflictUI(conflict) {
-  return new Promise(resolve => {
-    const { colKey, id, local, remote, fields } = conflict;
-    const remoteBy = remote.updatedBy || 'outro usuário';
-    const remoteWhen = remote.updatedAt
-      ? new Date(remote.updatedAt).toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})
-      : '?';
-    const title = (() => {
-      if (colKey === 'processos')     return (local.id||'') + ' · ' + (local.cliente||'');
-      if (colKey === 'clientes')      return local.nome || local.id;
-      if (colKey === 'fornecedores')  return (local.tipo?local.tipo+': ':'') + (local.nome||local.id);
-      if (colKey === 'lancamentos')   return (local.descricao||local.id);
-      if (colKey === 'custosMensais') return (local.mes||'')+'/'+(local.ano||'');
-      return local.id;
-    })();
-
-    const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;font-family:Inter,sans-serif';
-    const fmtVal = (v) => {
-      if (v === '' || v === null || v === undefined) return '<i style="color:var(--muted)">(vazio)</i>';
-      if (typeof v === 'object') return escHtml(JSON.stringify(v));
-      return escHtml(String(v));
-    };
-    const fieldsHtml = fields.map((f, i) => `
-      <div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px">
-        <div style="font-weight:600;font-size:12px;color:var(--accent);margin-bottom:6px">${escHtml(f.field)}</div>
-        <label style="display:block;padding:6px;background:var(--bg3);border-radius:6px;margin-bottom:4px;cursor:pointer;font-size:12px">
-          <input type="radio" name="cf_${i}" value="local" checked style="margin-right:6px">
-          <strong>Minha versão:</strong> ${fmtVal(f.local)}
-        </label>
-        <label style="display:block;padding:6px;background:var(--bg3);border-radius:6px;cursor:pointer;font-size:12px">
-          <input type="radio" name="cf_${i}" value="remote" style="margin-right:6px">
-          <strong>Versão de ${escHtml(remoteBy)}:</strong> ${fmtVal(f.remote)}
-        </label>
-      </div>`).join('');
-
-    overlay.innerHTML = `
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;max-width:640px;width:100%;max-height:85vh;overflow-y:auto">
-        <div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:18px;color:var(--text);margin-bottom:6px">
-          ⚠️ Conflito de edição: ${escHtml(title)}
-        </div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:14px">
-          ${escHtml(remoteBy)} salvou alterações em ${escHtml(remoteWhen)}.
-          Escolha qual versão manter para cada campo divergente:
-        </div>
-        ${fieldsHtml}
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">
-          <button id="cf-all-local"  class="btn btn-secondary btn-xs">Tudo meu</button>
-          <button id="cf-all-remote" class="btn btn-secondary btn-xs">Tudo de ${escHtml(remoteBy)}</button>
-          <button id="cf-cancel"     class="btn btn-secondary btn-xs">Cancelar save</button>
-          <button id="cf-apply"      class="btn btn-primary btn-xs">Aplicar escolhas</button>
-        </div>
-      </div>`;
-    document.body.appendChild(overlay);
-
-    const setAll = (val) => {
-      overlay.querySelectorAll('input[type=radio]').forEach(r => {
-        if (r.value === val) r.checked = true;
-      });
-    };
-    overlay.querySelector('#cf-all-local').onclick  = () => setAll('local');
-    overlay.querySelector('#cf-all-remote').onclick = () => setAll('remote');
-    overlay.querySelector('#cf-cancel').onclick = () => {
-      overlay.remove();
-      resolve(null);
-    };
-    overlay.querySelector('#cf-apply').onclick = () => {
-      // Constrói item merged baseado nas escolhas
-      const merged = { ...remote };  // começa com remote pra herdar campos remotos não-conflitantes
-      Object.keys(local).forEach(k => {
-        if (k !== 'updatedAt' && k !== 'updatedBy' && !fields.find(f => f.field === k)) {
-          // Campos não-conflitantes do local também entram (pode ter coisas que remote não tem)
-          merged[k] = local[k];
-        }
-      });
-      fields.forEach((f, i) => {
-        const choice = overlay.querySelector(`input[name=cf_${i}]:checked`)?.value;
-        merged[f.field] = choice === 'remote' ? f.remote : f.local;
-      });
-      // Novo updatedAt + updatedBy = eu agora (a resolução é uma edição)
-      merged.updatedAt = new Date().toISOString();
-      merged.updatedBy = _currentUser();
-      overlay.remove();
-      resolve({ colKey, id, mergedItem: merged });
-    };
-  });
-}
-
-// Função pública chamada pelo saveToSheets antes de gravar.
-// Retorna true se pode salvar, false se usuário cancelou.
-// Modifica S[colKey] in-place para refletir merges + resoluções.
-async function _resolveConflictsBeforeSave(dirtySet) {
-  // Skip se for primeira escrita (nenhum updatedAt na sessão ainda)
-  if (!_sessionLoadedAt) return true;
-
-  let remote;
-  try {
-    remote = await _fetchRemoteForCompare(dirtySet);
-  } catch(e) {
-    // Se a leitura de comparação falhar, segue o save (não bloqueia por erro de rede)
-    console.warn('Conflict check skipped:', e.message);
-    return true;
-  }
-  const { resolved, conflicts } = _detectConflicts(dirtySet, remote);
-
-  // Resolução interativa dos conflitos
-  for (const c of conflicts) {
-    const result = await _resolveConflictUI(c);
-    if (!result) {
-      showToast('⚠️ Save cancelado pelo usuário');
-      return false;
-    }
-    // Atualiza estado local com merge
-    const arr = S[c.colKey];
-    const idx = arr.findIndex(x => String(x.id) === String(c.id));
-    if (idx >= 0) arr[idx] = result.mergedItem;
-    else arr.push(result.mergedItem);
-    logAction('resolveu-conflito', STATE_TO_SHEET[c.colKey].sheet, c.id,
-      `${c.fields.length} campo(s) conflitantes resolvidos`);
-  }
-
-  // Para coleções sem conflitos, mas com merges remotos silenciosos,
-  // _detectConflicts já atualizou S[colKey] in-place — ok.
-  return true;
-}
 
 // ── SETUP: Create sheets if they don't exist ──────────────
 async function setupSheets() {
@@ -5218,38 +4582,16 @@ async function loadFromSheets() {
         try { m.docs = JSON.parse(m.docs); } catch(e) { m.docs = {}; }
       } else if (!m.docs) { m.docs = {}; }
     });
-    // #2 — Separa ativos da lixeira por deletedAt antes de atribuir ao state
-    _ensureTrash();
-    const splitTrash = (arr, colKey) => {
-      const ativos = [], lixo = [];
-      arr.forEach(x => { (x.deletedAt ? lixo : ativos).push(x); });
-      S.trash[colKey] = lixo;
-      return ativos;
-    };
-    if (proc.length > 0)  S.processos     = splitTrash(proc,  'processos');
-    if (cli.length > 0)   S.clientes      = splitTrash(cli,   'clientes');
-    if (forn.length > 0)  S.fornecedores  = splitTrash(forn,  'fornecedores');
-    if (lanc.length > 0)  S.lancamentos   = splitTrash(lanc,  'lancamentos');
-    if (fixos.length > 0) S.custosMensais = splitTrash(fixos, 'custosMensais');
-
-    // Purga itens da lixeira com >TRASH_RETENTION_DAYS — se houve purga, força save
-    const purged = purgeOldTrash();
-    if (purged > 0) {
-      console.log(`Purga automática: ${purged} item(ns) removidos da lixeira (>${TRASH_RETENTION_DAYS} dias).`);
-      logAction('purga', 'LIXEIRA', '', `${purged} item(ns) > ${TRASH_RETENTION_DAYS}d removidos`);
-      // Marca todas as coleções como dirty pra que o próximo save reflita a purga
-      SOFT_DELETE_COLLECTIONS.forEach(c => _dirtyCollections.add(c));
-      scheduleAutoSave();
-    }
-
+    if (proc.length > 0) S.processos = proc;
+    if (cli.length > 0) S.clientes = cli;
+    if (forn.length > 0) S.fornecedores = forn;
+    if (lanc.length > 0) S.lancamentos = lanc;
+    if (fixos.length > 0) S.custosMensais = fixos;
     // Re-vincular S.sub ao objeto recém-carregado (mesmo ID, novo objeto em memória)
     if (S.sub && S.sub.id) {
       const refreshed = S.processos.find(p => p.id === S.sub.id);
       if (refreshed) S.sub = refreshed;
     }
-    // #4 — Marca momento do load. Edições posteriores (updatedAt > _sessionLoadedAt)
-    // são consideradas "minhas mudanças nesta sessão".
-    _sessionLoadedAt = Date.now();
     hideSyncIndicator();
     render();
   } catch(e) {
@@ -5259,24 +4601,7 @@ async function loadFromSheets() {
 }
 
 // ── SAVE: Write data to Sheets ────────────────────────────
-// Refactor #1: save granular por aba.
-// - saveToSheets()                → salva TUDO (5 abas) — mantém compat com chamadas antigas
-// - saveToSheets(['PROCESSOS'])   → salva só PROCESSOS
-// - saveToSheets(_dirtySet)       → salva só o que está sujo (usado pelo auto-save)
-// Mapa coleção-no-state → nome da aba. Fonte única, evita typos espalhados.
-// #2 — get() retorna [ativos, ...lixeira] para que o save preserve os soft-deletados no Sheets.
-const STATE_TO_SHEET = {
-  processos:     { sheet: 'PROCESSOS',    get: () => [...(S.processos     || []), ...(S.trash?.processos     || [])] },
-  clientes:      { sheet: 'CLIENTES',     get: () => [...(S.clientes      || []), ...(S.trash?.clientes      || [])] },
-  fornecedores:  { sheet: 'FORNECEDORES', get: () => [...(S.fornecedores  || []), ...(S.trash?.fornecedores  || [])] },
-  lancamentos:   { sheet: 'EXTRATO_CAIXA',get: () => [...(S.lancamentos   || []), ...(S.trash?.lancamentos   || [])] },
-  custosMensais: { sheet: 'CUSTOS_FIXOS', get: () => [...(S.custosMensais || []), ...(S.trash?.custosMensais || [])] },
-};
-const SHEET_TO_STATE = Object.fromEntries(
-  Object.entries(STATE_TO_SHEET).map(([k,v]) => [v.sheet, k])
-);
-
-async function saveToSheets(scope = null) {
+async function saveToSheets() {
   try {
     showSyncIndicator('Salvando...');
     const toRow = (obj, headers) => headers.map(h => {
@@ -5286,45 +4611,30 @@ async function saveToSheets(scope = null) {
       return v === null || v === undefined ? '' : String(v);
     });
 
-    // Resolve quais abas salvar.
-    // scope pode vir como: null (tudo) | Set de chaves do STATE | Array de chaves do STATE | Array de nomes de abas
-    let sheetsToSave;
-    if (!scope) {
-      sheetsToSave = Object.keys(STATE_TO_SHEET);
-    } else {
-      const arr = scope instanceof Set ? [...scope] : (Array.isArray(scope) ? scope : [scope]);
-      // Aceita tanto chave-do-state ('processos') quanto nome-da-aba ('PROCESSOS')
-      sheetsToSave = arr.map(x => STATE_TO_SHEET[x] ? x : SHEET_TO_STATE[x]).filter(Boolean);
-    }
-    if (sheetsToSave.length === 0) { hideSyncIndicator(); return; }
+    const headerData = SHEET_SCHEMA;  // J — usa o schema centralizado
+    const data = [
+      { sheet: 'PROCESSOS', items: S.processos },
+      { sheet: 'CLIENTES', items: S.clientes },
+      { sheet: 'FORNECEDORES', items: S.fornecedores },
+      { sheet: 'EXTRATO_CAIXA', items: S.lancamentos || [] },
+      { sheet: 'CUSTOS_FIXOS', items: S.custosMensais || [] },
+    ];
 
-    // #4 — Stamp dos updatedAt/updatedBy nos itens das coleções dirty
-    const dirtySet = new Set(sheetsToSave);
-    _stampDirtyCollections(dirtySet);
-
-    // #4 — Detecção de conflito multi-usuário: re-lê o remoto e compara antes de gravar.
-    // Se houver conflito, abre modal de resolução. Cancelar aborta o save (mantém local intacto).
-    const canSave = await _resolveConflictsBeforeSave(dirtySet);
-    if (!canSave) { hideSyncIndicator(); return; }
-
-    // Reconstrói `data` APÓS resolução — itens podem ter sido alterados pelo merge
-    const dataPost = sheetsToSave.map(key => ({
-      key,
-      sheet: STATE_TO_SHEET[key].sheet,
-      items: STATE_TO_SHEET[key].get(),
-    }));
-
-    // Limpa só as abas afetadas (evita linhas-fantasma após exclusão)
-    const clearRanges = dataPost.map(({sheet}) => `${sheet}!A1:ZZ10000`);
+    // FIX: limpa todo o conteúdo das abas ANTES de escrever
+    // (evita linhas-fantasma quando o array tem MENOS itens que antes — ex: após excluir)
+    const clearRanges = data.map(({sheet}) => `${sheet}!A1:ZZ10000`);
     try {
-      await sheetsAPI('POST', `/${SHEET_ID}/values:batchClear`, { ranges: clearRanges });
+      await sheetsAPI('POST', `/${SHEET_ID}/values:batchClear`, {
+        ranges: clearRanges
+      });
     } catch(clearErr) {
+      // Se o clear falhar, ainda tenta gravar (não é fatal — pode ser primeira vez)
       console.warn('Clear ranges error (não fatal):', clearErr.message);
     }
 
-    // Escreve cabeçalho + linhas das abas afetadas
-    const updates = dataPost.map(({sheet, items}) => {
-      const headers = SHEET_SCHEMA[sheet];
+    // Agora escreve os dados (cabeçalho + linhas)
+    const updates = data.map(({sheet, items}) => {
+      const headers = headerData[sheet];
       const rows = [headers, ...items.map(item => toRow(item, headers))];
       return { range: `${sheet}!A1`, values: rows };
     });
@@ -5333,17 +4643,16 @@ async function saveToSheets(scope = null) {
       valueInputOption: 'RAW',
       data: updates
     });
-    // #4 — Após save OK, avança o marco da sessão pra que minhas próprias mudanças
-    // recém-salvas não sejam vistas como "modificações da sessão" no próximo save
-    _sessionLoadedAt = Date.now();
     hideSyncIndicator();
-    // Toast só em full save (granular fica silencioso pra não poluir a UI)
-    if (!scope) showToast('✅ Dados salvos no Google Sheets');
+    showToast('✅ Dados salvos no Google Sheets');
   } catch(e) {
     hideSyncIndicator();
     showToast('⚠️ Erro ao salvar: ' + e.message);
   }
 }
+
+// ── AUTO-SAVE: Save after every state change ──────────────
+let _saveTimer = null;
 
 // #F — Audit log. Escreve assincronamente na aba LOG. Fila local para não bloquear UI.
 // Append-only: usa values:append (não rewrite). Falha silenciosa se rede cair.
@@ -5379,28 +4688,9 @@ async function _flushLogQueue() {
   }
 }
 
-// ── AUTO-SAVE: Save after every state change ─────────────────
-// #1 — Acumula em _dirtyCollections o que mudou. O flush salva só essas abas.
-// API:
-//   scheduleAutoSave()              → marca TODAS as coleções como dirty (fallback seguro)
-//   scheduleAutoSave('processos')   → marca só PROCESSOS
-//   scheduleAutoSave(['clientes','fornecedores']) → múltiplas
-// Chamadas antigas sem argumento continuam funcionando (full save) — comportamento conservador.
-let _saveTimer = null;
-const _dirtyCollections = new Set();
-function scheduleAutoSave(coll = null) {
-  // Marca dirty. Sem argumento = todas (compat com chamadas legadas).
-  if (coll == null) {
-    Object.keys(STATE_TO_SHEET).forEach(k => _dirtyCollections.add(k));
-  } else {
-    (Array.isArray(coll) ? coll : [coll]).forEach(k => {
-      if (STATE_TO_SHEET[k] || SHEET_TO_STATE[k]) {
-        _dirtyCollections.add(STATE_TO_SHEET[k] ? k : SHEET_TO_STATE[k]);
-      }
-    });
-  }
-
+function scheduleAutoSave() {
   // #A — Mirror local imediato (síncrono, não espera debounce nem rede)
+  // Protege contra: queda de internet, browser fechado antes do save remoto, falha do Sheets
   try {
     const backup = {
       processos: S.processos, clientes: S.clientes, fornecedores: S.fornecedores,
@@ -5409,15 +4699,13 @@ function scheduleAutoSave(coll = null) {
     };
     localStorage.setItem('erp-local-backup', JSON.stringify(backup));
   } catch(e) {
+    // Quota excedida? Tenta limpar backup antigo e seguir em frente
     try { localStorage.removeItem('erp-local-backup'); } catch(_) {}
   }
-
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
-    if (sessionStorage.getItem('erp-user') && window._sheetsToken && _dirtyCollections.size > 0) {
-      const snapshot = new Set(_dirtyCollections);
-      _dirtyCollections.clear();
-      saveToSheets(snapshot);
+    if (sessionStorage.getItem('erp-user') && window._sheetsToken) {
+      saveToSheets();
     }
   }, 2000); // 2 second debounce
 }
@@ -5563,7 +4851,7 @@ async function criarPastaProcesso(processo) {
     }
 
     hideSyncIndicator();
-    scheduleAutoSave('processos');
+    scheduleAutoSave();
     return { folderId, folderUrl };
   } catch(e) {
     hideSyncIndicator();
@@ -5590,174 +4878,6 @@ async function saveConfig(key, value) {
   } catch(e) {}
 }
 
-// Lê CONFIG e retorna o ÚLTIMO valor para a chave (já que saveConfig faz append).
-async function getConfig(key) {
-  try {
-    const res = await sheetsAPI('GET', `/${SHEET_ID}/values/CONFIG!A:B`);
-    const rows = res.values || [];
-    // Procura de trás pra frente pra pegar a versão mais recente
-    for (let i = rows.length - 1; i >= 0; i--) {
-      if (rows[i][0] === key) return rows[i][1] || '';
-    }
-  } catch(e) {}
-  return '';
-}
-
-// ═══════════════════════════════════════════════════════════
-// #3 — BACKUP DIÁRIO NO DRIVE
-// JSON snapshot completo em Fu Song ERP/Backups/backup-YYYY-MM-DD.json
-// Mantém os últimos BACKUP_RETENTION arquivos. Fire-and-forget pós-load.
-// ═══════════════════════════════════════════════════════════
-const BACKUP_FOLDER_NAME = 'Backups';
-const BACKUP_RETENTION = 30;
-const BACKUP_MIN_INTERVAL_MS = 22 * 60 * 60 * 1000;  // 22h — tolerância pra rodar 1x/dia
-
-async function _ensureBackupsFolder() {
-  if (window._backupsFolderId) return window._backupsFolderId;
-  const rootId = await getRootFolderId();
-  const id = await getOrCreateFolder(BACKUP_FOLDER_NAME, rootId);
-  window._backupsFolderId = id;
-  return id;
-}
-
-// Faz upload multipart de um arquivo JSON no Drive
-async function _uploadBackupFile(folderId, filename, jsonContent) {
-  const token = await getAccessToken();
-  const metadata = { name: filename, parents: [folderId], mimeType: 'application/json' };
-  const boundary = '-------fusongbackup' + Date.now();
-  const body =
-    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
-    JSON.stringify(metadata) +
-    `\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n` +
-    jsonContent +
-    `\r\n--${boundary}--`;
-  const res = await fetch(`${DRIVE_UPLOAD}/files?uploadType=multipart`, {
-    method: 'POST',
-    headers: {
-      'Authorization': 'Bearer ' + token,
-      'Content-Type': `multipart/related; boundary=${boundary}`
-    },
-    body
-  });
-  if (!res.ok) throw new Error('Backup upload falhou: ' + res.status);
-  return res.json();
-}
-
-// Lista arquivos de backup ordenados do mais recente pro mais antigo
-async function _listBackups(folderId) {
-  const q = `'${folderId}' in parents and trashed=false and mimeType='application/json'`;
-  const res = await driveAPI('GET', '/files', null,
-    `q=${encodeURIComponent(q)}&fields=files(id,name,createdTime)&orderBy=createdTime desc&pageSize=100`);
-  return res.files || [];
-}
-
-// Mantém só os BACKUP_RETENTION mais recentes — deleta o resto
-async function _rotateBackups(folderId) {
-  const files = await _listBackups(folderId);
-  if (files.length <= BACKUP_RETENTION) return 0;
-  const toDelete = files.slice(BACKUP_RETENTION);
-  let deleted = 0;
-  for (const f of toDelete) {
-    try {
-      await driveAPI('DELETE', '/files/' + f.id);
-      deleted++;
-    } catch(e) {
-      console.warn('Falha ao deletar backup antigo', f.name, e.message);
-    }
-  }
-  return deleted;
-}
-
-// Cria backup completo: snapshot do state em JSON
-async function createDailyBackup() {
-  const folderId = await _ensureBackupsFolder();
-  const today = new Date();
-  const dateStr = today.toISOString().slice(0, 10);  // YYYY-MM-DD
-  const filename = `backup-${dateStr}.json`;
-
-  // Se já existe backup de hoje, sobrescreve via delete+create (mais simples que update multipart)
-  const existing = await _listBackups(folderId);
-  const sameDay = existing.find(f => f.name === filename);
-  if (sameDay) {
-    try { await driveAPI('DELETE', '/files/' + sameDay.id); } catch(e) {}
-  }
-
-  const snapshot = {
-    version: 1,
-    createdAt: today.toISOString(),
-    createdBy: _currentUser(),
-    counts: {
-      processos: (S.processos||[]).length,
-      clientes: (S.clientes||[]).length,
-      fornecedores: (S.fornecedores||[]).length,
-      lancamentos: (S.lancamentos||[]).length,
-      custosMensais: (S.custosMensais||[]).length,
-      trashTotal: trashCount()
-    },
-    data: {
-      processos: S.processos || [],
-      clientes: S.clientes || [],
-      fornecedores: S.fornecedores || [],
-      lancamentos: S.lancamentos || [],
-      custosMensais: S.custosMensais || [],
-      trash: S.trash || {}
-    }
-  };
-  const jsonContent = JSON.stringify(snapshot, null, 2);
-
-  await _uploadBackupFile(folderId, filename, jsonContent);
-  const deleted = await _rotateBackups(folderId);
-
-  // Marca timestamp no CONFIG pra próxima verificação
-  await saveConfig('ultimoBackup', today.toISOString());
-
-  logAction('backup', 'DRIVE', filename,
-    `${snapshot.counts.processos}p / ${snapshot.counts.clientes}c / ${snapshot.counts.fornecedores}f / ${snapshot.counts.lancamentos}l` +
-    (deleted ? ` · rotação: -${deleted}` : ''));
-
-  return { filename, sizeBytes: jsonContent.length, deleted };
-}
-
-// Versão manual (botão sidebar) — mostra feedback. Bypassa o check de 22h.
-async function backupAgora() {
-  if (!window._sheetsToken) {
-    showToast('🔑 Conecte ao Drive primeiro');
-    return;
-  }
-  showSyncIndicator('Criando backup...');
-  try {
-    const result = await createDailyBackup();
-    hideSyncIndicator();
-    const sizeKB = (result.sizeBytes / 1024).toFixed(1);
-    showToast(`💾 Backup criado: ${result.filename} (${sizeKB} KB)`);
-  } catch(e) {
-    hideSyncIndicator();
-    showToast('⚠️ Backup falhou: ' + e.message);
-  }
-}
-
-
-// Fire-and-forget: chamado pós-load, falha silenciosa.
-async function checkAndRunDailyBackup() {
-  try {
-    const last = await getConfig('ultimoBackup');
-    if (last) {
-      const lastT = new Date(last).getTime();
-      if (Date.now() - lastT < BACKUP_MIN_INTERVAL_MS) return;  // ainda dentro do dia
-    }
-    // Só backup se há dados pra salvar
-    const total = (S.processos?.length||0) + (S.clientes?.length||0) +
-                  (S.fornecedores?.length||0) + (S.lancamentos?.length||0) +
-                  (S.custosMensais?.length||0);
-    if (total === 0) return;
-
-    const result = await createDailyBackup();
-    console.log('✅ Backup diário criado:', result.filename, `(${(result.sizeBytes/1024).toFixed(1)} KB)`);
-  } catch(e) {
-    console.warn('Backup diário falhou:', e.message);
-  }
-}
-
 // Open process Drive folder
 async function abrirPastaProcesso(p) {
   // If we have folder URL cached, open it directly
@@ -5769,7 +4889,7 @@ async function abrirPastaProcesso(p) {
   if (p.docs && p.docs._folderId && p.docs._folderId.length > 5) {
     const url = 'https://drive.google.com/drive/folders/' + p.docs._folderId;
     p.docs._folderUrl = url;
-    scheduleAutoSave('processos');
+    scheduleAutoSave();
     window.open(sanitizeUrl(url), '_blank', 'noopener,noreferrer');
     return;
   }
@@ -5788,7 +4908,7 @@ async function abrirPastaProcesso(p) {
     const result = await criarPastaProcesso(p);
     if (result && result.folderUrl) {
       // Force immediate save so folderId persists
-      await saveToSheets(['processos']);
+      await saveToSheets();
       window.open(sanitizeUrl(result.folderUrl), '_blank', 'noopener,noreferrer');
       render();
     } else {
@@ -5952,9 +5072,9 @@ async function processUploadFile(file, processId, docKey, docLabel) {
     }
     // Salvar imediatamente para não perder o documento ao navegar
     if (window._sheetsToken) {
-      await saveToSheets(['processos']);
+      await saveToSheets();
     } else {
-      scheduleAutoSave('processos');
+      scheduleAutoSave();
     }
 
     if (prog) { prog.style.display = 'block'; prog.innerHTML = '✅ Upload concluído! <a href="' + sanitizeUrl(result.url) + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent2)">Ver arquivo ↗</a>'; }
@@ -6200,7 +5320,7 @@ async function processUploadFileLanc(file){
       const linkInput = document.getElementById('doc-link-input-lanc');
       if (linkInput) linkInput.value = url;
       if (prog) prog.innerHTML = '✅ Upload concluído! <a href="' + sanitizeUrl(url) + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent2)">Ver arquivo ↗</a>';
-      if (window._sheetsToken) await saveToSheets(['lancamentos']); else scheduleAutoSave('lancamentos');
+      if (window._sheetsToken) await saveToSheets(); else scheduleAutoSave();
       showToast('✅ ' + file.name + ' enviado!');
       setTimeout(()=>{ document.getElementById('upload-modal')?.remove(); render(); }, 1200);
     }
@@ -6219,7 +5339,7 @@ function salvarLinkDocLanc(){
   if (!link) { showToast('⚠️ Cole um link válido'); return; }
   if (!setLancDocUrl(id, docKey, link)) { showToast('⚠️ Lançamento não encontrado'); return; }
   modal.remove();
-  if (window._sheetsToken) saveToSheets(['lancamentos']); else scheduleAutoSave('lancamentos');
+  if (window._sheetsToken) saveToSheets(); else scheduleAutoSave();
   render();
   showToast('✅ Link salvo!');
 }
@@ -6232,7 +5352,7 @@ async function removerDocLanc(){
   if (!await uiConfirm('Remover este anexo? O arquivo continua no Drive — apenas o vínculo será removido.', 'Remover anexo', 'Remover', 'Cancelar')) return;
   setLancDocUrl(id, docKey, '');
   modal.remove();
-  if (window._sheetsToken) saveToSheets(['lancamentos']); else scheduleAutoSave('lancamentos');
+  if (window._sheetsToken) saveToSheets(); else scheduleAutoSave();
   render();
   showToast('✅ Anexo removido');
 }
@@ -6246,9 +5366,9 @@ function salvarLinkDoc(processId, docKey) {
     p.docs[docKey] = link;
     // Salvar imediatamente para não perder o documento ao navegar
     if (window._sheetsToken) {
-      saveToSheets(['processos']);
+      saveToSheets();
     } else {
-      scheduleAutoSave('processos');
+      scheduleAutoSave();
     }
     render();
   }
