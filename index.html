@@ -1285,7 +1285,7 @@ function renderProcessos(){
 
 function renderProcessoDetalhe(p){
   const custo=tc(p); const lucro=(p.cambioReais||0)-custo;
-  const docItems=[['invoice','📄 Invoice'],['contrato','📃 Contrato'],['packingList','📦 Packing List'],['bl','🚢 BL - Bill of Lading'],['due','🏛️ DU-E'],['nfe','🧾 NF-e'],['comprovantes','🖨️ Comprovantes Câmbio'],['certOrigem','🌐 Cert. Origem'],['seguro','🛡️ Seguro de Carga'],['pesagem','⚖️ Laudo de Pesagem'],['outros','📁 Outros Documentos']];
+  const docItems=[['invoice','📄 Invoice'],['contrato','📃 Contrato'],['packingList','📦 Packing List'],['bl','🚢 BL - Bill of Lading'],['due','🏛️ DU-E'],['nfe','🧾 NF-E Entrada'],['nfeSaida','🧾 NF-E Saída'],['comprovantes','🖨️ Comprovantes Câmbio'],['certOrigem','🌐 Cert. Origem'],['seguro','🛡️ Seguro de Carga'],['pesagem','⚖️ Pesagem'],['outros','📁 Outros Documentos']];
   return `
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap">
     <button class="btn btn-secondary btn-sm" onclick="goBack()"><span style="font-size:15px">←</span> Voltar</button>
