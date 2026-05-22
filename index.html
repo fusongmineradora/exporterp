@@ -607,6 +607,14 @@ const hasComprovante = docs => {
   return keys.some(k => docs[k] && String(docs[k]).length > 0);
 };
 
+// Calcula taxa cambial: Valor em Reais ÷ Valor Recebido (USD)
+const calcTaxa = (reais, recebido) => {
+  const r = parseFloat(reais)||0;
+  const rec = parseFloat(recebido)||0;
+  if (rec <= 0) return 0;
+  return r / rec;
+};
+
 const badge = s=>{
   const m={'Embarcado':'emb','No Porto':'porto','No Armazém':'arm','Indo para Armazém':'transit','A Coletar':'col','No Destino':'emb','Concluído':'emb','Cancelado':'cancelado'};
   const i={'Embarcado':'🚢','No Porto':'⚓','No Armazém':'🏭','Indo para Armazém':'🚚','A Coletar':'📦','No Destino':'🏁','Concluído':'✅','Cancelado':'❌'};
@@ -1322,7 +1330,7 @@ function renderProcessoDetalhe(p){
   <div class="card">
     <div class="card-title"><div class="card-title-left">🗓️ Booking</div></div>
     <div class="g4">
-      ${F('Companhia',p.companhia)}${F('Nº Booking',p.booking,true)}${F('Container',p.container,true)}${F('Qtd',p.qtdContainer)}
+      ${F('Companhia',p.companhia)}${F('Nº Booking',p.booking,true)}${F('Container',(p.containers && p.containers.length>0 ? p.containers.filter(c=>c).join(', ') : '') || p.container,true)}${F('Qtd',p.qtdContainer)}
       ${F('Saída do Navio',p.saida)}${F('Dead Line Carga',p.deadlineCarga)}${F('Dead Line Draft',p.deadlineDraft)}
     </div>
   </div>
@@ -1351,7 +1359,7 @@ function renderProcessoDetalhe(p){
       <div class="g2">
         ${F('Valor Invoice','USD '+fmt(p.cambioInvoice))}${F('Valor Recebido','USD '+fmt(p.cambioRecebido))}
         ${F('IOF','R$ '+fmt(p.cambioIOF))}${F('Spread Bancário','R$ '+fmt(p.cambioSpread))}
-        ${F('Taxa Cambial','R$ '+(p.cambioTaxa||0).toFixed(2))}${F('Valor em Reais','R$ '+fmt(p.cambioReais))}
+        ${F('Taxa Cambial','R$ '+(p.cambioTaxa||0).toFixed(4))}${F('Valor em Reais','R$ '+fmt(p.cambioReais))}
         ${F('Fechamento',p.cambioFechamento)}${F('Recebimento',p.cambioRecebimento)}
       </div>
       ${F('Banco',p.cambioBanco)} ${F('Status Câmbio',normalizeStatus(p.cambioStatus||'Em Aberto'))}
@@ -1567,7 +1575,7 @@ function renderProcessoForm(p){
       ${IG('Valor Recebido (USD)','cambioRecebido',d('cambioRecebido',''),'number')}
       ${IG('IOF (R$)','cambioIOF',d('cambioIOF',''),'number')}
       ${IG('Spread Bancário (R$)','cambioSpread',d('cambioSpread',''),'number')}
-      ${IG('Taxa Cambial (R$)','cambioTaxa',d('cambioTaxa',''),'number')}
+      <div class="ig"><label class="lbl">Taxa Cambial (R$) <span style="font-size:9px;color:var(--muted)">(calculada)</span></label><input type="number" id="f_cambioTaxa" value="${(p&&p.cambioTaxa)||''}" readonly style="background:var(--surface2);color:var(--muted2)"/></div>
       ${IG('Valor em Reais (R$)','cambioReais',d('cambioReais',''),'number')}
     </div>
     <div class="g2">
@@ -1841,7 +1849,7 @@ function renderCambio(){
       <div class="sec-divider"><div class="sec-divider-line"></div><div class="sec-divider-label">Pré-Embarque</div><div class="sec-divider-line"></div></div>
       <div class="g3">
         ${IG('Valor Invoice (USD)','nc_invoiceVal','','number')}
-        ${IG('Taxa Cambial (R$)','nc_taxa','','number')}
+        <div class="ig"><label class="lbl">Taxa Cambial (R$) <span style="font-size:9px;color:var(--muted)">(calculada)</span></label><input type="number" id="nc_taxa" readonly style="background:var(--surface2);color:var(--muted2)"/></div>
         ${IG('Data Fechamento','nc_fechamento','')}
       </div>
 
@@ -4153,6 +4161,19 @@ function attachEvents(){
   // Salvar câmbio
   const saveCambio = document.getElementById('btn-salvar-cambio');
   if(saveCambio){
+    // Recalcular taxa cambial ao vivo
+    const _ncRec = document.getElementById('nc_recebido');
+    const _ncReais = document.getElementById('nc_reais');
+    const _ncTaxa = document.getElementById('nc_taxa');
+    const _ncUpdateTaxa = () => {
+      if (!_ncTaxa) return;
+      const t = calcTaxa(_ncReais?.value, _ncRec?.value);
+      _ncTaxa.value = t > 0 ? t.toFixed(4) : '';
+    };
+    if (_ncRec) _ncRec.addEventListener('input', _ncUpdateTaxa);
+    if (_ncReais) _ncReais.addEventListener('input', _ncUpdateTaxa);
+    // Recalcular ao popular (edição de operação existente)
+    setTimeout(_ncUpdateTaxa, 50);
     saveCambio.addEventListener('click',async ()=>{
       const gv = id=>{ const el=document.getElementById(id); return el?sanitize(el.value):''; };
       const gn = id=>{ const el=document.getElementById(id); return parseFloat(el?.value)||0; };
@@ -4163,12 +4184,14 @@ function attachEvents(){
       const obj = {
         invoiceNum:gv('nc_invoiceNum'), contratoNum:gv('nc_contratoNum'),
         cambioBanco:gv('nc_banco'), cambioStatus:normalizeStatus(gv('nc_status')),
-        cambioInvoice:gn('nc_invoiceVal'), cambioTaxa:gn('nc_taxa'),
+        cambioInvoice:gn('nc_invoiceVal'),
         cambioFechamento:gv('nc_fechamento'), dueNumero:gv('nc_due'),
         dueChave:gv('nc_chave'), cambioRecebimento:gv('nc_recebimento'),
         cambioRecebido:gn('nc_recebido'), cambioIOF:gn('nc_iof'),
         cambioSpread:gn('nc_spread'), cambioReais:gn('nc_reais'),
       };
+      // Taxa calculada automaticamente: Reais ÷ Recebido
+      obj.cambioTaxa = calcTaxa(obj.cambioReais, obj.cambioRecebido);
       Object.assign(p, obj);
       S.cambioTab='lista';
       logAction('editar', 'PROCESSOS', procId, 'câmbio R$ '+(obj.cambioReais||0).toFixed(2)+' ['+obj.cambioStatus+']');
@@ -4188,6 +4211,17 @@ function attachEvents(){
   }
 
   const saveBtn=document.getElementById('btn-save-proc');
+  // Recalcular taxa cambial ao vivo conforme digita Reais ou Recebido
+  const _recRec = document.getElementById('f_cambioRecebido');
+  const _recReais = document.getElementById('f_cambioReais');
+  const _recTaxa = document.getElementById('f_cambioTaxa');
+  const _updateTaxaLive = () => {
+    if (!_recTaxa) return;
+    const t = calcTaxa(_recReais?.value, _recRec?.value);
+    _recTaxa.value = t > 0 ? t.toFixed(4) : '';
+  };
+  if (_recRec) _recRec.addEventListener('input', _updateTaxaLive);
+  if (_recReais) _recReais.addEventListener('input', _updateTaxaLive);
   if(saveBtn) saveBtn.addEventListener('click',async ()=>{
     const fields=['id','invoiceNum','contratoNum','status','embarque','peso',
       'cliente','usci','clienteTel','clienteEmail','clienteAdd',
@@ -4206,6 +4240,8 @@ function attachEvents(){
     obj.container = containers[0]||'';
     obj.containers = containers;
     obj.qtdContainer = String(qty);
+    // Taxa calculada automaticamente: Reais ÷ Recebido (sobrescreve qualquer valor digitado)
+    obj.cambioTaxa = calcTaxa(obj.cambioReais, obj.cambioRecebido);
     // Collect custo status
     ['custoMaritimo','custoFrete','custoCertificado','custoArmazem','custoPorto','custoDespachante','custoServTerceiros','custoImpostos','custoProduto'].forEach(k=>{
       const sel=document.getElementById('f_'+k+'_status');
@@ -4557,6 +4593,8 @@ async function loadFromSheets() {
        'custoDespachante','custoServTerceiros','custoImpostos','custoProduto',
        'cambioInvoice','cambioTaxa','cambioReais','cambioIOF','cambioSpread','cambioRecebido'
       ].forEach(k => { p[k] = parseFloat(p[k]) || 0; });
+      // Recalcular taxa cambial automaticamente: Reais ÷ Recebido
+      p.cambioTaxa = calcTaxa(p.cambioReais, p.cambioRecebido);
       if (p.containers && typeof p.containers === 'string') {
         try {
           const parsed = JSON.parse(p.containers);
