@@ -2135,6 +2135,8 @@ function renderCustos(){
     const lucro = totalReceitas - totalCustos;
     const totalPagos = entries.filter(e => e.tipo==='Despesa' && e.status==='Pago').length;
     const totalDespesas = entries.filter(e => e.tipo==='Despesa').length;
+    const valorPago = entries.filter(e => e.tipo==='Despesa' && e.status==='Pago').reduce((a,e)=>a+(e.valor||0), 0);
+    const valorAPagar = totalCustos - valorPago;
     const expanded = S.procExpanded.has(p.id);
 
     // Linha de subtítulo do header
@@ -2179,6 +2181,10 @@ function renderCustos(){
           <div style="font-size:9.5px;color:var(--muted);letter-spacing:1.3px;text-transform:uppercase;font-weight:600;margin-bottom:4px">💸 Custo</div>
           <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:16px;color:var(--red)">R$ ${fmt(totalCustos)}</div>
           <div style="font-size:10px;color:var(--muted2);margin-top:2px">${totalDespesas} itens · ${totalPagos} pagos</div>
+          <div style="display:flex;flex-direction:column;gap:1px;margin-top:6px;padding-top:6px;border-top:1px dashed var(--border)">
+            <div style="font-size:10px;color:var(--muted2)">✅ Pago: <span style="color:var(--green);font-weight:700;font-family:'JetBrains Mono',monospace">R$ ${fmt(valorPago)}</span></div>
+            <div style="font-size:10px;color:var(--muted2)">⏳ A Pagar: <span style="color:var(--yellow);font-weight:700;font-family:'JetBrains Mono',monospace">R$ ${fmt(valorAPagar)}</span></div>
+          </div>
         </div>
         <div style="padding:12px 14px">
           <div style="font-size:9.5px;color:var(--muted);letter-spacing:1.3px;text-transform:uppercase;font-weight:600;margin-bottom:4px">📈 Lucro</div>
