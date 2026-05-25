@@ -3574,16 +3574,9 @@ async function salvarAutoLancamento() {
 function abrirDocLanc(id, docKey){
   const f = findLancamento(id);
   if(!f) return;
-  // Para manuais, abre direto se já tem doc
-  if(f.kind === 'manual'){
-    const l = f.entry;
-    const hasDoc = l.docs && l.docs[docKey] && String(l.docs[docKey]).length>0;
-    if(hasDoc){ window.open(sanitizeUrl(l.docs[docKey]),'_blank','noopener,noreferrer'); return; }
-    abrirModalLancamento(id);
-    return;
-  }
-  // Para automáticos, abre o modal de upload diretamente
+  // Abre o modal de upload diretamente para todos os tipos (manual e automático)
   // Os docs ficam guardados em:
+  //   manuais[].docs[docKey]
   //   processos[].docs._lancCambio[docKey]                   (câmbio do processo)
   //   processos[].docs._lanc_<field>[docKey]                 (custos do processo)
   //   custosMensais[0].docs.<field>[docKey]                  (custos fixos)
@@ -5240,32 +5233,23 @@ async function uploadFileForLanc(file, id, docKey) {
     const rootId = await getRootFolderId();
 
     // Determinar pasta de destino
+    const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
     let destFolderId = null;
     if (f.kind === 'manual') {
+      // Lançamentos manuais: pasta mensal "<Mês>/<Ano> - Comprovantes" na raiz
       const l = f.entry;
-      // Se está vinculado a processo, usar pasta do processo / Comprovantes
-      if (l.vinculo === 'processo' && l.vinculoId) {
-        const p = S.processos.find(x => x.id === l.vinculoId);
-        if (p) {
-          let procFolderId = p.docs?._folderId;
-          if (!procFolderId) {
-            const r = await criarPastaProcesso(p);
-            procFolderId = r?.folderId;
-          }
-          if (procFolderId) destFolderId = await getOrCreateFolder('Comprovantes', procFolderId);
-        }
+      let mesAno = null;
+      if (l.data && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(l.data)) {
+        const [,mm,yy] = l.data.split('/');
+        mesAno = (meses[parseInt(mm,10)-1] || mm) + '/' + yy;
       }
-      // Se não tem processo: pasta raiz / Comprovantes <Mês/Ano>
-      if (!destFolderId) {
-        const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-        let mesAno = 'Sem Data';
-        if (l.data && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(l.data)) {
-          const [,mm,yy] = l.data.split('/');
-          mesAno = (meses[parseInt(mm,10)-1] || mm) + '/' + yy;
-        }
-        destFolderId = await getOrCreateFolder('Comprovantes ' + mesAno, rootId);
+      if (!mesAno) {
+        const hoje = new Date();
+        mesAno = meses[hoje.getMonth()] + '/' + hoje.getFullYear();
       }
+      destFolderId = await getOrCreateFolder(mesAno + ' - Comprovantes', rootId);
     } else if (f.kind === 'auto-cambio' || f.kind === 'auto-cost') {
+      // Automáticos de processo: pasta do processo / Comprovantes
       const p = f.processo;
       let procFolderId = p.docs?._folderId;
       if (!procFolderId) {
@@ -5274,6 +5258,7 @@ async function uploadFileForLanc(file, id, docKey) {
       }
       if (procFolderId) destFolderId = await getOrCreateFolder('Comprovantes', procFolderId);
     } else if (f.kind === 'auto-fixo') {
+      // Custos fixos: pasta raiz / Comprovantes Fixos <Mês/Ano>
       const m = f.fixo;
       const mesAno = (m.mes||'Sem Data') + (m.ano?'/'+m.ano:'');
       destFolderId = await getOrCreateFolder('Comprovantes Fixos ' + mesAno, rootId);
