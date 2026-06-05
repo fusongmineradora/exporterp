@@ -698,6 +698,17 @@ function uiPrompt(msg, defaultValue='', title='Digite'){
 // Apóstrofes e aspas são MANTIDAS porque escHtml() escapa na renderização.
 // Preserva nomes legítimos como "L'Oréal", "O'Hara", endereços com aspas, etc.
 const sanitize=s=>String(s||'').replace(/[<>`]/g,'').trim();
+// Lê o container de um processo, com fallback do array para o campo singular legado.
+// Retorna string vazia se não houver. Use o segundo argumento como placeholder visual.
+const getContainer = (p, placeholder = '—') => {
+  if(!p) return placeholder;
+  if(Array.isArray(p.containers)){
+    const first = p.containers.find(c => c && String(c).trim());
+    if(first) return String(first).trim();
+  }
+  const c = String(p.container || '').trim();
+  return c || placeholder;
+};
 const sanitizeUrl=s=>{
   const u=String(s||'').trim();
   return (u.startsWith('http://') || u.startsWith('https://')) ? u : '';
@@ -1149,7 +1160,7 @@ function renderDashboard(){
               <div style="font-family:'Outfit',sans-serif;font-weight:700;color:var(--accent);font-size:13px;letter-spacing:-0.3px">${p.id}
                 <span style="color:var(--muted2);font-weight:400;font-size:11px">· ${p.produto}</span>
               </div>
-              <div style="color:var(--muted2);font-size:11px;margin-top:2px">${p.companhia} · ${p.container}</div>
+              <div style="color:var(--muted2);font-size:11px;margin-top:2px">${p.companhia} · ${escHtml(getContainer(p))}</div>
             </div>
             <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
               ${badge(p.status)}
@@ -1247,7 +1258,7 @@ function renderDashboard(){
       <div class="card-title"><div class="card-title-left">📡 Rastreamento</div><span style="color:var(--muted);font-size:9px">ABRIR →</span></div>
       ${S.processos.filter(p=>p.status==='Embarcado').map(p=>`
         <div style="padding:6px 0;border-bottom:1px solid var(--border)">
-          <div style="font-size:11px;color:var(--accent);font-weight:700">${p.container}</div>
+          <div style="font-size:11px;color:var(--accent);font-weight:700">${escHtml(getContainer(p))}</div>
           <div style="font-size:10px;color:var(--muted)">${p.pol} → ${p.pod}</div>
         </div>`).join('')||`<div style="color:var(--muted);font-size:12px;padding:10px 0">Nenhuma carga em trânsito</div>`}
     </div>
@@ -1281,7 +1292,7 @@ function renderProcessos(){
       <div style="flex:1">
         <div class="proc-id">${p.id} <span style="color:var(--muted);font-weight:400;font-size:11px">· ${p.produto} · Embarque ${p.embarque}</span></div>
         <div style="color:var(--muted2);font-size:11.5px;margin:3px 0">${p.pol} → ${p.pod} · ${p.companhia} · Saída: ${p.saida}</div>
-        <div style="color:var(--muted);font-size:10.5px">Container: ${p.container} · Booking: ${p.booking}</div>
+        <div style="color:var(--muted);font-size:10.5px">Container: ${escHtml(getContainer(p))} · Booking: ${p.booking}</div>
       </div>
       <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:6px">
         ${badge(p.status)}
@@ -1675,8 +1686,9 @@ function renderRastreamento(){
       <div style="color:var(--muted2);font-size:12px">Quando um processo estiver com status "Indo para Armazém", "No Armazém", "No Porto" ou "Embarcado", ele aparecerá aqui automaticamente.</div>
     </div>
   ` : emTransito.map(p => {
-    const trackingOk = trackUrl(p.companhia, p.container);
-    const containerLimpo = (p.container||'').trim().toUpperCase();
+    const containerRaw = getContainer(p, '');
+    const trackingOk = trackUrl(p.companhia, containerRaw);
+    const containerLimpo = containerRaw.toUpperCase();
     const hasContainer = containerLimpo.length > 0;
     const compLabel = compNome(p.companhia);
 
@@ -3574,9 +3586,16 @@ async function salvarAutoLancamento() {
 function abrirDocLanc(id, docKey){
   const f = findLancamento(id);
   if(!f) return;
-  // Abre o modal de upload diretamente para todos os tipos (manual e automático)
+  // Para manuais, abre direto se já tem doc
+  if(f.kind === 'manual'){
+    const l = f.entry;
+    const hasDoc = l.docs && l.docs[docKey] && String(l.docs[docKey]).length>0;
+    if(hasDoc){ window.open(sanitizeUrl(l.docs[docKey]),'_blank','noopener,noreferrer'); return; }
+    abrirModalLancamento(id);
+    return;
+  }
+  // Para automáticos, abre o modal de upload diretamente
   // Os docs ficam guardados em:
-  //   manuais[].docs[docKey]
   //   processos[].docs._lancCambio[docKey]                   (câmbio do processo)
   //   processos[].docs._lanc_<field>[docKey]                 (custos do processo)
   //   custosMensais[0].docs.<field>[docKey]                  (custos fixos)
@@ -5233,23 +5252,32 @@ async function uploadFileForLanc(file, id, docKey) {
     const rootId = await getRootFolderId();
 
     // Determinar pasta de destino
-    const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
     let destFolderId = null;
     if (f.kind === 'manual') {
-      // Lançamentos manuais: pasta mensal "<Mês>/<Ano> - Comprovantes" na raiz
       const l = f.entry;
-      let mesAno = null;
-      if (l.data && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(l.data)) {
-        const [,mm,yy] = l.data.split('/');
-        mesAno = (meses[parseInt(mm,10)-1] || mm) + '/' + yy;
+      // Se está vinculado a processo, usar pasta do processo / Comprovantes
+      if (l.vinculo === 'processo' && l.vinculoId) {
+        const p = S.processos.find(x => x.id === l.vinculoId);
+        if (p) {
+          let procFolderId = p.docs?._folderId;
+          if (!procFolderId) {
+            const r = await criarPastaProcesso(p);
+            procFolderId = r?.folderId;
+          }
+          if (procFolderId) destFolderId = await getOrCreateFolder('Comprovantes', procFolderId);
+        }
       }
-      if (!mesAno) {
-        const hoje = new Date();
-        mesAno = meses[hoje.getMonth()] + '/' + hoje.getFullYear();
+      // Se não tem processo: pasta raiz / Comprovantes <Mês/Ano>
+      if (!destFolderId) {
+        const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+        let mesAno = 'Sem Data';
+        if (l.data && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(l.data)) {
+          const [,mm,yy] = l.data.split('/');
+          mesAno = (meses[parseInt(mm,10)-1] || mm) + '/' + yy;
+        }
+        destFolderId = await getOrCreateFolder('Comprovantes ' + mesAno, rootId);
       }
-      destFolderId = await getOrCreateFolder(mesAno + ' - Comprovantes', rootId);
     } else if (f.kind === 'auto-cambio' || f.kind === 'auto-cost') {
-      // Automáticos de processo: pasta do processo / Comprovantes
       const p = f.processo;
       let procFolderId = p.docs?._folderId;
       if (!procFolderId) {
@@ -5258,7 +5286,6 @@ async function uploadFileForLanc(file, id, docKey) {
       }
       if (procFolderId) destFolderId = await getOrCreateFolder('Comprovantes', procFolderId);
     } else if (f.kind === 'auto-fixo') {
-      // Custos fixos: pasta raiz / Comprovantes Fixos <Mês/Ano>
       const m = f.fixo;
       const mesAno = (m.mes||'Sem Data') + (m.ano?'/'+m.ano:'');
       destFolderId = await getOrCreateFolder('Comprovantes Fixos ' + mesAno, rootId);
