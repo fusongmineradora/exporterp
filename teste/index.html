@@ -4683,11 +4683,7 @@ async function _loadFromSheetsBase() {
         try { m.docs = JSON.parse(m.docs); } catch(e) { m.docs = {}; }
       } else if (!m.docs) { m.docs = {}; }
     });
-    if (proc.length > 0) S.processos = proc;
-    if (cli.length > 0) S.clientes = cli;
-    if (forn.length > 0) S.fornecedores = forn;
-    if (lanc.length > 0) S.lancamentos = lanc;
-    if (fixos.length > 0) S.custosMensais = fixos;
+    S.processos = proc; S.clientes = cli; S.fornecedores = forn; S.lancamentos = lanc; S.custosMensais = fixos;
     // Re-vincular S.sub ao objeto recém-carregado (mesmo ID, novo objeto em memória)
     if (S.sub && S.sub.id) {
       const refreshed = S.processos.find(p => p.id === S.sub.id);
