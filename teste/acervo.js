@@ -188,6 +188,7 @@ async function criarProcessoDoDoc(i) {
   S.processos.push(p);
   garantirCliente(p);
   logAction('criar', 'PROCESSOS', p.id, (p.cliente || '') + ' · ' + (p.produto || '') + ' (pela invoice/contrato)');
+  vincularCambiosExistentes(p);
   try {
     await saveToSheets();
     await criarPastaProcesso(p);
@@ -215,8 +216,228 @@ async function importarPastaProcesso() {
   const p = montarProcesso({ proc: id, nome: id, id: '' }, null, null);
   S.processos.push(p);
   logAction('criar', 'PROCESSOS', p.id, 'pela pasta do Drive (sem invoice)');
+  vincularCambiosExistentes(p);
   try { await saveToSheets(); await criarPastaProcesso(p); await saveToSheets(); } catch (e) { showToast('⚠️ ' + (e.message || e)); }
   reidentificarPendentes();
   showToast('✅ Processo ' + id + ' criado — confira e anexe os arquivos');
   render();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Documentos → campos do processo
+// · notas/CT-e/NFS-e = valor devido do custo (Em Aberto); comprovante/recibo = pago
+// · CT-e/MDF-e = transportadora, cidade de origem, data de embarque, endereço de entrega
+// · DU-E = número e chave · contrato de câmbio = USD, taxa, reais, datas
+// Tudo é refeito a partir de docs._custoDocs / _cambioDocs (sem somar duas vezes o mesmo arquivo).
+// ═══════════════════════════════════════════════════════════════
+const CAMPO_POR_CATEG = {
+  'Frete Marítimo': 'custoMaritimo', 'Frete Rodoviário': 'custoFrete', 'Certificado de Origem': 'custoCertificado',
+  'Armazém': 'custoArmazem', 'Porto / Taxas': 'custoPorto', 'Despachante': 'custoDespachante',
+  'Serviços de Terceiros': 'custoServTerceiros', 'Impostos': 'custoImpostos', 'Produto': 'custoProduto',
+};
+const DOCS_COM_CUSTO = ['pagamento', 'recibo', 'nfe', 'cte', 'nfse'];
+const MESES_PT = { janeiro: '01', fevereiro: '02', marco: '03', 'março': '03', abril: '04', maio: '05', junho: '06', julho: '07', agosto: '08', setembro: '09', outubro: '10', novembro: '11', dezembro: '12' };
+const titulo = s => String(s || '').toLowerCase().replace(/(^|[\s\/-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase()).replace(/\b(Ltda|S\.?a\.?|Me|Epp)\b/gi, x => x.toUpperCase()).replace(/([\s\/-])([A-Za-z]{2})$/, (m, a, b) => a + b.toUpperCase());
+const dataBrDe = t => { const m = String(t || '').match(/\b(\d{2}\/\d{2}\/\d{4})\b/); return m ? m[1] : ''; };
+
+function enriquecerInfo(item) {
+  const T = String(item.texto || ''), U = T.replace(/\s+/g, ' ');
+  const info = item.info = item.info || {};
+  const mx = re => { const m = U.match(re); return m ? m[1].trim() : ''; };
+  if (item.tipo === 'cte' || item.tipo === 'mdfe') {
+    if (!info.transportadora) info.transportadora = info.emitNome || mx(/EMITENTE:\s*([A-ZÀ-Ú0-9 .&-]+?(?:LTDA|S\.?A\.?|EIRELI|ME)\b)/i) || mx(/\b([A-ZÀ-Ú][A-ZÀ-Ú .&-]{3,60}TRANSPORTES?\s+(?:LTDA|S\.?A\.?|EIRELI|ME))\b/);
+    const rota = U.replace(/(?:ORIGEM|DESTINO) DA PRESTA[CÇ][AÃ]O/gi, '|').match(/\|[\s|]*([A-ZÀ-Ú][A-ZÀ-Ú ]+?)\s+-\s+([A-Z]{2})\s+-\s+\d{7}[\s|]{0,20}?([A-ZÀ-Ú][A-ZÀ-Ú ]+?)\s+-\s+([A-Z]{2})\s+-\s+\d{7}/);
+    if (rota && !info.munIni) { info.munIni = titulo(rota[1]) + ' / ' + rota[2]; info.munFim = titulo(rota[3]) + ' / ' + rota[4]; }
+    if (!info.data) { const d = dataBrDe(U); if (d) info.data = brToIso(d); }
+    if (!info.valor) info.valor = numBR(mx(/VALOR A RECEBER\s+([\d.]+,\d{2})/i) || mx(/VALOR TOTAL DO SERVI[CÇ]O\s+(?:VALOR FRETE\s+)?([\d.]+,\d{2})/i));
+    info.endEntrega = info.endEntrega || mx(/END\.?\s*ENT\.?:\s*(.+?)(?:\s{2,}|DADOS ESPEC|$)/i);
+  }
+  if (item.tipo === 'nfe') {
+    if (!info.emitNome) info.emitNome = mx(/RECEBEMOS DE\s+(.+?)\s+OS PRODUTOS/i);
+    if (!info.valor) info.valor = valorDanfe(T);
+    if (!info.data) { const d = mx(/DATA (?:DA )?EMISS[AÃ]O[\s\S]{0,120}?(\d{2}\/\d{2}\/\d{4})/i) || dataBrDe(U); if (d) info.data = brToIso(d); }
+    if (!info.transpNome) info.transpNome = mx(/TRANSPORTADOR[\s\S]{0,140}?CNPJ \/ CPF\s+([A-ZÀ-Ú][A-ZÀ-Ú .&-]{3,60}?)\s+\d-/i);
+  }
+  if (item.tipo === 'nfse') {
+    if (!info.emitNome) info.emitNome = mx(/Nome empresarial:\s*(.+?)\s+Endere[cç]o/i) || mx(/RECEBI\(EMOS\) DA EMPRESA:\s*(.+?)\s+A NOTA/i);
+    if (!info.valor) info.valor = numBR(mx(/VALOR (?:TOTAL )?DO SERVI[CÇ]O:?\s*R?\$?\s*([\d.]+,\d{2})/i) || mx(/Valor l[ií]quido da NFS-?e[\s\S]{0,60}?([\d.]+,\d{2})/i));
+    if (!info.data) { const d = mx(/EMITIDA EM\s+(\d{2}\/\d{2}\/\d{4})/i) || dataBrDe(U); if (d) info.data = brToIso(d); }
+  }
+  if (item.tipo === 'recibo') {
+    const J = U.replace(/\b([A-ZÀ-Ú]) (?=[A-ZÀ-Ú]\b)/g, '$1');   // "V A L O R T O T A L" → "VALORTOTAL"
+    if (!info.valor) { const m = J.match(/VALOR\s*TOTAL\s*RECEBIDO[\s\S]{0,80}?R\$\s*([\d.]+,\d{2})/i) || U.match(/R\$\s*([\d.]+,\d{2})/); if (m) info.valor = numBR(m[1]); }
+    if (!info.emitNome) info.emitNome = mx(/RAZ\s?[AÃ]O SOCIAL\s+(.+?)\s+CNPJ/i) || mx(/RECEBI(?:\(EMOS\))?\s+DE\s+(.+?)\s+(?:A|O)\s+(?:QUANTIA|IMPORT)/i);
+    if (!info.data) { const m = U.match(/(\d{1,2}) de ([A-Za-zçÇ]+) de (\d{4})/); if (m && MESES_PT[m[2].toLowerCase()]) info.data = `${m[3]}-${MESES_PT[m[2].toLowerCase()]}-${m[1].padStart(2, '0')}`; else { const d = dataBrDe(U); if (d) info.data = brToIso(d); } }
+  }
+  if (item.tipo === 'due') {
+    info.dueNumero = info.dueNumero || mx(/\b(\d{2}BR\d{9}-?\d)\b/i);
+    info.dueChave = info.dueChave || mx(/Chave de acesso:?\s*([0-9A-Z]{14})\b/i);
+  }
+  if (DOCS_COM_CUSTO.includes(item.tipo) && item.campoCusto === undefined) item.campoCusto = campoCustoSugerido(item);
+}
+
+function campoCustoSugerido(item) {
+  if (item.tipo === 'cte') return 'custoFrete';
+  const info = item.info || {};
+  const quem = normTxt([item.nome, info.emitNome, info.pagamento && info.pagamento.recebedor, String(item.texto || '').slice(0, 800)].filter(Boolean).join(' '));
+  const cat = item.categoria || categoriaPeloNome(normTxt([item.nome, info.emitNome, info.pagamento && info.pagamento.recebedor].filter(Boolean).join(' '))) || categoriaPeloNome(quem);
+  if (CAMPO_POR_CATEG[cat]) return CAMPO_POR_CATEG[cat];
+  if (item.tipo === 'nfe') return 'custoProduto';
+  if (item.tipo === 'nfse') return 'custoServTerceiros';
+  return '';   // pagamento sem pista: você escolhe (ou vira lançamento avulso do processo)
+}
+
+function opcoesCampoCusto(sel) {
+  return `<option value="">— não é custo do processo —</option>` + Object.entries(PROCESS_COST_FIELDS).map(([k, l]) => `<option value="${k}"${k === sel ? ' selected' : ''}>${l}</option>`).join('');
+}
+
+function recalcularCustos(p, campo) {
+  const reg = p.docs._custoDocs[campo]; if (!reg) return;
+  const fiscal = (reg.fiscais || []).reduce((a, d) => a + (Number(d.valor) || 0), 0);
+  const pix = (reg.pagos || []).filter(d => d.tipo !== 'recibo').reduce((a, d) => a + (Number(d.valor) || 0), 0);
+  const recibo = Math.max(0, ...(reg.pagos || []).filter(d => d.tipo === 'recibo').map(d => Number(d.valor) || 0));
+  const pago = Math.max(pix, recibo);   // recibo é quitação: já inclui os PIX daquele pagamento
+  const total = fiscal || pago;
+  p[campo] = Math.round(total * 100) / 100;
+  p[campo + '_status'] = pago > 0 && pago + 0.01 >= total ? 'Pago' : 'Em Aberto';
+  const datas = (reg.pagos || []).map(d => d.data).filter(Boolean).sort();
+  if (datas.length) { p.docs._costData = p.docs._costData || {}; p.docs._costData[campo] = datas[datas.length - 1]; }
+  const comp = (reg.pagos || []).find(d => d.url);
+  if (comp) { p.docs._costComp = p.docs._costComp || {}; p.docs._costComp[campo] = comp.url; }
+  p.docs._costPago = p.docs._costPago || {}; p.docs._costPago[campo] = Math.round(pago * 100) / 100;
+  // botões do lançamento (Comprov. / NF-e) já ficam marcados com os arquivos
+  const lanc = p.docs['_lanc_' + campo] = p.docs['_lanc_' + campo] || {};
+  if (comp && !lanc.comprovante) lanc.comprovante = comp.url;
+  const nota = (reg.fiscais || []).find(d => d.url);
+  if (nota && !lanc.nfe) lanc.nfe = nota.url;
+  const emp = [...(reg.fiscais || []), ...(reg.pagos || [])].map(d => d.de).find(Boolean);
+  if (emp) { p.docs._costEmpresa = p.docs._costEmpresa || {}; if (!p.docs._costEmpresa[campo]) p.docs._costEmpresa[campo] = titulo(emp); }
+}
+
+function aplicarCambioNoProcesso(p, c, url) {
+  const f = (c.faturas || []).find(x => x.processo === p.id || x.processo.replace(/S$/, '') === p.id);
+  if (!f || !f.usd) return false;
+  const taxa = Number(c.taxa) || (c.valorReais && c.valorMoeda ? c.valorReais / c.valorMoeda : 0);
+  p.docs._cambioDocs = p.docs._cambioDocs || {};
+  p.docs._cambioDocs[c.referencia || url] = { usd: f.usd, taxa, reais: Math.round(f.usd * taxa * 100) / 100, data: c.data || '', contrato: c.contratoExtrato || '', url };
+  const cs = Object.values(p.docs._cambioDocs);
+  const usd = cs.reduce((a, x) => a + x.usd, 0), reais = cs.reduce((a, x) => a + x.reais, 0);
+  p.cambioRecebido = Math.round(usd * 100) / 100;
+  p.cambioReais = Math.round(reais * 100) / 100;
+  p.cambioTaxa = usd ? reais / usd : 0;
+  const datas = cs.map(x => x.data).filter(Boolean).sort((a, b) => brToIso(a).localeCompare(brToIso(b)));
+  if (datas.length) { p.cambioFechamento = datas[0]; p.cambioRecebimento = datas[datas.length - 1]; }
+  p.cambioBanco = p.cambioBanco || 'Itaú';
+  p.cambioStatus = 'Pago';
+  return true;
+}
+
+function aplicarDocNoProcesso(item, p, upd) {
+  if (!p) return;
+  p.docs = p.docs || {};
+  const info = item.info || {}, url = (upd && upd.webViewLink) || item.url || '';
+  const mud = [];
+  if (info.cambio) { if (aplicarCambioNoProcesso(p, info.cambio, url)) mud.push('câmbio'); }
+  // logística
+  if (item.tipo === 'cte' || item.tipo === 'mdfe') {
+    const set = (k, v) => { if (v && (!p[k] || (v.length > p[k].length && v.toUpperCase().startsWith(p[k].toUpperCase())))) { p[k] = v; mud.push(k); } };
+    set('logTransportadora', titulo(info.transportadora || info.emitNome || ''));
+    set('logCidade', info.munIni ? titulo(info.munIni.split(' / ')[0]) + ' / ' + (info.munIni.split(' / ')[1] || '') : '');
+    set('logEmbarque', info.data ? isoToBr(info.data) : '');
+    set('logEnd', info.endEntrega ? titulo(info.endEntrega) : '');
+    if (info.munFim && !p.logArmazem && /CUBAT|SANTOS|GUARUJ/i.test(info.munFim)) { p.logArmazem = titulo(info.munFim.split(' / ')[0]); }
+  }
+  if (item.tipo === 'nfe' && info.transpNome && !p.logTransportadora) { p.logTransportadora = titulo(info.transpNome); mud.push('logTransportadora'); }
+  if (item.tipo === 'due') {
+    if (info.dueNumero && !p.dueNumero) { p.dueNumero = info.dueNumero; mud.push('dueNumero'); }
+    if (info.dueChave && !p.dueChave) { p.dueChave = info.dueChave; mud.push('dueChave'); }
+    if (p.status === 'A Coletar' || p.status === 'No Armazém') p.status = 'No Porto';
+  }
+  if (item.tipo === 'bl' && ['A Coletar', 'No Armazém', 'No Porto'].includes(p.status)) p.status = 'Embarcado';
+  // custos
+  const campo = item.campoCusto !== undefined ? item.campoCusto : campoCustoSugerido(item);
+  const valor = Number(info.valor) || 0;
+  if (campo && valor > 0 && DOCS_COM_CUSTO.includes(item.tipo)) {
+    p.docs._custoDocs = p.docs._custoDocs || {};
+    const reg = p.docs._custoDocs[campo] = p.docs._custoDocs[campo] || { fiscais: [], pagos: [] };
+    const pago = item.tipo === 'pagamento' || item.tipo === 'recibo';
+    const lista = pago ? reg.pagos : reg.fiscais;
+    const chave = (!pago && info.chave) || url || item.fileId;
+    if (!lista.some(d => d.k === chave)) {
+      lista.push({ k: chave, url, valor, tipo: item.tipo, data: info.data ? isoToBr(info.data) : (info.pagamento && info.pagamento.data) || '', nome: (upd && upd.name) || item.nome, de: info.emitNome || (info.pagamento && info.pagamento.recebedor) || '' });
+      recalcularCustos(p, campo);
+      mud.push(PROCESS_COST_FIELDS[campo] + (pago ? ' pago' : ' devido') + ' R$ ' + valor.toFixed(2));
+    }
+  } else if (item.tipo === 'pagamento' && valor > 0 && !campo) {
+    // pagamento sem custo definido: lançamento avulso do processo (aparece no financeiro do processo)
+    lancarFinanceiroDoDoc(item, p, upd);
+  }
+  if (mud.length) logAction('editar', 'PROCESSOS', p.id, 'Pelos documentos: ' + mud.join(', '));
+  return mud;
+}
+
+// Reler os documentos já anexados e atualizar os campos (corrige processos importados antes desta versão)
+async function atualizarProcessosPelosDocs(ids, silencioso) {
+  const lista = (S.processos || []).filter(p => !ids || ids.includes(p.id));
+  let n = 0;
+  for (const p of lista) {
+    p.docs = p.docs || {};
+    // lançamentos criados pela versão anterior a partir de documentos do processo viram campos do processo
+    S.lancamentos = (S.lancamentos || []).filter(l => !(l.docs && l.docs._origem === 'entrada' && l.vinculo === 'processo' && l.vinculoId === p.id && !l.docs._banco));
+    p.docs._custoDocs = {}; delete p.docs._cambioDocs;
+    const files = (p.docs._files) || {};
+    for (const [tipo, arr] of Object.entries(files)) {
+      if (['invoice', 'contrato', 'outros'].includes(tipo)) continue;
+      for (const f of arr || []) {
+        if (!f.id) continue;
+        if (!silencioso && S.entrada) { S.entrada.progresso = `Relendo ${p.id}: ${f.name}`; render(); }
+        try {
+          const it = await analisarArquivo({ id: f.id, name: f.name, mimeType: /\.xml$/i.test(f.name) ? 'application/xml' : /\.pdf$/i.test(f.name) ? 'application/pdf' : /\.(png|jpe?g)$/i.test(f.name) ? 'image/png' : '', size: 1000 });
+          it.tipo = tipo;                       // o tipo já foi confirmado ao anexar
+          if ((!Number(it.info.valor) || f.valorManual) && Number(f.valor)) it.info.valor = Number(f.valor);
+          if (!it.info.data && f.data) it.info.data = /^\d{4}-/.test(f.data) ? f.data : brToIso(f.data);
+          delete it.campoCusto; enriquecerInfo(it);   // reler com o tipo confirmado
+          if (f.campoCusto !== undefined) it.campoCusto = f.campoCusto;
+          aplicarDocNoProcesso(it, p, { webViewLink: f.url, name: f.name });
+        } catch (e) { console.warn('reler', f.name, e.message); }
+      }
+    }
+    p.docs._docsV = 2; n++;
+  }
+  if (S.entrada) S.entrada.progresso = '';
+  await saveToSheets();
+  if (!silencioso) { showToast(`✅ ${n} processo(s) atualizados pelos documentos`); render(); }
+}
+
+// Processos anexados pela versão anterior: atualiza os campos uma vez (em segundo plano)
+let _migrandoDocs = false;
+async function migrarDocsV2() {
+  if (_migrandoDocs || !window._sheetsToken) return;
+  const ids = (S.processos || []).filter(p => p.docs && p.docs._files && Object.keys(p.docs._files).length && p.docs._docsV !== 2).map(p => p.id);
+  if (!ids.length) return;
+  _migrandoDocs = true;
+  try { await atualizarProcessosPelosDocs(ids, true); showToast(`✅ ${ids.length} processo(s) atualizados pelos documentos anexados`); render(); }
+  catch (e) { console.warn('migrar docs', e); }
+  _migrandoDocs = false;
+}
+
+// Contrato de câmbio já anexado a outro processo que também paga a fatura deste (ex.: FS260096 + FS260097)
+function vincularCambiosExistentes(p) {
+  let n = 0;
+  (S.processos || []).forEach(q => {
+    if (q.id === p.id) return;
+    (((q.docs || {})._files || {}).comprovantes || []).forEach(f => {
+      const c = f.cambio; if (!c || !(c.faturas || []).some(x => x.processo === p.id)) return;
+      p.docs = p.docs || {}; p.docs._files = p.docs._files || {}; p.docs._files.comprovantes = p.docs._files.comprovantes || [];
+      if (p.docs._files.comprovantes.some(x => x.id === f.id)) return;
+      const fat = c.faturas.find(x => x.processo === p.id);
+      p.docs._files.comprovantes.push(Object.assign({}, f, { cambio: Object.assign({}, c, { usdFatura: fat.usd }) }));
+      if (!p.docs.comprovantes) p.docs.comprovantes = f.url;
+      aplicarCambioNoProcesso(p, { referencia: c.referencia, taxa: c.taxa, valorReais: c.reaisTotal, valorMoeda: c.usdTotal, data: c.data, contratoExtrato: c.contratoExtrato, faturas: c.faturas }, f.url);
+      if (p.docs._folderId && f.id) driveAPI('POST', '/files', { name: f.name, mimeType: 'application/vnd.google-apps.shortcut', parents: [p.docs._folderId], shortcutDetails: { targetId: f.id } }, 'fields=id').catch(() => {});
+      n++;
+    });
+  });
+  if (n) logAction('editar', 'PROCESSOS', p.id, `câmbio vinculado a partir de ${n} contrato(s) já anexado(s)`);
+  return n;
 }

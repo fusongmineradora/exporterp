@@ -69,6 +69,7 @@ async function loadFromSheets() {
     try { await saveToSheets(); } catch (e) {}
   }
   if (S.page === 'entrada' || S.page === 'dashboard') render();
+  if (typeof migrarDocsV2 === 'function') setTimeout(migrarDocsV2, 800);
 }
 
 // ── 2. DOCUMENTOS COM VÁRIOS ARQUIVOS ───────────────────────
@@ -216,6 +217,11 @@ function lerXmlFiscal(txt) {
     data: (first('dhEmi') || first('dEmi')).slice(0, 10),
     refs: [...new Set([...all('chave'), ...all('chNFe'), ...all('chCTe'), ...all('refNFe'), ...chavesDoTexto(first('infCpl'))].map(c => c.replace(/\D/g, '')).filter(c => c.length === 44 && c !== chave))],
     protocolo: first('nProt'),
+    emitMun: emit ? [first('xMun', emit), first('UF', emit)].filter(Boolean).join(' / ') : '',
+    munIni: [first('xMunIni'), first('UFIni')].filter(Boolean).join(' / '),
+    munFim: [first('xMunFim'), first('UFFim')].filter(Boolean).join(' / '),
+    transpNome: (() => { const t = doc.getElementsByTagNameNS('*', 'transporta')[0]; return t ? first('xNome', t) : ''; })(),
+    infCpl: first('infCpl').slice(0, 500),
   };
   info.tipo = tipoPorModelo(info.modelo);
   if (info.tipo === 'nfe' && (info.emitCnpj === FU_SONG_CNPJ || /^7/.test(info.cfop))) info.tipo = 'nfeSaida';
@@ -245,7 +251,10 @@ function lerXmlNfse(txt) {
 function valorDanfe(texto) {
   const T = String(texto || '').replace(/\s+/g, ' ');
   const m = T.match(/V(?:ALOR|\.)\s*TOTAL\s*DA\s*NOTA\s*:?\s*(?:R\$\s*)?([\d.]+,\d{2})/i);
-  return m ? numBR(m[1]) : 0;
+  const v = m ? numBR(m[1]) : 0;
+  if (v > 0) return v;
+  const todos = [...T.matchAll(/R\$\s*([\d.]+,\d{2})/g)].map(x => numBR(x[1]));
+  return todos.length ? Math.max(...todos) : 0;
 }
 
 // Documento comum (PDF ou nome do arquivo): ordem importa
@@ -284,9 +293,9 @@ const REGRAS_NOME = [
 // Categoria de custo sugerida pelo nome do comprovante
 function categoriaPeloNome(N) {
   const m = [
-    [/MAR[IÍ]TIMO|FRETE INTERNACIONAL|ACCESS/, 'Frete Marítimo'], [/TRANSPORTADORA|ITALIANA|RODOVI/, 'Frete Rodoviário'],
-    [/\bAZ\b|ARMAZ/, 'Armazém'], [/DESPACHANTE|TRADING/, 'Despachante'], [/PORTO|TERMINAL/, 'Porto / Taxas'],
-    [/NOTA DE ENTRADA|NFE|MINERADORA|PEDRA|PRODUTO/, 'Produto'], [/CERTIFICADO/, 'Certificado de Origem'],
+    [/MAR[IÍ]TIMO|FRETE INTERNACIONAL|ACC?ESS|AGENTE DE CARGA|MAERSK|COSCO|\bMSC\b|HAPAG/, 'Frete Marítimo'], [/TRANSPORTADORA|TRANSPORTES|ITALIANA|RODOVI|\bCT-?E\b|DACTE/, 'Frete Rodoviário'],
+    [/\bAZ\b|ARMAZ|T5S|OZIRIS/, 'Armazém'], [/DESPACHANTE|DESPACHOS|ADUANEIR|\bCGA\b/, 'Despachante'], [/CERTIFICADO/, 'Certificado de Origem'], [/PORTO|TERMINAL/, 'Porto / Taxas'],
+    [/NOTA DE ENTRADA|\bNFE\b|\bNF-E\b|MINERADORA|MINERA[CÇ][AÃ]O|PEDRA|PRODUTO|\bNOTA\b|CASCALHO/, 'Produto'], [/DARF|RECEITA FEDERAL|IMPOSTO/, 'Impostos'],
   ].find(([re]) => re.test(N));
   return m ? m[1] : '';
 }
@@ -486,6 +495,7 @@ async function analisarArquivo(f) {
     if (c.pagamento) { completarPagamento(c.pagamento, item.texto); if (c.pagamento.valorIncerto) item.confianca = 'media'; if (!c.categoria) c.categoria = categoriaPeloNome(normTxt(nome + ' ' + (c.pagamento.recebedor || ''))); item.info.pagamento = c.pagamento; item.info.valor = c.pagamento.valor; item.info.emitNome = c.pagamento.recebedor; item.info.data = brToIso(c.pagamento.data); }
     if (c.categoria) item.categoria = c.categoria;
   }
+  if (typeof enriquecerInfo === 'function') { try { enriquecerInfo(item); } catch (e) { console.warn('enriquecer', e); } }
   // Prefixo colocado pelo acervo: "FS260105+FS260107 - nome original"
   const mPasta = nome.match(/^((?:FS\d{6}S?)(?:\+FS\d{6}S?)*) - /i);
   item.pastaProcessos = mPasta ? mPasta[1].toUpperCase().split('+') : [];
@@ -500,7 +510,9 @@ async function analisarArquivo(f) {
     const pasta = [...pelaPasta].join(' e ');
     const peloConteudo = item.texto || Object.keys(item.info || {}).length ? identificarProcesso(item.info, item.texto, '') : [];
     const forte = peloConteudo[0] && peloConteudo[0].id === doDoc && peloConteudo[0].score >= 100
-      && (!peloConteudo[1] || peloConteudo[1].score < peloConteudo[0].score);
+      && (!peloConteudo[1] || peloConteudo[1].score < peloConteudo[0].score)
+      && peloConteudo[0].motivos.some(mo => !/^número /.test(mo))
+      && !item.pastaProcessos.some(id => normTxt(nomeSemPasta).includes(id));
     item.processo = doDoc;
     item.pastaErrada = { estava: [...pelaPasta], certo: doDoc, motivos: (forte ? peloConteudo[0] : item.candidatos[0]).motivos };
     if (forte) {
@@ -508,7 +520,14 @@ async function analisarArquivo(f) {
       item.corrigido = `Estava na pasta ${pasta}, mas o documento é do ${doDoc} (${item.pastaErrada.motivos.join(', ')}). Vai para a pasta certa.`;
     } else {
       item.confianca = 'media';
-      item.aviso = `Conflito: o nome do arquivo indica ${doDoc}, mas ele estava na pasta ${pasta}. Confira antes de anexar.`;
+      const nomeConcorda = item.pastaProcessos.find(id => normTxt(nomeSemPasta).includes(id));
+      if (nomeConcorda) {
+        // pasta e nome do arquivo dizem a mesma coisa: fica na pasta; o documento só cita outro processo
+        item.processo = nomeConcorda; delete item.pastaErrada;
+        item.aviso = `O documento cita ${doDoc}, mas o nome do arquivo e a pasta indicam ${nomeConcorda}. Ficou no ${nomeConcorda} — confira.`;
+      } else {
+        item.aviso = `Conflito: o documento indica ${doDoc}, mas ele estava na pasta ${pasta}. Confira antes de anexar.`;
+      }
     }
   } else if (doDoc) {
     item.processo = doDoc;
@@ -664,16 +683,17 @@ async function confirmarEntrada(i, silencioso) {
         chave: item.info.chave || '', numero: item.info.numero || '',
         emitente: item.info.emitNome || '', valor: item.info.valor || 0, data: item.info.data || '',
         categoria: item.categoria || '',
-        cambio: item.info.cambio ? { referencia: item.info.cambio.referencia, contratoExtrato: item.info.cambio.contratoExtrato, taxa: item.info.cambio.taxa, usdFatura: fatura ? fatura.usd : null, usdTotal: item.info.cambio.valorMoeda, reaisTotal: item.info.cambio.valorReais, data: item.info.cambio.data } : undefined,
+        cambio: item.info.cambio ? { faturas: item.info.cambio.faturas, referencia: item.info.cambio.referencia, contratoExtrato: item.info.cambio.contratoExtrato, taxa: item.info.cambio.taxa, usdFatura: fatura ? fatura.usd : null, usdTotal: item.info.cambio.valorMoeda, reaisTotal: item.info.cambio.valorReais, data: item.info.cambio.data } : undefined,
         pagamento: item.info.pagamento || undefined,
         origem: 'entrada', em: new Date().toISOString(),
+        campoCusto: item.campoCusto !== undefined ? item.campoCusto : undefined, valorManual: item.valorManual ? true : undefined,
         pastaOriginal: item.pastaErrada && proc.id === item.pastaErrada.certo ? item.pastaErrada.estava.join('+') : undefined,
       });
       if (!proc.docs[item.tipo]) proc.docs[item.tipo] = upd.webViewLink;
       logAction('anexar', 'PROCESSOS', proc.id, tipoLabel(item.tipo) + ': ' + upd.name + ' (Caixa de Entrada)' + (item.pastaErrada && proc.id === item.pastaErrada.certo ? ' — corrigido: estava na pasta ' + item.pastaErrada.estava.join('+') : ''));
     };
     registro(p);
-    lancarFinanceiroDoDoc(item, p, upd);
+    if (typeof aplicarDocNoProcesso === 'function') aplicarDocNoProcesso(item, p, upd); else lancarFinanceiroDoDoc(item, p, upd);
     // Mesmo contrato de câmbio em outros processos: atalho na pasta de cada um (o arquivo existe uma vez só)
     for (const idExtra of item.processosExtras || []) {
       const px = S.processos.find(x => x.id === idExtra);
@@ -684,7 +704,7 @@ async function confirmarEntrada(i, silencioso) {
         try { await driveAPI('POST', '/files', { name: upd.name, mimeType: 'application/vnd.google-apps.shortcut', parents: [fx], shortcutDetails: { targetId: upd.id } }, 'fields=id'); } catch (e) {}
       }
       registro(px);
-      if (item.info.cambio) lancarCambioDoContrato(item, px, upd);
+      if (item.info.cambio && typeof aplicarDocNoProcesso === 'function') aplicarDocNoProcesso(item, px, upd);
     }
     E.itens.splice(i, 1);
     reidentificarPendentes();
@@ -702,6 +722,12 @@ function reidentificarPendentes() {
     if (it.processo && it.confianca === 'manual') return;
     const c = identificarProcesso(it.info, it.texto, it.nome);
     it.candidatos = c;
+    if (it.info && it.info.cambio) {
+      const existe = id => (S.processos || []).some(p => p.id === id);
+      const fats = it.info.cambio.faturas || [];
+      it.processosExtras = fats.map(f => f.processo).filter(id => id !== it.processo && existe(id));
+      if (it.aviso && /Fatura sem processo/.test(it.aviso)) { const falt = fats.filter(f => !existe(f.processo)).map(f => f.processo); it.aviso = falt.length ? 'Fatura sem processo no ERP: ' + falt.join(', ') + ' (o câmbio entra nele quando for criado)' : ''; }
+    }
     if ((!it.processo || it.admAuto) && c[0]) {
       it.processo = c[0].id;
       if (it.admAuto) { it.admAuto = false; it.aviso = String(it.aviso || '').replace(/Não cita nenhum processo:[^.]*\.[^.]*\./, '').trim(); }
@@ -811,6 +837,14 @@ async function moverDuplicado(i) {
   render();
 }
 
+function setInfoEntrada(i, campo, valor) {
+  const it = S.entrada.itens[i];
+  if (!it) return;
+  it.info = it.info || {};
+  if (campo === 'valor') { it.info.valor = numBR(String(valor).replace(/[^\d.,]/g, '')) || 0; it.valorManual = true; if (it.info.pagamento) it.info.pagamento.valor = it.info.valor; }
+  else it.info[campo] = valor;
+  render();
+}
 function setEntrada(i, campo, valor) {
   const it = S.entrada.itens[i];
   if (!it) return;
@@ -868,6 +902,22 @@ function renderEntrada() {
             ${procOpts.map(id => `<option value="${escHtml(id)}"${it.processo === id ? ' selected' : ''}>${escHtml(id)}</option>`).join('')}
           </select></div>
       </div>
+      ${typeof DOCS_COM_CUSTO !== 'undefined' && DOCS_COM_CUSTO.includes(it.tipo) && it.processo !== '__ADM' ? `
+      <div class="g3" style="margin-top:10px">
+        <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-cus-${i}">Custo do processo</label>
+          <select id="ent-cus-${i}" onchange="setEntrada(${i},'campoCusto',this.value)">${opcoesCampoCusto(it.campoCusto || '')}</select></div>
+        <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-val-${i}">Valor (R$)${!Number(it.info.valor) ? ' <span style="color:var(--red)">· não lido</span>' : ''}</label>
+          <input id="ent-val-${i}" type="text" inputmode="decimal" value="${Number(it.info.valor) ? fmt(it.info.valor) : ''}" placeholder="0,00" onchange="setInfoEntrada(${i},'valor',this.value)"/></div>
+        <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-dat-${i}">Data</label>
+          <input id="ent-dat-${i}" type="date" value="${escHtml(it.info.data || '')}" onchange="setInfoEntrada(${i},'data',this.value)"/></div>
+      </div>` : ''}
+      ${(it.tipo === 'pagamento' || it.tipo === 'recibo') && it.processo === '__ADM' ? `
+      <div class="g2" style="margin-top:10px">
+        <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-val-${i}">Valor (R$)${!Number(it.info.valor) ? ' <span style="color:var(--red)">· não lido</span>' : ''}</label>
+          <input id="ent-val-${i}" type="text" inputmode="decimal" value="${Number(it.info.valor) ? fmt(it.info.valor) : ''}" placeholder="0,00" onchange="setInfoEntrada(${i},'valor',this.value)"/></div>
+        <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-dat-${i}">Data</label>
+          <input id="ent-dat-${i}" type="date" value="${escHtml(it.info.data || '')}" onchange="setInfoEntrada(${i},'data',this.value)"/></div>
+      </div>` : ''}
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
         <span style="font-size:10.5px;color:var(--muted)">${escHtml(it.motivo || '')}${motivoProc ? ' · processo pelo ' + escHtml(motivoProc.motivos.join(', ')) : it.processo ? '' : ' · processo não encontrado no documento'}</span>
         <span style="display:flex;gap:6px">

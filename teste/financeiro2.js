@@ -257,6 +257,12 @@ function sugestaoLinha(l) {
     const pagos = (S.lancamentos || []).filter(x => x.status === 'Pago' && x.tipo === tipoL && x.categoria !== 'Câmbio'
       && !(x.docs && x.docs._banco) && x.docs && x.docs.comprovante
       && Math.abs((Number(x.valor) || 0) - v) < 0.01 && diasEntre(brToIso2(x.data) || l.data, l.data) <= 4);
+    // custo do processo já pago (preenchido pelos comprovantes) e ainda sem linha do banco
+    if (l.valor < 0) buildAllEntries().filter(e => e._computed && e._sourceField && e.status === 'Pago' && Math.abs((Number(e.valor) || 0) - v) < 0.01).forEach(e => {
+      const pr = (S.processos || []).find(x => x.id === e._sourceProcessoId);
+      const ja = pr && pr.docs && pr.docs._costBanco && pr.docs._costBanco[e._sourceField];
+      if (!ja && (!e.data || diasEntre(brToIso2(e.data) || l.data, l.data) <= 4)) pagos.push(e);
+    });
     if (pagos.length) {
       pagos.sort((a, b) => diasEntre(brToIso2(a.data) || l.data, l.data) - diasEntre(brToIso2(b.data) || l.data, l.data));
       return { acao: 'baixar', entry: pagos[0], unico: pagos.length === 1, texto: `Ligar ao lançamento do comprovante "${pagos[0].descricao}"` + (pagos.length > 1 ? ` (+${pagos.length - 1} com o mesmo valor — confira)` : '') };
@@ -638,7 +644,7 @@ function resultadoProcesso(p) {
   const cambioLanc = es.filter(e => e.tipo === 'Receita' && e.categoria === 'Câmbio' && !e._computed);
   const cambioAuto = es.filter(e => e.tipo === 'Receita' && e._computed);
   const reaisCambio = cambioLanc.length ? cambioLanc.reduce((a, e) => a + (Number(e.valor) || 0), 0) : cambioAuto.reduce((a, e) => a + (Number(e.valor) || 0), 0);
-  const usdCambio = cambioLanc.reduce((a, e) => a + ((e.docs && e.docs._cambio && Number(e.docs._cambio.usd)) || 0), 0);
+  const usdCambio = cambioLanc.reduce((a, e) => a + ((e.docs && e.docs._cambio && Number(e.docs._cambio.usd)) || 0), 0) || (cambioLanc.length ? 0 : Number(p.cambioRecebido) || 0);
   const custos = es.filter(e => e.tipo === 'Despesa');
   const custo = custos.reduce((a, e) => a + (Number(e.valor) || 0), 0);
   const custoAberto = custos.filter(e => e.status === 'Em Aberto').reduce((a, e) => a + (Number(e.valor) || 0), 0);
