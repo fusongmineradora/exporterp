@@ -1,11 +1,8 @@
 // ═══════════════════════════════════════════════════════════════
-// ERP 2.0 · AMBIENTE DE TESTES — Recomeçar do zero a partir do acervo do Drive
-// 1) apaga os dados da planilha TESTE (menos CONFIG) e arquiva a pasta TESTE antiga
-// 2) cria processos e clientes a partir da Invoice / Sales Contract de cada pasta FS......
-// 3) copia todos os arquivos para a Entrada, lê (PDF, XML, OCR de prints) e anexa a cada processo
-//    — comprovantes viram despesas pagas; contratos de câmbio viram receitas de câmbio
-// 4) importa o(s) extrato(s) OFX encontrados no acervo e concilia o que tem prova
-// Os originais do link NUNCA são alterados (só leitura + cópia). Produção não é tocada.
+// ERP 2.0 · AMBIENTE DE TESTES — leitura de Invoice / Sales Contract e OCR de prints
+// · Na Caixa de Entrada, uma invoice ou contrato de um processo que ainda não existe
+//   mostra o botão "➕ Criar processo FS……", que preenche o cadastro com os dados do documento.
+// · Prints/fotos de comprovantes são lidos pelo OCR do Google Drive.
 // ═══════════════════════════════════════════════════════════════
 
 // ── Leitura de Invoice / Sales Contract da Fu Song ──────────
@@ -36,6 +33,13 @@ const ROTULOS_INV = [
   ['_desc', /DESCRIPTION\s+OF\s+GOODS/gi],
   ['_vat', /\bVAT\.?\s*:/gi],
   ['_banco', /INTERMEDIATE\s+BANK/gi],
+  ['_branch', /BRANCH\s+NUMBER/gi],
+  ['_iban', /\bIBAN\s*:/gi],
+  ['_account', /ACCOUNT\s+WITH\s*:/gi],
+  ['_swift', /SWIFT\s+CODE\s*:/gi],
+  ['_benef', /(?:FINAL\s+)?BENEFICIARY(?:\s+BANK)?\s*\(FIELD/gi],
+  ['_further', /FOR\s+FURTHER\s+CREDIT/gi],
+  ['_favor', /IN\s+FAVOR\s+OF\s*:/gi],
   ['_cnpj', /44\.962\.707\/0001-54/g],
 ];
 
@@ -67,7 +71,7 @@ function lerDocVenda(texto) {
   const cont = T.match(/TOTAL\s+OF\s+CONTAINERS?\s*:?\s*0*(\d+)\s*CONTAINERS?\s*(\d{2})?/i);
   // linha da tabela de mercadorias (serve quando só há o contrato)
   const linha = T.match(/TOTAL\s+PRICE\s+USD\s+(.+?)\s+(\d{8})\s+([\d.,]+)\s+[\d.,]+\s*USD/i);
-  if (linha) { if (!v.produto) v.produto = linha[1].trim(); if (!v.ncm) v.ncm = linha[2]; if (!v.peso) v.peso = linha[3] + ' KG'; }
+  if (linha) { if (!v.produto) v.produto = linha[1].trim().replace(/^\d+\s+/, ''); if (!v.ncm) v.ncm = linha[2]; if (!v.peso) v.peso = linha[3] + ' KG'; }
   const chega = T.match(/ARRIVES\s+PORT\s*:\s*([^)\d]+?)(?:\s+\d\)|$)/i);
   if (chega && !v.pod) v.pod = chega[1].trim().replace(/,\s*CHINA$/i, ', China').replace(/^(\w)(\w*)/, (m, a, b) => a + b.toLowerCase());
   return {
@@ -108,90 +112,18 @@ async function ocrDrive(fileId, nome) {
   }
 }
 
-// ── Estado do assistente ────────────────────────────────────
-const RECOMECO = { rodando: false, etapas: [], resumo: null, erro: '' };
-function etapa(txt, ok) {
-  const last = RECOMECO.etapas[RECOMECO.etapas.length - 1];
-  const t = new Date().toLocaleTimeString('pt-BR');
-  if (last && last.ok === null) { last.txt = txt; last.t = t; if (ok !== undefined) last.ok = ok; }   // linha em andamento é atualizada
-  else RECOMECO.etapas.push({ txt, ok: ok === undefined ? null : ok, t });
-  if (S.entrada) S.entrada.progresso = txt;
-  render();
-}
-
 function normNome(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
-
-async function zerarDadosTeste() {
-  if (!SHEET_ID || SHEET_ID === PROD_SHEET_ID) throw new Error('Planilha de teste não definida — operação bloqueada.');
-  S.processos = []; S.clientes = []; S.fornecedores = []; S.lancamentos = []; S.custosMensais = [];
-  await saveToSheets();
-  try { await sheetsAPI('POST', `/${SHEET_ID}/values:batchClear`, { ranges: ['LOG!A2:ZZ100000'] }); } catch (e) {}
-  if (typeof ensureTabs2 === 'function') {
-    await ensureTabs2();
-    for (const t of Object.keys(TABS2)) await gravarAba2(t, []);
-    Object.assign(S.banco, { linhas: [], regras: [], docs: [], carregado: true, msg: null, filtro: 'pendente' });
-  }
-  // pasta TESTE antiga: renomeada (arquivada), nada é apagado
-  try {
-    const antiga = await getRootFolderId();
-    const carimbo = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 16).replace('T', ' ').replace(':', 'h');
-    await driveAPI('PATCH', '/files/' + antiga, { name: ROOT_FOLDER_NAME + ' (arquivo ' + carimbo + ')' }, 'fields=id');
-  } catch (e) { console.warn('arquivar pasta teste', e.message); }
-  window._rootFolderId = null; window._testeFolders = {};
-  try { await saveConfig('drive_root_folder_id', ''); } catch (e) {}
-  Object.assign(S.entrada, { itens: [], lido: false, folderId: '', folderUrl: '', ofxNaEntrada: 0 });
-}
-
-async function lerPastasDoAcervo(raiz) {
-  // processos = pastas cujo nome começa com FS + 6 dígitos (em qualquer nível)
-  const fila = [raiz], pastas = [], ofx = [];
-  while (fila.length) {
-    const id = fila.shift();
-    const filhos = await driveListAll(`'${id}' in parents and trashed=false`, 'id,name,mimeType,size,md5Checksum,createdTime');
-    for (const f of filhos) {
-      if (f.mimeType === 'application/vnd.google-apps.folder') {
-        const m = f.name.trim().toUpperCase().match(/^(FS\s?\d{6})S?\b/);
-        if (m) pastas.push({ id: f.id, nome: f.name.trim(), proc: m[1].replace(/\s/g, '') });
-        if (!/^ERP$/i.test(f.name.trim())) fila.push(f.id);
-      } else if (/\.ofx$/i.test(f.name) || f.mimeType === 'application/x-ofx') ofx.push(f);
-    }
-  }
-  return { pastas, ofx };
-}
-
-async function docsVendaDaPasta(pasta) {
-  const arqs = [];
-  const fila = [pasta.id];
-  while (fila.length) {
-    const id = fila.shift();
-    for (const f of await driveListAll(`'${id}' in parents and trashed=false`, 'id,name,mimeType,size')) {
-      if (f.mimeType === 'application/vnd.google-apps.folder') fila.push(f.id);
-      else if (/pdf/i.test(f.mimeType) || /\.pdf$/i.test(f.name)) arqs.push(f);
-    }
-  }
-  const ehInv = f => /INVOICE/i.test(f.name) && !/DESPACHANTE|NFE?S|NOTA/i.test(f.name);
-  const ehCt = f => /SALES\s*CONTRACT|CONTRATO\s+DE\s+VENDA/i.test(f.name);
-  const ler = async f => { try { const t = await pdfTexto(await driveDownload(f.id)); return lerDocVenda(t); } catch (e) { return null; } };
-  const invs = arqs.filter(ehInv), cts = arqs.filter(ehCt);
-  // prefere o arquivo cujo nome tem o número do processo
-  const pref = l => l.sort((a, b) => (b.name.toUpperCase().includes(pasta.proc) ? 1 : 0) - (a.name.toUpperCase().includes(pasta.proc) ? 1 : 0));
-  const inv = invs.length ? await ler(pref(invs)[0]) : null;
-  const ct = cts.length ? await ler(pref(cts)[0]) : null;
-  return { inv, ct };
-}
 
 function montarProcesso(pasta, inv, ct) {
   const d = Object.assign({}, ct || {}, Object.fromEntries(Object.entries(inv || {}).filter(([, x]) => x !== '' && x !== 0 && x != null)));
   const n = parseInt(pasta.proc.slice(2), 10);
   const avisos = [];
-  if (!inv) avisos.push('sem invoice');
-  if (!ct) avisos.push('sem contrato');
   if (inv && inv.numero && inv.numero.replace(/S$/, '') !== pasta.proc) avisos.push(`invoice diz ${inv.numero}`);
   if (inv && ct && inv.totalUsd && ct.totalUsd && Math.abs(inv.totalUsd - ct.totalUsd) > 0.01) avisos.push(`invoice USD ${inv.totalUsd} ≠ contrato USD ${ct.totalUsd}`);
   const qtd = (ct && ct.qtdContainer) || '1';
   const p = {
     id: pasta.proc, embarque: String(9 + (n - 260096)).padStart(2, '0'), status: 'A Coletar',
-    cliente: d.cliente || pasta.nome.replace(/^FS\s?\d{6}S?\s*-?\s*/i, '').trim(),
+    cliente: d.cliente || '',
     usci: d.usci || '', clienteTel: d.tel || '', clienteEmail: d.email || '', clienteAdd: d.end || '',
     produto: d.produto || '', ncm: d.ncm || '', moeda: d.moeda || 'USD',
     pol: d.pol || '', pod: d.pod || '', origem: d.origem || '', destino: d.destino || '',
@@ -199,7 +131,7 @@ function montarProcesso(pasta, inv, ct) {
     qtdContainer: qtd, containers: Array.from({ length: parseInt(qtd, 10) || 1 }, () => ''), container: '',
     cambioInvoice: d.totalUsd || 0, cambioBanco: 'Itaú', cambioStatus: 'Em Aberto',
     invoiceNum: 'Invoice - ' + pasta.proc, contratoNum: 'Contrato - ' + pasta.proc,
-    docs: { _acervo: { pasta: pasta.nome, pastaId: pasta.id, emitida: d.emitida || '', avisos } },
+    docs: { _criadoDe: { arquivo: pasta.nome, emitida: d.emitida || '', avisos } },
   };
   return p;
 }
@@ -211,111 +143,80 @@ function garantirCliente(p) {
   if (!c) {
     c = { id: genId(), nome: p.cliente, usci: p.usci, tel: p.clienteTel, email: p.clienteEmail, end: p.clienteAdd };
     S.clientes.push(c);
-    logAction('criar', 'CLIENTES', c.id, c.nome + ' (acervo)');
+    logAction('criar', 'CLIENTES', c.id, c.nome + ' (pela invoice)');
   } else {
     ['usci', 'tel', 'email', 'end'].forEach(k => { const v = { usci: p.usci, tel: p.clienteTel, email: p.clienteEmail, end: p.clienteAdd }[k]; if (!c[k] && v) c[k] = v; });
   }
 }
 
-function atualizarStatusPelosDocs() {
-  (S.processos || []).forEach(p => {
-    const f = (p.docs && p.docs._files) || {};
-    if ((f.bl || []).length) p.status = 'Embarcado';
-    else if ((f.due || []).length || (f.nfeSaida || []).length) p.status = p.status === 'A Coletar' ? 'No Porto' : p.status;
-  });
+
+// ── Criar processo a partir da invoice / contrato que está na Entrada ──
+function docVendaDoItem(it) {
+  if (!it || !['invoice', 'contrato'].includes(it.tipo)) return null;
+  if (it._venda === undefined) it._venda = lerDocVenda(it.texto) || null;
+  return it._venda;
+}
+function numeroProcessoDoItem(it) {
+  const d = docVendaDoItem(it);
+  const n = (d && d.numero) || ((String(it.nome || '').toUpperCase().match(/FS\s?\d{6}/) || [''])[0]);
+  return n.replace(/\s/g, '').replace(/^(FS\d{6})S$/, '$1');
+}
+function podeCriarProcesso(it) {
+  if (!it || !['invoice', 'contrato'].includes(it.tipo)) return '';
+  const id = numeroProcessoDoItem(it);
+  if (!id || (S.processos || []).some(p => p.id === id)) return '';
+  return id;
 }
 
-async function recomecarDoAcervo() {
-  if (RECOMECO.rodando) return;
-  let salvo = '';
-  try { salvo = localStorage.getItem('teste:acervo-url') || ''; } catch (e) {}
-  const link = await uiPrompt('Link da pasta do Drive com o acervo (pastas FS……, comprovantes do mês, extrato OFX). Os originais NÃO são alterados.', salvo || 'https://drive.google.com/drive/folders/', 'Recomeçar do zero pelo acervo');
-  if (!link) return;
-  const m = String(link).match(/folders\/([A-Za-z0-9_-]{10,})/) || String(link).match(/^([A-Za-z0-9_-]{20,})$/);
-  if (!m) { await uiAlert('Link de pasta inválido.'); return; }
-  const conf = await uiPrompt('Isto APAGA todos os dados do ambiente de TESTE (processos, clientes, lançamentos, extrato, regras) e começa de novo a partir do acervo. A produção não é tocada.\n\nDigite APAGAR para confirmar:', '', 'Confirmar recomeço');
-  if (String(conf || '').trim().toUpperCase() !== 'APAGAR') { showToast('Cancelado'); return; }
-  try { localStorage.setItem('teste:acervo-url', link); } catch (e) {}
-  Object.assign(RECOMECO, { rodando: true, etapas: [], resumo: null, erro: '' });
-  S.page = 'entrada'; render();
-  const resumo = { processos: 0, clientes: 0, avisos: [], anexados: 0, pendentes: 0, despesas: 0, cambios: 0 };
+async function criarProcessoDoDoc(i) {
+  const E = S.entrada, it = E.itens[i];
+  const id = podeCriarProcesso(it);
+  if (!id) return;
+  // junta invoice + contrato do mesmo processo que estejam na Entrada
+  const irmaos = E.itens.filter(x => ['invoice', 'contrato'].includes(x.tipo) && numeroProcessoDoItem(x) === id);
+  const docs = irmaos.map(docVendaDoItem).filter(Boolean);
+  const inv = docs.find(d => !d.contrato) || null, ct = docs.find(d => d.contrato) || null;
+  if (!inv && !ct) { await uiAlert('Não consegui ler os dados deste documento. Crie o processo pela tela de Processos.'); return; }
+  const p = montarProcesso({ proc: id, nome: it.nome, id: '' }, inv, ct);
+  const resumo = [
+    'Cliente: ' + (p.cliente || '—'), 'Produto: ' + (p.produto || '—') + (p.ncm ? ' (NCM ' + p.ncm + ')' : ''),
+    'Rota: ' + (p.pol || '—') + ' → ' + (p.pod || '—') + ' · ' + (p.incoterm || ''),
+    'Valor: USD ' + (p.cambioInvoice ? p.cambioInvoice.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '—') + ' · Peso: ' + (p.peso || '—') + ' kg · Containers: ' + p.qtdContainer,
+    'Lido de: ' + [inv ? 'invoice' : '', ct ? 'contrato' : ''].filter(Boolean).join(' + '),
+  ].concat(p.docs._criadoDe.avisos.length ? ['⚠️ ' + p.docs._criadoDe.avisos.join('; ')] : []);
+  if (!await uiConfirm('Criar o processo ' + id + ' com estes dados?\n\n' + resumo.join('\n') + '\n\nVocê pode editar tudo depois na tela do processo.', 'Novo processo pela ' + (inv ? 'invoice' : 'contrato'), 'Criar processo', 'Cancelar')) return;
+  S.processos.push(p);
+  garantirCliente(p);
+  logAction('criar', 'PROCESSOS', p.id, (p.cliente || '') + ' · ' + (p.produto || '') + ' (pela invoice/contrato)');
   try {
-    await getAccessToken(); await ensureTestSheet();
-    etapa('Apagando dados do ambiente de teste...');
-    await zerarDadosTeste();
-    etapa('Apagando dados do ambiente de teste...', true);
-
-    etapa('Lendo as pastas do acervo...');
-    const { pastas, ofx } = await lerPastasDoAcervo(m[1]);
-    const unicas = []; const vistos = new Set();
-    pastas.sort((a, b) => a.proc.localeCompare(b.proc)).forEach(p => { if (!vistos.has(p.proc)) { vistos.add(p.proc); unicas.push(p); } else resumo.avisos.push(`${p.proc}: pasta repetida "${p.nome}" (arquivos entram no mesmo processo)`); });
-    etapa(`Lendo as pastas do acervo... ${unicas.length} processo(s), ${ofx.length} extrato(s) OFX`, true);
-
-    for (let i = 0; i < unicas.length; i++) {
-      const pasta = unicas[i];
-      etapa(`Criando processo ${pasta.proc} (${i + 1}/${unicas.length}) pela invoice e contrato...`);
-      const { inv, ct } = await docsVendaDaPasta(pasta);
-      const p = montarProcesso(pasta, inv, ct);
-      S.processos.push(p);
-      garantirCliente(p);
-      logAction('criar', 'PROCESSOS', p.id, (p.cliente || '') + ' · ' + (p.produto || '') + ' (acervo)');
-      if (p.docs._acervo.avisos.length) resumo.avisos.push(`${p.id}: ${p.docs._acervo.avisos.join(', ')}`);
-      resumo.processos++;
-    }
-    resumo.clientes = S.clientes.length;
     await saveToSheets();
-    for (const p of S.processos) { etapa(`Criando pasta do ${p.id} no Drive de teste...`); await criarPastaProcesso(p); }
+    await criarPastaProcesso(p);
     await saveToSheets();
-    etapa(`${resumo.processos} processo(s) e ${resumo.clientes} cliente(s) criados`, true);
-
-    etapa('Copiando todos os arquivos do acervo para a Entrada e lendo cada um (PDF, XML e prints)...');
-    await importarAcervo(link);
-    etapa('Arquivos copiados e lidos', true);
-
-    etapa('Anexando cada arquivo ao seu processo / comprovantes do mês...');
-    resumo.anexados = await confirmarTodosEntrada(true, true) || 0;
-    atualizarStatusPelosDocs();
-    await saveToSheets();
-    resumo.pendentes = (S.entrada.itens || []).length;
-    resumo.despesas = (S.lancamentos || []).filter(x => x.tipo === 'Despesa').length;
-    resumo.cambios = (S.lancamentos || []).filter(x => x.categoria === 'Câmbio').length;
-    etapa(`${resumo.anexados} arquivo(s) anexados · ${resumo.despesas} despesa(s) e ${resumo.cambios} câmbio(s) lançados`, true);
-
-    if (ofx.length && typeof importarOFXBytes === 'function') {
-      for (const f of ofx.sort((a, b) => String(a.createdTime).localeCompare(String(b.createdTime)))) {
-        etapa(`Importando extrato ${f.name}...`);
-        const ok = await importarOFXBytes(new Uint8Array(await driveDownload(f.id)), f.name);
-        etapa(`Extrato ${f.name}: ${S.banco.msg ? S.banco.msg.texto : ''}`, ok);
-        if (!ok) resumo.avisos.push(`OFX ${f.name}: ${S.banco.msg ? S.banco.msg.texto : 'não importado'}`);
-      }
-      etapa('Conciliando extrato com câmbios e comprovantes...');
-      const r = await autoConciliar();
-      Object.assign(resumo, { concCambio: r.cambio, concBaixas: r.baixas, concRend: r.rendimentos, extratoPendente: r.pendentes });
-      etapa(`Conciliação: ${r.cambio} câmbio(s), ${r.baixas} pagamento(s) ligados a comprovantes, ${r.regras} tarifa(s)/regra(s), ${r.rendimentos} mês(es) de rendimento · ${r.pendentes} linha(s) para você decidir`, true);
-    }
-    RECOMECO.resumo = resumo;
-    logAction('importar', 'PROCESSOS', 'acervo', `Recomeço: ${resumo.processos} processos, ${resumo.anexados} arquivos`);
-    showToast('✅ Ambiente de teste montado a partir do acervo');
-  } catch (e) {
-    RECOMECO.erro = e.message || String(e);
-    etapa('Parou: ' + RECOMECO.erro, false);
-  }
-  RECOMECO.rodando = false;
-  if (S.entrada) { S.entrada.progresso = ''; S.entrada.carregando = false; }
+  } catch (e) { showToast('⚠️ ' + (e.message || e)); }
+  reidentificarPendentes();
+  showToast('✅ Processo ' + id + ' criado — agora é só anexar os arquivos');
   render();
 }
 
-function painelRecomeco() {
-  if (!RECOMECO.etapas.length) return '';
-  const r = RECOMECO.resumo;
-  return `<div class="card" style="padding:14px 16px;font-size:12.5px">
-    <div style="font-weight:700;margin-bottom:8px">${RECOMECO.rodando ? '⏳ Montando o ambiente de teste a partir do acervo — não feche a página' : RECOMECO.erro ? '⚠️ Recomeço interrompido' : '✅ Recomeço concluído'}</div>
-    ${RECOMECO.etapas.map(e => `<div style="padding:3px 0;color:${e.ok === false ? 'var(--red)' : e.ok ? 'var(--text)' : 'var(--muted)'}">${e.ok === null ? '•' : e.ok ? '✓' : '✗'} <span style="color:var(--muted)">${e.t}</span> ${escHtml(e.txt)}</div>`).join('')}
-    ${r ? `<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
-      <button class="btn btn-secondary btn-xs" onclick="nav('processos')">📦 Ver processos</button>
-      <button class="btn btn-secondary btn-xs" onclick="nav('conciliacao')">🏦 Conciliação</button>
-      <button class="btn btn-secondary btn-xs" onclick="nav('resultados')">📊 Clientes & Resultado</button></div>
-      ${r.avisos.length ? `<div style="margin-top:10px;color:var(--yellow)"><b>Confira:</b><br>${r.avisos.map(escHtml).join('<br>')}</div>` : ''}
-      ${r.pendentes ? `<div style="margin-top:8px;color:var(--muted)">${r.pendentes} arquivo(s) ficaram na lista abaixo para você escolher tipo/processo.</div>` : ''}` : ''}
-  </div>`;
+// ── Importar a pasta de UM processo pelo link ────────────────
+// copia os arquivos (originais intactos), lê tudo e, se o processo não existe, oferece criá-lo
+async function importarPastaProcesso() {
+  const link = await uiPrompt('Cole o link da pasta do processo no Drive (ex.: …/folders/… da pasta FS260096).\nOs arquivos são COPIADOS para a Entrada de teste; os originais não mudam.', 'https://drive.google.com/drive/folders/', 'Importar pasta de um processo');
+  if (!link || !/folders\/[A-Za-z0-9_-]{10,}|^[A-Za-z0-9_-]{20,}$/.test(link.trim())) { if (link) await uiAlert('Link de pasta inválido.'); return; }
+  const E = S.entrada;
+  E.ultimaPastaProcesso = '';
+  await importarAcervo(link.trim());
+  const id = E.ultimaPastaProcesso;
+  if (!id || (S.processos || []).some(p => p.id === id)) return;
+  const iDoc = E.itens.findIndex(it => podeCriarProcesso(it) === id);
+  if (iDoc >= 0) { await criarProcessoDoDoc(iDoc); return; }
+  // sem invoice/contrato legível: cria o processo só com o número (você completa depois)
+  if (!await uiConfirm(`O processo ${id} ainda não existe e não achei a invoice ou o contrato da Fu Song nesta pasta.\n\nCriar o processo ${id} só com o número? Você completa cliente, produto e valores na tela do processo.`, 'Criar processo ' + id, 'Criar processo', 'Agora não')) return;
+  const p = montarProcesso({ proc: id, nome: id, id: '' }, null, null);
+  S.processos.push(p);
+  logAction('criar', 'PROCESSOS', p.id, 'pela pasta do Drive (sem invoice)');
+  try { await saveToSheets(); await criarPastaProcesso(p); await saveToSheets(); } catch (e) { showToast('⚠️ ' + (e.message || e)); }
+  reidentificarPendentes();
+  showToast('✅ Processo ' + id + ' criado — confira e anexe os arquivos');
+  render();
 }

@@ -9,6 +9,8 @@
  * ═══════════════════════════════════════════════════════════ */
 
 // ── 1. ISOLAMENTO ───────────────────────────────────────────
+// Sem dados de exemplo no ambiente de testes: tudo vem da planilha de teste
+S.processos = []; S.clientes = []; S.fornecedores = []; S.lancamentos = []; S.custosMensais = [];
 const TESTE_SHEET_NAME = 'Fu Song ERP Database — TESTE';
 let _ensureTestSheetPromise = null;
 
@@ -36,16 +38,12 @@ async function _ensureTestSheet() {
   if (found.files && found.files.length) {
     SHEET_ID = found.files[0].id;
   } else {
-    // c) criar cópia da produção (a produção só é lida)
-    const ok = await uiConfirm(
-      'Para testar com dados reais, vou criar uma CÓPIA da planilha de produção chamada "' + TESTE_SHEET_NAME + '".\n\n' +
-      'Tudo o que você fizer na versão de testes grava só na cópia. A planilha de produção não é alterada.',
-      'Criar planilha de testes', 'Criar cópia', 'Cancelar');
-    if (!ok) throw new Error('Planilha de testes não criada.');
-    showSyncIndicator('Copiando planilha de produção...');
-    const copy = await driveAPI('POST', '/files/' + PROD_SHEET_ID + '/copy', { name: TESTE_SHEET_NAME }, 'fields=id');
+    // c) criar planilha de testes VAZIA (as abas e cabeçalhos são criados pelo setupSheets)
+    showSyncIndicator('Criando planilha de testes vazia...');
+    const nova = await driveAPI('POST', '/files', { name: TESTE_SHEET_NAME, mimeType: 'application/vnd.google-apps.spreadsheet' }, 'fields=id');
     hideSyncIndicator();
-    SHEET_ID = copy.id;
+    SHEET_ID = nova.id;
+    try { localStorage.removeItem('teste:erp-local-backup'); } catch (e) {}   // planilha nova: backup antigo não volta
     showToast('✅ Planilha de testes criada');
   }
   if (SHEET_ID === PROD_SHEET_ID) throw new Error('Bloqueado: planilha de testes igual à de produção.');
@@ -562,7 +560,7 @@ async function importarAcervo(linkDado) {
   const E = S.entrada;
   let salvo = '';
   try { salvo = localStorage.getItem('teste:acervo-url') || ''; } catch (e) {}
-  const link = linkDado || await uiPrompt('Cole o link da pasta do Drive com os documentos atuais (processos e comprovantes). Os arquivos serão COPIADOS para a Entrada de teste; os originais não mudam.', salvo, 'Importar acervo existente');
+  const link = linkDado || await uiPrompt('Cole o link da pasta do Drive (ex.: a pasta FS260096). Os arquivos serão COPIADOS para a Entrada de teste; os originais não mudam.', salvo, 'Importar pasta');
   if (!link) return;
   const m = String(link).match(/folders\/([A-Za-z0-9_-]{10,})/) || String(link).match(/^([A-Za-z0-9_-]{20,})$/);
   if (!m) { await uiAlert('Link de pasta inválido. Copie o endereço da pasta no Drive (…/folders/…).'); return; }
@@ -577,7 +575,9 @@ async function importarAcervo(linkDado) {
     (await driveListAll(`'${entradaId}' in parents and trashed=false`, 'md5Checksum')).forEach(f => f.md5Checksum && ja.add(f.md5Checksum));
     (S.processos || []).forEach(p => Object.values(((p.docs || {})._files) || {}).forEach(arr => (arr || []).forEach(f => f.md5 && ja.add(f.md5))));
     // percorre a árvore
-    const fila = [{ id: raiz, contexto: '' }], arquivos = [];
+    let ctxRaiz = '';
+    try { const meta = await driveAPI('GET', '/files/' + raiz, null, 'fields=id,name'); ctxRaiz = ((meta.name || '').toUpperCase().match(/FS\s?\d{6}/) || [''])[0].replace(/\s/g, ''); E.ultimaPastaProcesso = ctxRaiz; } catch (e) {}
+    const fila = [{ id: raiz, contexto: ctxRaiz }], arquivos = [];
     while (fila.length) {
       const { id, contexto } = fila.shift();
       const filhos = await driveListAll(`'${id}' in parents and trashed=false`, 'id,name,mimeType,md5Checksum,size');
@@ -606,7 +606,7 @@ async function importarAcervo(linkDado) {
       const fsNome = ((f.name.toUpperCase().match(/FS\s?\d{6}S?/) || [''])[0]).replace(/\s/g, '');
       const fsValido = fsNome && existe(fsNome);
       let nome = f.name.trim();
-      if (ctxs.length && !(fsValido && ctxs.length === 1 && ctxs[0] === fsNome)) nome = `${ctxs.join('+')} - ${nome}`;   // FS ausente, errado (ex.: FS270098) ou várias pastas
+      if (ctxs.length && !(fsNome && ctxs.length === 1 && ctxs[0] === fsNome && (fsValido || fsNome === ctxRaiz))) nome = `${ctxs.join('+')} - ${nome}`;   // FS ausente, errado (ex.: FS270098) ou várias pastas
       else if (!ctxs.length && f.contexto === 'ADM' && !fsValido) nome = `ADM - ${nome}`;
       E.progresso = `Copiando ${i + 1} de ${arquivos.length}: ${nome}`; render();
       try {
@@ -822,7 +822,7 @@ function setEntrada(i, campo, valor) {
 // ── Tela ────────────────────────────────────────────────────
 function renderEntrada() {
   const E = S.entrada;
-  if (!E.lido && !E.carregando && !E.erro && window._sheetsToken && !(typeof RECOMECO !== 'undefined' && RECOMECO.rodando)) setTimeout(lerEntrada, 50);
+  if (!E.lido && !E.carregando && !E.erro && window._sheetsToken) setTimeout(lerEntrada, 50);
   const procOpts = (S.processos || []).map(p => p.id).sort().reverse();
   const conf = c => c === 'alta' ? ['var(--green)', 'identificado'] : c === 'media' ? ['var(--yellow)', 'confira'] : c === 'manual' ? ['var(--accent)', 'ajustado'] : ['var(--red)', 'escolher'];
   const prontos = E.itens.filter(it => it.tipo && it.processo && !it.duplicado && it.confianca === 'alta').length;
@@ -873,6 +873,7 @@ function renderEntrada() {
         <span style="display:flex;gap:6px">
           <a class="btn btn-secondary btn-xs" href="${sanitizeUrl(it.url)}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">Abrir ↗</a>
           ${it.duplicado ? `<button class="btn btn-secondary btn-xs" onclick="moverDuplicado(${i})">Mover para Duplicados</button>` : ''}
+          ${typeof podeCriarProcesso === 'function' && podeCriarProcesso(it) ? `<button class="btn btn-secondary btn-xs" style="border-color:var(--green);color:var(--green)" onclick="criarProcessoDoDoc(${i})">➕ Criar processo ${escHtml(podeCriarProcesso(it))}</button>` : ''}
           <button class="btn btn-primary btn-xs" ${it.salvando ? 'disabled' : ''} onclick="confirmarEntrada(${i})">${it.salvando ? 'Anexando...' : 'Anexar ao processo'}</button>
         </span>
       </div>
@@ -888,15 +889,13 @@ function renderEntrada() {
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       ${E.folderUrl ? `<a class="btn btn-secondary btn-sm" href="${sanitizeUrl(E.folderUrl)}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">📂 Abrir pasta</a>` : ''}
-      <button class="btn btn-secondary btn-sm" onclick="importarAcervo()" ${E.carregando ? 'disabled' : ''}>🗄️ Importar acervo existente</button>
-      <button class="btn btn-secondary btn-sm" style="border-color:var(--orange);color:var(--orange)" onclick="recomecarDoAcervo()" ${E.carregando || (typeof RECOMECO !== 'undefined' && RECOMECO.rodando) ? 'disabled' : ''}>🧹 Recomeçar do zero pelo acervo</button>
+      <button class="btn btn-secondary btn-sm" onclick="importarPastaProcesso()" ${E.carregando ? 'disabled' : ''}>📂 Importar pasta de um processo</button>
       <button class="btn btn-secondary btn-sm" onclick="S.entrada.lido=false;lerEntrada()" ${E.carregando ? 'disabled' : ''}>🔄 Atualizar</button>
       <button class="btn btn-primary btn-sm" onclick="confirmarTodosEntrada()" ${prontos ? '' : 'disabled'}>✅ Anexar identificados (${prontos})</button>
       ${prontosTodos > prontos ? `<button class="btn btn-secondary btn-sm" onclick="confirmarTodosEntrada(true)">Anexar todos com processo (${prontosTodos})</button>` : ''}
     </div>
   </div>
   ${!window._sheetsToken ? `<div class="card" style="text-align:center;padding:30px;color:var(--muted)">Conecte ao Google Drive (botão no topo ou "Reconectar Drive" no menu) para ler a pasta Entrada.</div>` : ''}
-  ${typeof painelRecomeco === 'function' ? painelRecomeco() : ''}
   ${E.carregando ? `<div class="card" style="padding:18px;color:var(--muted);font-size:13px">⏳ ${escHtml(E.progresso || 'Lendo...')}</div>` : ''}
   ${E.erro ? `<div class="card" style="padding:16px;color:var(--red);font-size:13px">⚠️ ${escHtml(E.erro)}</div>` : ''}
   ${E.ofxNaEntrada ? `<div class="card" style="padding:12px 14px;font-size:12.5px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><span>🏦 ${E.ofxNaEntrada} extrato(s) OFX na Entrada.</span><button class="btn btn-primary btn-xs" onclick="nav('conciliacao');setTimeout(importarOFXDrive,300)">Importar na Conciliação</button></div>` : ''}
