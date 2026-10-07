@@ -327,7 +327,7 @@ function lerCambio(texto) {
 // Comprovante de PIX/transferência/boleto do Itaú
 function lerPagamento(texto) {
   const T = String(texto || '');
-  if (!/comprovante\s+de\s+(transfer[eê]ncia|pagamento|pix)|comprovante\s+pix/i.test(T)) return null;
+  if (!/comprovante\s+de\s+(transfer[eê]ncia|pagamento|pix)|comprovante\s+pix|pix\s+(enviado|realizado)|transfer[eê]ncia\s+(realizada|efetuada)|pagamento\s+(realizado|efetuado)/i.test(T)) return null;
   const g = re => { const m = T.match(re); return m ? m[1].trim() : ''; };
   return {
     valor: numBR(g(/\bvalor(?:\s+do\s+pagamento|\s+da\s+transfer[eê]ncia)?\s*:?\s*R\$\s*([\d.,]+)/i)),
@@ -338,6 +338,14 @@ function lerPagamento(texto) {
     idTransacao: g(/ID\s+da\s+transa[cç][aã]o\s*:?\s*(E[0-9A-Z]{20,})/i),
     tipoPagamento: g(/tipo\s+de\s+pagamento\s*:?\s*([^\n]+)/i),
   };
+}
+// Comprovante lido por OCR (print/foto): rótulos podem vir separados do valor
+function completarPagamento(pag, texto) {
+  const T = String(texto || '');
+  if (!pag.valor) { const m = T.match(/R\$\s*([\d.]+,\d{2})/); if (m) { pag.valor = numBR(m[1]); pag.valorIncerto = true; } }
+  if (!pag.data) { const m = T.match(/\b(\d{2}\/\d{2}\/\d{4})\b/); if (m) pag.data = m[1]; }
+  if (!pag.recebedor) { const m = T.match(/(?:recebedor|favorecido|para|destinat[aá]rio)\s*:?\s*\n?\s*([A-ZÀ-Ú][^\n]{2,60})/i); if (m) pag.recebedor = m[1].trim(); }
+  return pag;
 }
 
 function normTxt(s) { return String(s || '').toUpperCase().replace(/\s+/g, ' '); }
@@ -390,7 +398,7 @@ function identificarProcesso(info, texto, nome) {
   (S.processos || []).forEach(p => {
     let score = 0; const motivos = [];
     const id = String(p.id || '').toUpperCase();
-    if (id && new RegExp('\\b' + id.replace(/[^A-Z0-9]/g, '') + '\\b').test(T.replace(/[\s\-]/g, ' ').replace(/FS\s+(\d)/g, 'FS$1'))) { score += 100; motivos.push('número ' + id); }
+    if (id && new RegExp('\\b' + id.replace(/[^A-Z0-9]/g, '') + 'S?\\b').test(T.replace(/[\s\-]/g, ' ').replace(/FS\s+(\d)/g, 'FS$1'))) { score += 100; motivos.push('número ' + id); }
     const conts = [...(p.containers || []), p.container].filter(Boolean).map(c => String(c).toUpperCase().replace(/[\s\-]/g, ''));
     conts.forEach(c => { if (c.length >= 10 && compact.includes(c)) { score += 80; motivos.push('container ' + c); } });
     const bk = String(p.booking || '').replace(/\s/g, '').toUpperCase();
@@ -401,7 +409,7 @@ function identificarProcesso(info, texto, nome) {
     refs.forEach(ch => { if (idx[ch] === p.id) { score += 100; motivos.push('cita nota já anexada'); } });
     if (info.chave && idx[info.chave] === p.id) { score += 100; motivos.push('mesma chave já anexada'); }
     if (info.cambio && info.cambio.faturas.some(f => f.processo === id)) { score += 150; motivos.push('fatura no contrato de câmbio'); }
-    if (info.pagamento && normTxt(info.pagamento.identificacao).replace(/\s/g, '') === id) { score += 150; motivos.push('identificação no comprovante'); }
+    if (info.pagamento && normTxt(info.pagamento.identificacao).replace(/\s/g, '').replace(/^(FS\d{6})S$/, '$1') === id.replace(/^(FS\d{6})S$/, '$1')) { score += 150; motivos.push('identificação no comprovante'); }
     if (score > 0) cands.push({ id: p.id, score, motivos: [...new Set(motivos)] });
   });
   return cands.sort((a, b) => b.score - a.score);
@@ -432,9 +440,7 @@ async function lerEntrada() {
     E.folderId = folderId;
     E.folderUrl = 'https://drive.google.com/drive/folders/' + folderId;
     const q = `'${folderId}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'`;
-    const list = await driveAPI('GET', '/files', null,
-      'q=' + encodeURIComponent(q) + '&fields=files(id,name,mimeType,size,md5Checksum,createdTime,webViewLink)&orderBy=createdTime desc&pageSize=100');
-    const todos = list.files || [];
+    const todos = await driveListAll(q, 'id,name,mimeType,size,md5Checksum,createdTime,webViewLink');
     const files = todos.filter(f => !/\.ofx$/i.test(f.name || ''));
     E.ofxNaEntrada = todos.length - files.length;
     const itens = [];
@@ -469,12 +475,17 @@ async function analisarArquivo(f) {
       }
     }
   } catch (e) { item.erro = e.message || String(e); }
+  // Print/foto ou PDF escaneado: o Google Drive lê o texto (OCR)
+  const isImg = /^image\//i.test(f.mimeType || '') || /\.(png|jpe?g|webp|heic)$/i.test(nome);
+  if (!item.tipo && (isImg || (isPdf && String(item.texto || '').replace(/\s/g, '').length < 40)) && Number(f.size || 0) < 10e6 && typeof ocrDrive === 'function') {
+    try { const t = await ocrDrive(f.id, nome); if (t && t.trim()) { item.texto = t; item.ocr = true; } } catch (e) { item.erroOcr = e.message || String(e); }
+  }
   if (!item.tipo) {
     const c = classificarDocumento(item.texto, nome.replace(/^((?:FS\d{6}S?)(?:\+FS\d{6}S?)*|ADM) - /i, ''));
     item.tipo = c.tipo; item.confianca = c.confianca; item.motivo = c.motivo;
     item.info = c.chave ? { chave: c.chave, modelo: c.modelo, numero: c.numero, emitCnpj: c.emitCnpj, outrasChaves: c.outrasChaves, valor: (c.tipo === 'nfe' || c.tipo === 'nfeSaida') ? valorDanfe(item.texto) : 0 } : {};
     if (c.cambio) { item.info.cambio = c.cambio; item.info.valor = c.cambio.valorReais; item.info.data = brToIso(c.cambio.data); }
-    if (c.pagamento) { item.info.pagamento = c.pagamento; item.info.valor = c.pagamento.valor; item.info.emitNome = c.pagamento.recebedor; item.info.data = brToIso(c.pagamento.data); }
+    if (c.pagamento) { completarPagamento(c.pagamento, item.texto); if (c.pagamento.valorIncerto) item.confianca = 'media'; if (!c.categoria) c.categoria = categoriaPeloNome(normTxt(nome + ' ' + (c.pagamento.recebedor || ''))); item.info.pagamento = c.pagamento; item.info.valor = c.pagamento.valor; item.info.emitNome = c.pagamento.recebedor; item.info.data = brToIso(c.pagamento.data); }
     if (c.categoria) item.categoria = c.categoria;
   }
   // Prefixo colocado pelo acervo: "FS260105+FS260107 - nome original"
@@ -518,6 +529,7 @@ async function analisarArquivo(f) {
     item.processo = '__ADM'; item.admAuto = true; if (item.confianca === 'alta') item.confianca = 'media';
     item.aviso = (item.aviso ? item.aviso + ' ' : '') + 'Não cita nenhum processo: vai para os comprovantes do mês. Se for custo de um processo, escolha o processo.';
   }
+  if (!item.tipo && item.pastaProcessos.length && item.processo && item.processo !== '__ADM') { item.tipo = 'outros'; item.confianca = 'media'; item.motivo = 'arquivo da pasta do processo'; }
   if (item.processo === '__ADM' && !item.tipo) { item.tipo = 'pagamento'; item.confianca = 'media'; item.motivo = 'pasta de comprovantes do mês'; }
   // Contrato de câmbio que paga mais de uma fatura: anexa a todos os processos citados
   if (item.info.cambio) item.processosExtras = item.info.cambio.faturas.map(f => f.processo).filter(id => id !== item.processo && (S.processos || []).some(p => p.id === id));
@@ -546,11 +558,11 @@ async function driveListAll(q, fields) {
   return out;
 }
 
-async function importarAcervo() {
+async function importarAcervo(linkDado) {
   const E = S.entrada;
   let salvo = '';
   try { salvo = localStorage.getItem('teste:acervo-url') || ''; } catch (e) {}
-  const link = await uiPrompt('Cole o link da pasta do Drive com os documentos atuais (processos e comprovantes). Os arquivos serão COPIADOS para a Entrada de teste; os originais não mudam.', salvo, 'Importar acervo existente');
+  const link = linkDado || await uiPrompt('Cole o link da pasta do Drive com os documentos atuais (processos e comprovantes). Os arquivos serão COPIADOS para a Entrada de teste; os originais não mudam.', salvo, 'Importar acervo existente');
   if (!link) return;
   const m = String(link).match(/folders\/([A-Za-z0-9_-]{10,})/) || String(link).match(/^([A-Za-z0-9_-]{20,})$/);
   if (!m) { await uiAlert('Link de pasta inválido. Copie o endereço da pasta no Drive (…/folders/…).'); return; }
@@ -572,7 +584,7 @@ async function importarAcervo() {
       for (const f of filhos) {
         if (f.mimeType === 'application/vnd.google-apps.folder') {
           if (ACERVO_IGNORAR_PASTA.test(f.name.trim())) continue;
-          const fs = (f.name.toUpperCase().match(/FS\s?\d{6}S?/) || [''])[0].replace(/\s/g, '');
+          const fs = (f.name.toUpperCase().match(/FS\s?\d{6}/) || [''])[0].replace(/\s/g, '');
           const ctx = fs || (/COMPROVANTE|DESPESA/i.test(f.name) ? 'ADM' : contexto);
           fila.push({ id: f.id, contexto: ctx });
         } else if (!/^application\/vnd\.google-apps/.test(f.mimeType) && !ACERVO_IGNORAR_ARQ.test(f.name)) {
@@ -605,6 +617,7 @@ async function importarAcervo() {
     }
     E.progresso = '';
     E.carregando = false;
+    E.ultimoAcervo = { copiados, pulados, unificados, total: arquivos.length };
     showToast(`✅ ${copiados} arquivo(s) copiados para a Entrada de teste${pulados ? ` · ${pulados} repetidos não copiados` : ''}${unificados ? ` · ${unificados} estavam em mais de um processo` : ''}`);
     E.lido = false;
     await lerEntrada();
@@ -660,6 +673,7 @@ async function confirmarEntrada(i, silencioso) {
       logAction('anexar', 'PROCESSOS', proc.id, tipoLabel(item.tipo) + ': ' + upd.name + ' (Caixa de Entrada)' + (item.pastaErrada && proc.id === item.pastaErrada.certo ? ' — corrigido: estava na pasta ' + item.pastaErrada.estava.join('+') : ''));
     };
     registro(p);
+    lancarFinanceiroDoDoc(item, p, upd);
     // Mesmo contrato de câmbio em outros processos: atalho na pasta de cada um (o arquivo existe uma vez só)
     for (const idExtra of item.processosExtras || []) {
       const px = S.processos.find(x => x.id === idExtra);
@@ -670,6 +684,7 @@ async function confirmarEntrada(i, silencioso) {
         try { await driveAPI('POST', '/files', { name: upd.name, mimeType: 'application/vnd.google-apps.shortcut', parents: [fx], shortcutDetails: { targetId: upd.id } }, 'fields=id'); } catch (e) {}
       }
       registro(px);
+      if (item.info.cambio) lancarCambioDoContrato(item, px, upd);
     }
     E.itens.splice(i, 1);
     reidentificarPendentes();
@@ -695,6 +710,48 @@ function reidentificarPendentes() {
   });
 }
 
+// ── Financeiro a partir dos documentos ──────────────────────
+// Comprovante de pagamento → despesa paga (com o comprovante); contrato de câmbio → receita de câmbio por fatura.
+// Quando o extrato OFX for importado, a conciliação liga esses lançamentos à linha do banco (sem duplicar).
+function lancarFinanceiroDoDoc(item, p, upd) {
+  if (item.info.cambio) return lancarCambioDoContrato(item, p, upd);
+  if (item.tipo !== 'pagamento') return;
+  const pag = item.info.pagamento || {};
+  const valor = Number(item.info.valor) || 0;
+  if (!valor) return;
+  S.lancamentos = S.lancamentos || [];
+  if (S.lancamentos.some(x => x.docs && (x.docs.comprovante === upd.webViewLink || (pag.idTransacao && x.docs.idTransacao === pag.idTransacao)))) return;
+  const centroAdm = !p;
+  const categoria = item.categoria || (centroAdm ? 'Despesas administrativas' : 'Outros custos do processo');
+  const obj = {
+    id: genId(), tipo: 'Despesa', status: 'Pago',
+    descricao: categoria + ' — ' + (pag.recebedor || item.info.emitNome || item.nome.replace(/\.[a-z0-9]+$/i, '')),
+    valor, data: item.info.data ? isoToBr(item.info.data) : '', empresa: pag.recebedor || item.info.emitNome || '',
+    categoria, vinculo: centroAdm ? 'avulso' : 'processo', vinculoId: centroAdm ? 'ADM' : p.id,
+    observacao: 'Comprovante: ' + upd.name + (item.processosExtras && item.processosExtras.length ? ' · também ligado a ' + item.processosExtras.join(', ') : '') + (pag.valorIncerto ? ' · valor lido do print (confira)' : ''),
+    docs: { comprovante: upd.webViewLink, idTransacao: pag.idTransacao || '', _origem: 'entrada' },
+  };
+  S.lancamentos.unshift(obj);
+  logAction('criar', 'EXTRATO_CAIXA', obj.id, `Despesa ${obj.descricao} R$ ${valor.toFixed(2)} (comprovante)`);
+}
+
+function lancarCambioDoContrato(item, p, upd) {
+  const c = item.info.cambio; if (!c || !p) return;
+  const f = (c.faturas || []).find(x => x.processo === p.id); if (!f || !f.usd) return;
+  S.lancamentos = S.lancamentos || [];
+  if (S.lancamentos.some(x => x.categoria === 'Câmbio' && x.vinculoId === p.id && x.docs && x.docs._cambio && x.docs._cambio.referencia === c.referencia)) return;
+  const taxa = Number(c.taxa) || (c.valorReais && c.valorMoeda ? c.valorReais / c.valorMoeda : 0);
+  const reais = Math.round(f.usd * taxa * 100) / 100;
+  const obj = {
+    id: genId(), tipo: 'Receita', status: 'Pago', descricao: `Câmbio contrato ${c.referencia} — ${p.id} (USD ${f.usd.toLocaleString('pt-BR', { minimumFractionDigits: 2 })})`,
+    valor: reais, data: c.data || '', empresa: 'ITAU UNIBANCO', categoria: 'Câmbio', vinculo: 'processo', vinculoId: p.id,
+    observacao: 'Contrato de câmbio ' + c.referencia + (c.contratoExtrato ? ' · extrato ' + c.contratoExtrato : ''),
+    docs: { comprovante: upd.webViewLink, _cambio: { contrato: c.contratoExtrato || '', referencia: c.referencia, usd: f.usd, taxa }, _origem: 'entrada' },
+  };
+  S.lancamentos.unshift(obj);
+  logAction('criar', 'EXTRATO_CAIXA', obj.id, `Câmbio ${c.referencia} → ${p.id} R$ ${reais.toFixed(2)}`);
+}
+
 // Despesa do mês (sem processo): vai para "Comprovantes AAAA-MM" e entra na lista usada pela conciliação
 async function confirmarAdm(i, silencioso) {
   const E = S.entrada, item = E.itens[i];
@@ -712,18 +769,19 @@ async function confirmarAdm(i, silencioso) {
       if (S.banco) S.banco.docs = docs;
     }
     logAction('anexar', 'DOCUMENTOS', upd.id, 'ADM: ' + upd.name + ' (Caixa de Entrada)');
+    lancarFinanceiroDoDoc(item, null, upd);
     E.itens.splice(i, 1);
     if (!silencioso) { showToast('✅ Guardado como despesa do mês ' + mes.slice(5) + '/' + mes.slice(0, 4)); render(); }
     return true;
   } catch (e) { item.salvando = false; item.erro = e.message || String(e); if (!silencioso) render(); return false; }
 }
 
-async function confirmarTodosEntrada(incluirConfira) {
+async function confirmarTodosEntrada(incluirConfira, semPerguntar) {
   const E = S.entrada;
   const ok1 = it => it.tipo && it.processo && !it.duplicado && (it.confianca === 'alta' || (incluirConfira && it.confianca !== 'nenhuma'));
   const prontos = E.itens.filter(ok1).length;
-  if (!prontos) { showToast('Nenhum documento pronto para anexar'); return; }
-  if (!await uiConfirm(incluirConfira
+  if (!prontos) { if (!semPerguntar) showToast('Nenhum documento pronto para anexar'); return 0; }
+  if (!semPerguntar && !await uiConfirm(incluirConfira
       ? `Anexar ${prontos} documento(s) que já têm tipo e processo, incluindo os marcados "confira" (reconhecidos pelo nome do arquivo)?`
       : `Anexar ${prontos} documento(s) identificados com confiança alta aos seus processos?`, 'Confirmar documentos', 'Anexar', 'Cancelar')) return;
   showSyncIndicator('Anexando documentos...');
@@ -737,8 +795,8 @@ async function confirmarTodosEntrada(incluirConfira) {
   }
   await saveToSheets();
   hideSyncIndicator();
-  showToast(`✅ ${ok} documento(s) anexado(s)`);
-  render();
+  if (!semPerguntar) { showToast(`✅ ${ok} documento(s) anexado(s)`); render(); }
+  return ok;
 }
 
 async function moverDuplicado(i) {
@@ -764,7 +822,7 @@ function setEntrada(i, campo, valor) {
 // ── Tela ────────────────────────────────────────────────────
 function renderEntrada() {
   const E = S.entrada;
-  if (!E.lido && !E.carregando && !E.erro && window._sheetsToken) setTimeout(lerEntrada, 50);
+  if (!E.lido && !E.carregando && !E.erro && window._sheetsToken && !(typeof RECOMECO !== 'undefined' && RECOMECO.rodando)) setTimeout(lerEntrada, 50);
   const procOpts = (S.processos || []).map(p => p.id).sort().reverse();
   const conf = c => c === 'alta' ? ['var(--green)', 'identificado'] : c === 'media' ? ['var(--yellow)', 'confira'] : c === 'manual' ? ['var(--accent)', 'ajustado'] : ['var(--red)', 'escolher'];
   const prontos = E.itens.filter(it => it.tipo && it.processo && !it.duplicado && it.confianca === 'alta').length;
@@ -831,12 +889,14 @@ function renderEntrada() {
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       ${E.folderUrl ? `<a class="btn btn-secondary btn-sm" href="${sanitizeUrl(E.folderUrl)}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">📂 Abrir pasta</a>` : ''}
       <button class="btn btn-secondary btn-sm" onclick="importarAcervo()" ${E.carregando ? 'disabled' : ''}>🗄️ Importar acervo existente</button>
+      <button class="btn btn-secondary btn-sm" style="border-color:var(--orange);color:var(--orange)" onclick="recomecarDoAcervo()" ${E.carregando || (typeof RECOMECO !== 'undefined' && RECOMECO.rodando) ? 'disabled' : ''}>🧹 Recomeçar do zero pelo acervo</button>
       <button class="btn btn-secondary btn-sm" onclick="S.entrada.lido=false;lerEntrada()" ${E.carregando ? 'disabled' : ''}>🔄 Atualizar</button>
       <button class="btn btn-primary btn-sm" onclick="confirmarTodosEntrada()" ${prontos ? '' : 'disabled'}>✅ Anexar identificados (${prontos})</button>
       ${prontosTodos > prontos ? `<button class="btn btn-secondary btn-sm" onclick="confirmarTodosEntrada(true)">Anexar todos com processo (${prontosTodos})</button>` : ''}
     </div>
   </div>
   ${!window._sheetsToken ? `<div class="card" style="text-align:center;padding:30px;color:var(--muted)">Conecte ao Google Drive (botão no topo ou "Reconectar Drive" no menu) para ler a pasta Entrada.</div>` : ''}
+  ${typeof painelRecomeco === 'function' ? painelRecomeco() : ''}
   ${E.carregando ? `<div class="card" style="padding:18px;color:var(--muted);font-size:13px">⏳ ${escHtml(E.progresso || 'Lendo...')}</div>` : ''}
   ${E.erro ? `<div class="card" style="padding:16px;color:var(--red);font-size:13px">⚠️ ${escHtml(E.erro)}</div>` : ''}
   ${E.ofxNaEntrada ? `<div class="card" style="padding:12px 14px;font-size:12.5px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><span>🏦 ${E.ofxNaEntrada} extrato(s) OFX na Entrada.</span><button class="btn btn-primary btn-xs" onclick="nav('conciliacao');setTimeout(importarOFXDrive,300)">Importar na Conciliação</button></div>` : ''}
