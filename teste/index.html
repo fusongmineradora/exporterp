@@ -443,6 +443,8 @@ select option{background:var(--bg2);}
   <button class="nav-btn" onclick="nav('rastreamento')" id="nav-rastreamento"><span class="nav-icon">📡</span><span>Rastreamento</span></button>
   <div class="nav-section">Financeiro</div>
   <button class="nav-btn" onclick="nav('cambio')" id="nav-cambio"><span class="nav-icon">💱</span><span>Câmbio</span></button>
+  <button class="nav-btn" onclick="nav('conciliacao')" id="nav-conciliacao"><span class="nav-icon">🏦</span><span>Conciliação</span></button>
+  <button class="nav-btn" onclick="nav('resultados')" id="nav-resultados"><span class="nav-icon">🤝</span><span>Clientes & Resultado</span></button>
   <button class="nav-btn" onclick="nav('custos')" id="nav-custos"><span class="nav-icon">💸</span><span>Custos</span></button>
   <div class="nav-section">Gestão</div>
   <button class="nav-btn" onclick="nav('cadastro')" id="nav-cadastro"><span class="nav-icon">🗂️</span><span>Cadastro</span></button>
@@ -1069,7 +1071,7 @@ function render(){
   if(mainEl) mainEl.style.background = isLight ? '#F1F5F9' : '#0a0f1e';
   const fab=document.getElementById('dash-fab');
   if(fab) fab.style.display=S.page==='dashboard'?'none':'flex';
-  const pages={dashboard:renderDashboard,processos:renderProcessos,rastreamento:renderRastreamento,cambio:renderCambio,custos:renderCustos,cadastro:renderCadastro,relatorios:renderRelatorios,entrada:()=>renderEntrada()};  // entrada.js carrega depois
+  const pages={dashboard:renderDashboard,processos:renderProcessos,rastreamento:renderRastreamento,cambio:renderCambio,custos:renderCustos,cadastro:renderCadastro,relatorios:renderRelatorios,entrada:()=>renderEntrada(),conciliacao:()=>renderConciliacao(),resultados:()=>renderResultados()};  // módulos 2.0 carregam depois
   const fn=pages[S.page];
   const mainEl2 = document.getElementById('main');
   if(mainEl2) mainEl2.style.display = 'block';
@@ -1308,7 +1310,7 @@ function renderProcessos(){
 
 function renderProcessoDetalhe(p){
   const _pt=procTotals(p); const custo=_pt.custo; const lucro=_pt.lucro; const _extraManual=custo-tc(p);
-  const docItems=[['invoice','📄 Invoice'],['contrato','📃 Contrato'],['packingList','📦 Packing List'],['bl','🚢 BL - Bill of Lading'],['due','🏛️ DU-E'],['nfe','🧾 NF-E Entrada'],['nfeSaida','🧾 NF-E Saída'],['comprovantes','🖨️ Comprovantes Câmbio'],['certOrigem','🌐 Cert. Origem'],['seguro','🛡️ Seguro de Carga'],['pesagem','⚖️ Pesagem'],['cte','🚛 CT-e (frete)'],['mdfe','🗺️ MDF-e'],['pagamento','🧾 Comprovantes de Pagamento'],['outros','📁 Outros Documentos']];
+  const docItems=[['invoice','📄 Invoice'],['contrato','📃 Contrato'],['packingList','📦 Packing List'],['bl','🚢 BL - Bill of Lading'],['due','🏛️ DU-E'],['nfe','🧾 NF-E Entrada'],['nfeSaida','🧾 NF-E Saída'],['comprovantes','🖨️ Comprovantes Câmbio'],['certOrigem','🌐 Cert. Origem'],['seguro','🛡️ Seguro de Carga'],['pesagem','⚖️ Pesagem'],['cte','🚛 CT-e (frete)'],['mdfe','🗺️ MDF-e'],['nfse','🧾 NFS-e (serviço)'],['recibo','✍️ Recibo / RPA'],['pagamento','💳 Comprovantes de Pagamento'],['outros','📁 Outros Documentos']];
   return `
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap">
     <button class="btn btn-secondary btn-sm" onclick="goBack()"><span style="font-size:15px">←</span> Voltar</button>
@@ -5588,5 +5590,7 @@ if (!checkSession()) {
 }
 </script>
 <script src="entrada.js"></script>
+<script src="ofx.js"></script>
+<script src="financeiro2.js"></script>
 </body>
 </html>

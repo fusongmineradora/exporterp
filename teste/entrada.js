@@ -98,7 +98,7 @@ const DUPLICADOS_FOLDER = '🔁 Duplicados';
 const ENTRADA_TIPOS = [
   ['invoice', 'Invoice'], ['contrato', 'Contrato'], ['packingList', 'Packing List'], ['bl', 'BL'],
   ['due', 'DU-E'], ['nfe', 'NF-E Entrada'], ['nfeSaida', 'NF-E Saída'], ['cte', 'CT-e (frete)'],
-  ['mdfe', 'MDF-e'], ['comprovantes', 'Comprovantes Câmbio'], ['certOrigem', 'Cert. Origem'],
+  ['mdfe', 'MDF-e'], ['nfse', 'NFS-e (serviço)'], ['recibo', 'Recibo / RPA'], ['comprovantes', 'Comprovantes Câmbio'], ['certOrigem', 'Cert. Origem'],
   ['seguro', 'Seguro de Carga'], ['pesagem', 'Pesagem'], ['pagamento', 'Comprovante de Pagamento'],
   ['outros', 'Outros Documentos'],
 ];
@@ -224,8 +224,36 @@ function lerXmlFiscal(txt) {
   return info;
 }
 
+// NFS-e (nota de serviço) em XML: ABRASF (CompNfse/InfNfse) ou padrão nacional (infNFSe)
+function lerXmlNfse(txt) {
+  if (!/<(\w+:)?(CompNfse|InfNfse|Nfse|infNFSe|NFSe)\b/i.test(txt)) return null;
+  let doc; try { doc = new DOMParser().parseFromString(txt, 'application/xml'); } catch (e) { return null; }
+  const first = (...names) => { for (const n of names) { const el = doc.getElementsByTagNameNS('*', n)[0]; if (el && el.textContent.trim()) return el.textContent.trim(); } return ''; };
+  const prest = doc.getElementsByTagNameNS('*', 'PrestadorServico')[0] || doc.getElementsByTagNameNS('*', 'Prestador')[0] || doc.getElementsByTagNameNS('*', 'emit')[0];
+  const sub = (root, ...names) => { if (!root) return ''; for (const n of names) { const el = root.getElementsByTagNameNS('*', n)[0]; if (el) return el.textContent.trim(); } return ''; };
+  return {
+    origem: 'xml', tipo: 'nfse', modelo: 'NFS-e',
+    numero: first('Numero', 'nNFSe', 'nDFSe'),
+    emitCnpj: sub(prest, 'Cnpj', 'CNPJ'), emitNome: sub(prest, 'RazaoSocial', 'xNome', 'NomeFantasia'),
+    valor: Number(String(first('ValorLiquidoNfse', 'ValorServicos', 'vLiq', 'vServ')).replace(',', '.')) || 0,
+    data: first('DataEmissao', 'dhEmi', 'dhProc').slice(0, 10),
+    descricao: first('Discriminacao', 'xDescServ').slice(0, 200),
+    chave: (first('CodigoVerificacao') ? 'NFSE-' + sub(prest, 'Cnpj', 'CNPJ') + '-' + first('Numero', 'nNFSe') : ''),
+    refs: [],
+  };
+}
+
+// Valor total da nota no texto do DANFE (quando não há XML)
+function valorDanfe(texto) {
+  const T = String(texto || '').replace(/\s+/g, ' ');
+  const m = T.match(/V(?:ALOR|\.)\s*TOTAL\s*DA\s*NOTA\s*:?\s*(?:R\$\s*)?([\d.]+,\d{2})/i);
+  return m ? numBR(m[1]) : 0;
+}
+
 // Documento comum (PDF ou nome do arquivo): ordem importa
 const REGRAS_TIPO = [
+  ['nfse', /NOTA\s+FISCAL\s+(ELETR[OÔ]NICA\s+)?DE\s+SERVI[CÇ]OS?|\bNFS-?E\b|DANFSE/],
+  ['recibo', /^\s*RECIBO\b|RECIBO\s+DE\s+PAGAMENTO|\bRPA\b|RECIBO\s+DE\s+PAGAMENTO\s+A\s+AUT[OÔ]NOMO/],
   ['bl', /BILL\s+OF\s+LADING|\bB\/L\s*(NO|N[º°])/],
   ['packingList', /PACKING\s+LIST|ROMANEIO/],
   ['certOrigem', /CERTIFICATE\s+OF\s+ORIGIN|CERTIFICADO\s+DE\s+ORIGEM/],
@@ -240,7 +268,9 @@ const REGRAS_TIPO = [
 
 // Pelo nome do arquivo (ex.: "Comprovante AZ - FS260109.png", "Dacte 1024 NF 51 ...pdf")
 const REGRAS_NOME = [
-  ['pagamento', /^(COMPROVANTE|PAGAMENTO|PIX|ADIANTAMENTO|TRANSFER)/],
+  ['nfse', /\bNFS-?E\b|\bNFES\b|NFSE_/],
+  ['recibo', /\bRECIBO\b|\bRPA\b/],
+  ['pagamento', /^(?:(?:ADM|FS\d{6}S?)[\s\-+_]*)*(COMPROVANTE|PAGAMENTO|PIX|ADIANTAMENTO|TRANSFER)/],
   ['comprovantes', /C[AÂ]MBIO/],
   ['cte', /\bDACTE\b|\bCT-?E\b/],
   ['mdfe', /\bMDF-?E?\b|DAMDFE/],
@@ -411,6 +441,8 @@ async function lerEntrada() {
       E.progresso = `Lendo ${i + 1} de ${files.length}: ${f.name}`; render();
       itens.push(await analisarArquivo(f));
     }
+    const vistos = {};
+    itens.forEach(it => { if (!it.md5) return; if (vistos[it.md5] && !it.duplicado) it.duplicado = { processo: 'Entrada', nome: vistos[it.md5], motivo: 'arquivo idêntico na Entrada' }; else vistos[it.md5] = it.nome; });
     E.itens = itens; E.lido = true;
   } catch (e) {
     E.erro = e.message || String(e);
@@ -428,32 +460,137 @@ async function analisarArquivo(f) {
       const buf = await driveDownload(f.id);
       if (isXml) {
         item.texto = new TextDecoder('utf-8').decode(buf);
-        const x = lerXmlFiscal(item.texto);
-        if (x && x.tipo) { item.info = x; item.tipo = x.tipo; item.confianca = 'alta'; item.motivo = 'XML ' + (x.modelo === '57' ? 'CT-e' : x.modelo === '58' ? 'MDF-e' : 'NF-e'); }
+        const x = lerXmlFiscal(item.texto) || lerXmlNfse(item.texto);
+        if (x && x.tipo) { item.info = x; item.tipo = x.tipo; item.confianca = 'alta'; item.motivo = 'XML ' + (x.modelo === '57' ? 'CT-e' : x.modelo === '58' ? 'MDF-e' : x.modelo === 'NFS-e' ? 'NFS-e' : 'NF-e'); }
       } else {
         item.texto = await pdfTexto(buf);
       }
     }
   } catch (e) { item.erro = e.message || String(e); }
   if (!item.tipo) {
-    const c = classificarDocumento(item.texto, nome);
+    const c = classificarDocumento(item.texto, nome.replace(/^((?:FS\d{6}S?)(?:\+FS\d{6}S?)*|ADM) - /i, ''));
     item.tipo = c.tipo; item.confianca = c.confianca; item.motivo = c.motivo;
-    item.info = c.chave ? { chave: c.chave, modelo: c.modelo, numero: c.numero, emitCnpj: c.emitCnpj, outrasChaves: c.outrasChaves } : {};
+    item.info = c.chave ? { chave: c.chave, modelo: c.modelo, numero: c.numero, emitCnpj: c.emitCnpj, outrasChaves: c.outrasChaves, valor: (c.tipo === 'nfe' || c.tipo === 'nfeSaida') ? valorDanfe(item.texto) : 0 } : {};
     if (c.cambio) { item.info.cambio = c.cambio; item.info.valor = c.cambio.valorReais; item.info.data = brToIso(c.cambio.data); }
     if (c.pagamento) { item.info.pagamento = c.pagamento; item.info.valor = c.pagamento.valor; item.info.emitNome = c.pagamento.recebedor; item.info.data = brToIso(c.pagamento.data); }
     if (c.categoria) item.categoria = c.categoria;
   }
-  item.candidatos = identificarProcesso(item.info, item.texto, nome);
-  item.processo = item.candidatos[0] ? item.candidatos[0].id : '';
+  // Prefixo colocado pelo acervo: "FS260105+FS260107 - nome original"
+  const mPasta = nome.match(/^((?:FS\d{6}S?)(?:\+FS\d{6}S?)*) - /i);
+  item.pastaProcessos = mPasta ? mPasta[1].toUpperCase().split('+') : [];
+  const nomeSemPasta = mPasta ? nome.slice(mPasta[0].length) : nome;
+  const pelaPasta = new Set(item.pastaProcessos);
+  item.candidatos = identificarProcesso(item.info, item.texto, nomeSemPasta);       // só o documento
+  const doDoc = item.candidatos[0] ? item.candidatos[0].id : '';
+  if (doDoc && pelaPasta.size && !pelaPasta.has(doDoc) && item.candidatos[0].score >= 100) {
+    item.processo = doDoc;
+    item.confianca = 'media';
+    item.aviso = `Conflito: o documento indica ${doDoc}, mas o arquivo estava na pasta ${[...pelaPasta].join(' e ')}. Confira antes de anexar.`;
+  } else if (doDoc) {
+    item.processo = doDoc;
+  } else if (pelaPasta.size) {
+    item.processo = item.pastaProcessos[0];
+    item.candidatos = item.pastaProcessos.map(id => ({ id, score: 90, motivos: ['pasta de origem'] }));
+  } else {
+    item.processo = /^ADM\s*-/i.test(nome) ? '__ADM' : '';
+  }
+  // Mesmo arquivo em pastas de processos diferentes: anexa a todos (atalho nos outros)
+  if (item.pastaProcessos.length > 1 && !item.aviso) {
+    item.processosExtras = item.pastaProcessos.filter(id => id !== item.processo);
+  }
+  if (item.processo === '__ADM' && !item.tipo) { item.tipo = 'pagamento'; item.confianca = 'media'; item.motivo = 'pasta de comprovantes do mês'; }
   // Contrato de câmbio que paga mais de uma fatura: anexa a todos os processos citados
-  item.processosExtras = item.info.cambio
-    ? item.info.cambio.faturas.map(f => f.processo).filter(id => id !== item.processo && (S.processos || []).some(p => p.id === id))
-    : [];
+  if (item.info.cambio) item.processosExtras = item.info.cambio.faturas.map(f => f.processo).filter(id => id !== item.processo && (S.processos || []).some(p => p.id === id));
+  item.processosExtras = (item.processosExtras || []).filter(id => (S.processos || []).some(p => p.id === id));
+  if (item.processosExtras.length && !item.info.cambio) item.aviso = (item.aviso ? item.aviso + ' ' : '') + `Este mesmo arquivo estava também na pasta ${item.processosExtras.join(', ')}: será anexado a todos.`;
   if (item.info.cambio && item.info.cambio.faturas.length && item.info.cambio.faturas.some(f => !(S.processos || []).some(p => p.id === f.processo))) {
-    item.aviso = 'Fatura sem processo no ERP: ' + item.info.cambio.faturas.filter(f => !(S.processos || []).some(p => p.id === f.processo)).map(f => f.processo).join(', ');
+    item.aviso = (item.aviso ? item.aviso + ' ' : '') + 'Fatura sem processo no ERP: ' + item.info.cambio.faturas.filter(f => !(S.processos || []).some(p => p.id === f.processo)).map(f => f.processo).join(', ');
   }
   item.duplicado = procurarDuplicado(item);
   return item;
+}
+
+// ── Importar acervo existente (cópia; originais intactos) ───
+// Percorre a pasta antiga (e subpastas), copia cada arquivo para a Entrada de teste.
+// O processo vem da pasta onde o arquivo estava (ex.: "FS260109 - Lee 2 lítio");
+// pastas de comprovantes do mês viram "ADM - ...".
+const ACERVO_IGNORAR_PASTA = /^(ERP|EXTRATO)/i;
+const ACERVO_IGNORAR_ARQ = /\.(html?|ofx|js|css)$/i;
+
+async function driveListAll(q, fields) {
+  let out = [], token = '';
+  do {
+    const r = await driveAPI('GET', '/files', null, 'q=' + encodeURIComponent(q) + '&fields=nextPageToken,files(' + fields + ')&pageSize=200' + (token ? '&pageToken=' + encodeURIComponent(token) : ''));
+    out = out.concat(r.files || []); token = r.nextPageToken || '';
+  } while (token);
+  return out;
+}
+
+async function importarAcervo() {
+  const E = S.entrada;
+  let salvo = '';
+  try { salvo = localStorage.getItem('teste:acervo-url') || ''; } catch (e) {}
+  const link = await uiPrompt('Cole o link da pasta do Drive com os documentos atuais (processos e comprovantes). Os arquivos serão COPIADOS para a Entrada de teste; os originais não mudam.', salvo, 'Importar acervo existente');
+  if (!link) return;
+  const m = String(link).match(/folders\/([A-Za-z0-9_-]{10,})/) || String(link).match(/^([A-Za-z0-9_-]{20,})$/);
+  if (!m) { await uiAlert('Link de pasta inválido. Copie o endereço da pasta no Drive (…/folders/…).'); return; }
+  try { localStorage.setItem('teste:acervo-url', link); } catch (e) {}
+  const raiz = m[1];
+  E.carregando = true; E.progresso = 'Lendo a pasta de origem...'; render();
+  try {
+    await ensureTestSheet();
+    const entradaId = await getTesteFolder(ENTRADA_FOLDER);
+    // md5 já presentes (Entrada + anexados) para não duplicar
+    const ja = new Set();
+    (await driveListAll(`'${entradaId}' in parents and trashed=false`, 'md5Checksum')).forEach(f => f.md5Checksum && ja.add(f.md5Checksum));
+    (S.processos || []).forEach(p => Object.values(((p.docs || {})._files) || {}).forEach(arr => (arr || []).forEach(f => f.md5 && ja.add(f.md5))));
+    // percorre a árvore
+    const fila = [{ id: raiz, contexto: '' }], arquivos = [];
+    while (fila.length) {
+      const { id, contexto } = fila.shift();
+      const filhos = await driveListAll(`'${id}' in parents and trashed=false`, 'id,name,mimeType,md5Checksum,size');
+      for (const f of filhos) {
+        if (f.mimeType === 'application/vnd.google-apps.folder') {
+          if (ACERVO_IGNORAR_PASTA.test(f.name.trim())) continue;
+          const fs = (f.name.toUpperCase().match(/FS\s?\d{6}S?/) || [''])[0].replace(/\s/g, '');
+          const ctx = fs || (/COMPROVANTE|DESPESA/i.test(f.name) ? 'ADM' : contexto);
+          fila.push({ id: f.id, contexto: ctx });
+        } else if (!/^application\/vnd\.google-apps/.test(f.mimeType) && !ACERVO_IGNORAR_ARQ.test(f.name)) {
+          arquivos.push({ ...f, contexto });
+        }
+      }
+      E.progresso = `Lendo a pasta de origem... ${arquivos.length} arquivo(s) encontrados`; render();
+    }
+    // mesmo conteúdo em várias pastas → uma cópia só, com todos os processos no prefixo
+    const porMd5 = {};
+    arquivos.forEach(f => { if (!f.md5Checksum) return; (porMd5[f.md5Checksum] = porMd5[f.md5Checksum] || new Set()).add(f.contexto); });
+    const existe = id => (S.processos || []).some(p => p.id === id);
+    let copiados = 0, pulados = 0, unificados = 0;
+    for (let i = 0; i < arquivos.length; i++) {
+      const f = arquivos[i];
+      if (f.md5Checksum && ja.has(f.md5Checksum)) { pulados++; continue; }
+      const ctxs = [...(f.md5Checksum ? porMd5[f.md5Checksum] : new Set([f.contexto]))].filter(c => c && c !== 'ADM');
+      if (ctxs.length > 1) unificados++;
+      const fsNome = ((f.name.toUpperCase().match(/FS\s?\d{6}S?/) || [''])[0]).replace(/\s/g, '');
+      const fsValido = fsNome && existe(fsNome);
+      let nome = f.name.trim();
+      if (ctxs.length && !(fsValido && ctxs.length === 1 && ctxs[0] === fsNome)) nome = `${ctxs.join('+')} - ${nome}`;   // FS ausente, errado (ex.: FS270098) ou várias pastas
+      else if (!ctxs.length && f.contexto === 'ADM' && !fsValido) nome = `ADM - ${nome}`;
+      E.progresso = `Copiando ${i + 1} de ${arquivos.length}: ${nome}`; render();
+      try {
+        await driveAPI('POST', '/files/' + f.id + '/copy', { name: nome, parents: [entradaId], description: 'Cópia do acervo (original: ' + f.id + ')' }, 'fields=id');
+        if (f.md5Checksum) ja.add(f.md5Checksum);
+        copiados++;
+      } catch (e) { console.warn('copiar', f.name, e.message); }
+    }
+    E.progresso = '';
+    E.carregando = false;
+    showToast(`✅ ${copiados} arquivo(s) copiados para a Entrada de teste${pulados ? ` · ${pulados} repetidos não copiados` : ''}${unificados ? ` · ${unificados} estavam em mais de um processo` : ''}`);
+    E.lido = false;
+    await lerEntrada();
+  } catch (e) {
+    E.carregando = false; E.erro = e.message || String(e); render();
+  }
 }
 
 // ── Confirmação: move, renomeia e anexa ─────────────────────
@@ -470,8 +607,9 @@ function nomePadrao(item, p) {
 async function confirmarEntrada(i, silencioso) {
   const E = S.entrada, item = E.itens[i];
   if (!item || item.salvando) return;
-  const p = S.processos.find(x => x.id === item.processo);
   if (!item.tipo) { if (!silencioso) showToast('Escolha o tipo de documento'); return false; }
+  if (item.processo === '__ADM') return confirmarAdm(i, silencioso);
+  const p = S.processos.find(x => x.id === item.processo);
   if (!p) { if (!silencioso) showToast('Escolha o processo'); return false; }
   item.salvando = true; render();
   try {
@@ -533,18 +671,44 @@ function reidentificarPendentes() {
   });
 }
 
-async function confirmarTodosEntrada() {
+// Despesa do mês (sem processo): vai para "Comprovantes AAAA-MM" e entra na lista usada pela conciliação
+async function confirmarAdm(i, silencioso) {
+  const E = S.entrada, item = E.itens[i];
+  item.salvando = true; if (!silencioso) render();
+  try {
+    const mes = (item.info.data || new Date().toISOString()).slice(0, 7);
+    const pasta = await getTesteFolder('Comprovantes ' + mes);
+    const novoNome = `${mes}_ADM_${tipoLabel(item.tipo).replace(/[^\wÀ-ú]+/g, '-')}_${item.nome.replace(/^ADM\s*-\s*/i, '')}`;
+    const upd = await driveAPI('PATCH', '/files/' + item.fileId, { name: novoNome, description: 'Nome original: ' + item.nome }, 'addParents=' + pasta + '&removeParents=' + E.folderId + '&fields=id,name,webViewLink');
+    if (typeof gravarAba2 === 'function') {
+      await ensureTabs2();
+      const docs = await lerAba2('DOCUMENTOS');
+      docs.push({ id: upd.id, nome: upd.name, url: upd.webViewLink, tipo: item.tipo, categoria: item.categoria || '', valor: item.info.valor || '', data: item.info.data || '', centro: 'ADM', md5: item.md5, criadoEm: new Date().toISOString() });
+      await gravarAba2('DOCUMENTOS', docs);
+      if (S.banco) S.banco.docs = docs;
+    }
+    logAction('anexar', 'DOCUMENTOS', upd.id, 'ADM: ' + upd.name + ' (Caixa de Entrada)');
+    E.itens.splice(i, 1);
+    if (!silencioso) { showToast('✅ Guardado como despesa do mês ' + mes.slice(5) + '/' + mes.slice(0, 4)); render(); }
+    return true;
+  } catch (e) { item.salvando = false; item.erro = e.message || String(e); if (!silencioso) render(); return false; }
+}
+
+async function confirmarTodosEntrada(incluirConfira) {
   const E = S.entrada;
-  const prontos = E.itens.filter(it => it.tipo && it.processo && !it.duplicado && it.confianca === 'alta').length;
-  if (!prontos) { showToast('Nenhum documento identificado com segurança'); return; }
-  if (!await uiConfirm(`Anexar ${prontos} documento(s) identificados com confiança alta aos seus processos?`, 'Confirmar documentos', 'Anexar', 'Cancelar')) return;
+  const ok1 = it => it.tipo && it.processo && !it.duplicado && (it.confianca === 'alta' || (incluirConfira && it.confianca !== 'nenhuma'));
+  const prontos = E.itens.filter(ok1).length;
+  if (!prontos) { showToast('Nenhum documento pronto para anexar'); return; }
+  if (!await uiConfirm(incluirConfira
+      ? `Anexar ${prontos} documento(s) que já têm tipo e processo, incluindo os marcados "confira" (reconhecidos pelo nome do arquivo)?`
+      : `Anexar ${prontos} documento(s) identificados com confiança alta aos seus processos?`, 'Confirmar documentos', 'Anexar', 'Cancelar')) return;
   showSyncIndicator('Anexando documentos...');
   let ok = 0, rodada = 0, achou = true;
   while (achou && rodada++ < 5) {
     achou = false;
     for (let i = E.itens.length - 1; i >= 0; i--) {
       const it = E.itens[i];
-      if (it.tipo && it.processo && !it.duplicado && it.confianca === 'alta') { if (await confirmarEntrada(i, true)) { ok++; achou = true; } }
+      if (ok1(it)) { if (await confirmarEntrada(i, true)) { ok++; achou = true; } }
     }
   }
   await saveToSheets();
@@ -580,6 +744,7 @@ function renderEntrada() {
   const procOpts = (S.processos || []).map(p => p.id).sort().reverse();
   const conf = c => c === 'alta' ? ['var(--green)', 'identificado'] : c === 'media' ? ['var(--yellow)', 'confira'] : c === 'manual' ? ['var(--accent)', 'ajustado'] : ['var(--red)', 'escolher'];
   const prontos = E.itens.filter(it => it.tipo && it.processo && !it.duplicado && it.confianca === 'alta').length;
+  const prontosTodos = E.itens.filter(it => it.tipo && it.processo && !it.duplicado && it.confianca !== 'nenhuma').length;
 
   const card = (it, i) => {
     const [cor, txt] = !it.tipo ? conf('nenhuma') : !it.processo ? ['var(--yellow)', 'falta o processo'] : conf(it.confianca);
@@ -605,6 +770,7 @@ function renderEntrada() {
       ${it.duplicado ? `<div style="margin-top:10px;padding:8px 10px;border-radius:8px;background:rgba(239,68,68,0.08);color:var(--red);font-size:12px">Já anexado em ${escHtml(it.duplicado.processo)} (${escHtml(it.duplicado.motivo)}: ${escHtml(it.duplicado.nome)})</div>` : ''}
       ${it.erro ? `<div style="margin-top:10px;font-size:12px;color:var(--red)">⚠️ ${escHtml(it.erro)}</div>` : ''}
       ${it.aviso ? `<div style="margin-top:10px;font-size:12px;color:var(--yellow)">⚠️ ${escHtml(it.aviso)}</div>` : ''}
+      ${it.processo && it.processo !== '__ADM' && !(S.processos || []).some(p => p.id === it.processo) ? `<div style="margin-top:10px;font-size:12px;color:var(--red)">⚠️ O processo ${escHtml(it.processo)} não existe no ERP. Escolha o processo correto.</div>` : ''}
       ${it.info.cambio && it.info.cambio.faturas.length ? `<div style="margin-top:10px;font-size:12px;color:var(--muted2)">Faturas pagas por este câmbio: ${it.info.cambio.faturas.map(f => `<b style="color:var(--text)">${escHtml(f.processo)}</b> USD ${fmt(f.usd)}`).join(' · ')}${it.processosExtras && it.processosExtras.length ? ' — será anexado a todos' : ''}</div>` : ''}
       <div class="g2" style="margin-top:12px">
         <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-tipo-${i}">Tipo de documento</label>
@@ -615,6 +781,7 @@ function renderEntrada() {
         <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-proc-${i}">Processo</label>
           <select id="ent-proc-${i}" onchange="setEntrada(${i},'processo',this.value)">
             <option value="">— escolher —</option>
+            <option value="__ADM"${it.processo === '__ADM' ? ' selected' : ''}>Administrativo (despesa do mês)</option>
             ${procOpts.map(id => `<option value="${escHtml(id)}"${it.processo === id ? ' selected' : ''}>${escHtml(id)}</option>`).join('')}
           </select></div>
       </div>
@@ -638,8 +805,10 @@ function renderEntrada() {
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       ${E.folderUrl ? `<a class="btn btn-secondary btn-sm" href="${sanitizeUrl(E.folderUrl)}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">📂 Abrir pasta</a>` : ''}
+      <button class="btn btn-secondary btn-sm" onclick="importarAcervo()" ${E.carregando ? 'disabled' : ''}>🗄️ Importar acervo existente</button>
       <button class="btn btn-secondary btn-sm" onclick="S.entrada.lido=false;lerEntrada()" ${E.carregando ? 'disabled' : ''}>🔄 Atualizar</button>
       <button class="btn btn-primary btn-sm" onclick="confirmarTodosEntrada()" ${prontos ? '' : 'disabled'}>✅ Anexar identificados (${prontos})</button>
+      ${prontosTodos > prontos ? `<button class="btn btn-secondary btn-sm" onclick="confirmarTodosEntrada(true)">Anexar todos com processo (${prontosTodos})</button>` : ''}
     </div>
   </div>
   ${!window._sheetsToken ? `<div class="card" style="text-align:center;padding:30px;color:var(--muted)">Conecte ao Google Drive (botão no topo ou "Reconectar Drive" no menu) para ler a pasta Entrada.</div>` : ''}
