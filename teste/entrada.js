@@ -483,9 +483,22 @@ async function analisarArquivo(f) {
   item.candidatos = identificarProcesso(item.info, item.texto, nomeSemPasta);       // só o documento
   const doDoc = item.candidatos[0] ? item.candidatos[0].id : '';
   if (doDoc && pelaPasta.size && !pelaPasta.has(doDoc) && item.candidatos[0].score >= 100) {
+    // Documento na pasta errada. Se a prova vem de DENTRO do documento (chave de acesso, nota citada,
+    // container, DU-E, fatura do câmbio, identificação do comprovante, número no texto), vai direto
+    // para a pasta certa. Se a única pista é o número escrito no nome do arquivo, pede conferência.
+    const pasta = [...pelaPasta].join(' e ');
+    const peloConteudo = item.texto || Object.keys(item.info || {}).length ? identificarProcesso(item.info, item.texto, '') : [];
+    const forte = peloConteudo[0] && peloConteudo[0].id === doDoc && peloConteudo[0].score >= 100
+      && (!peloConteudo[1] || peloConteudo[1].score < peloConteudo[0].score);
     item.processo = doDoc;
-    item.confianca = 'media';
-    item.aviso = `Conflito: o documento indica ${doDoc}, mas o arquivo estava na pasta ${[...pelaPasta].join(' e ')}. Confira antes de anexar.`;
+    item.pastaErrada = { estava: [...pelaPasta], certo: doDoc, motivos: (forte ? peloConteudo[0] : item.candidatos[0]).motivos };
+    if (forte) {
+      if (item.confianca !== 'alta') item.confianca = 'alta';
+      item.corrigido = `Estava na pasta ${pasta}, mas o documento é do ${doDoc} (${item.pastaErrada.motivos.join(', ')}). Vai para a pasta certa.`;
+    } else {
+      item.confianca = 'media';
+      item.aviso = `Conflito: o nome do arquivo indica ${doDoc}, mas ele estava na pasta ${pasta}. Confira antes de anexar.`;
+    }
   } else if (doDoc) {
     item.processo = doDoc;
   } else if (pelaPasta.size) {
@@ -495,7 +508,7 @@ async function analisarArquivo(f) {
     item.processo = /^ADM\s*-/i.test(nome) ? '__ADM' : '';
   }
   // Mesmo arquivo em pastas de processos diferentes: anexa a todos (atalho nos outros)
-  if (item.pastaProcessos.length > 1 && !item.aviso) {
+  if (item.pastaProcessos.length > 1 && !item.aviso && !item.pastaErrada) {
     item.processosExtras = item.pastaProcessos.filter(id => id !== item.processo);
   }
   if (item.processo === '__ADM' && !item.tipo) { item.tipo = 'pagamento'; item.confianca = 'media'; item.motivo = 'pasta de comprovantes do mês'; }
@@ -634,9 +647,10 @@ async function confirmarEntrada(i, silencioso) {
         cambio: item.info.cambio ? { referencia: item.info.cambio.referencia, contratoExtrato: item.info.cambio.contratoExtrato, taxa: item.info.cambio.taxa, usdFatura: fatura ? fatura.usd : null, usdTotal: item.info.cambio.valorMoeda, reaisTotal: item.info.cambio.valorReais, data: item.info.cambio.data } : undefined,
         pagamento: item.info.pagamento || undefined,
         origem: 'entrada', em: new Date().toISOString(),
+        pastaOriginal: item.pastaErrada && proc.id === item.pastaErrada.certo ? item.pastaErrada.estava.join('+') : undefined,
       });
       if (!proc.docs[item.tipo]) proc.docs[item.tipo] = upd.webViewLink;
-      logAction('anexar', 'PROCESSOS', proc.id, tipoLabel(item.tipo) + ': ' + upd.name + ' (Caixa de Entrada)');
+      logAction('anexar', 'PROCESSOS', proc.id, tipoLabel(item.tipo) + ': ' + upd.name + ' (Caixa de Entrada)' + (item.pastaErrada && proc.id === item.pastaErrada.certo ? ' — corrigido: estava na pasta ' + item.pastaErrada.estava.join('+') : ''));
     };
     registro(p);
     // Mesmo contrato de câmbio em outros processos: atalho na pasta de cada um (o arquivo existe uma vez só)
@@ -770,6 +784,7 @@ function renderEntrada() {
       ${it.duplicado ? `<div style="margin-top:10px;padding:8px 10px;border-radius:8px;background:rgba(239,68,68,0.08);color:var(--red);font-size:12px">Já anexado em ${escHtml(it.duplicado.processo)} (${escHtml(it.duplicado.motivo)}: ${escHtml(it.duplicado.nome)})</div>` : ''}
       ${it.erro ? `<div style="margin-top:10px;font-size:12px;color:var(--red)">⚠️ ${escHtml(it.erro)}</div>` : ''}
       ${it.aviso ? `<div style="margin-top:10px;font-size:12px;color:var(--yellow)">⚠️ ${escHtml(it.aviso)}</div>` : ''}
+      ${it.corrigido ? `<div style="margin-top:10px;font-size:12px;color:var(--green)">↪️ ${escHtml(it.corrigido)}</div>` : ''}
       ${it.processo && it.processo !== '__ADM' && !(S.processos || []).some(p => p.id === it.processo) ? `<div style="margin-top:10px;font-size:12px;color:var(--red)">⚠️ O processo ${escHtml(it.processo)} não existe no ERP. Escolha o processo correto.</div>` : ''}
       ${it.info.cambio && it.info.cambio.faturas.length ? `<div style="margin-top:10px;font-size:12px;color:var(--muted2)">Faturas pagas por este câmbio: ${it.info.cambio.faturas.map(f => `<b style="color:var(--text)">${escHtml(f.processo)}</b> USD ${fmt(f.usd)}`).join(' · ')}${it.processosExtras && it.processosExtras.length ? ' — será anexado a todos' : ''}</div>` : ''}
       <div class="g2" style="margin-top:12px">
