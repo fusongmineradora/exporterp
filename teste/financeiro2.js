@@ -109,18 +109,62 @@ const brToIso2 = d => { const m = String(d || '').match(/(\d{1,2})\/(\d{1,2})\/(
 const diasEntre = (a, b) => Math.abs((Date.parse(a) - Date.parse(b)) / 864e5);
 
 // ── Importação do OFX ───────────────────────────────────────
+function ehOFX(bytes) {
+  const ini = new TextDecoder('latin1').decode(bytes.slice(0, 4000)).toUpperCase();
+  return ini.includes('<OFX') || ini.includes('OFXHEADER');
+}
+
+// Arquivo escolhido no aparelho (computador ou celular)
 async function importarOFX(file) {
   const B = S.banco;
   if (!file) return;
-  if (!window.FusongOFX) { B.msg = { tipo: 'erro', texto: 'Leitor de OFX não carregado.' }; render(); return; }
+  B.msg = { tipo: 'ok', texto: 'Lendo ' + file.name + '...' }; render();
+  let buf;
+  try { buf = await file.arrayBuffer(); }
+  catch (e) { B.msg = { tipo: 'erro', texto: 'Não foi possível abrir o arquivo no aparelho: ' + (e.message || e) + '. Tente pela pasta 📥 Entrada do Drive.' }; render(); return; }
+  await importarOFXBytes(new Uint8Array(buf), file.name);
+  render();
+}
+
+// OFX salvo na pasta 📥 Entrada do Drive (prático no celular: Compartilhar → Drive)
+async function importarOFXDrive() {
+  const B = S.banco;
+  try {
+    await getAccessToken(); await ensureTestSheet();
+    const ent = await getTesteFolder(ENTRADA_FOLDER);
+    const q = `'${ent}' in parents and trashed=false and (name contains '.ofx' or name contains '.OFX' or mimeType='application/x-ofx')`;
+    const r = await driveAPI('GET', '/files', null, 'q=' + encodeURIComponent(q) + '&fields=files(id,name,createdTime)&orderBy=createdTime&pageSize=50');
+    const files = r.files || [];
+    if (!files.length) { B.msg = { tipo: 'erro', texto: 'Nenhum arquivo OFX na pasta 📥 Entrada. Baixe o extrato no app do Itaú e salve (Compartilhar → Drive) na pasta "Fu Song ERP — TESTE / 📥 Entrada".' }; render(); return; }
+    const pastaExtratos = await getTesteFolder('🏦 Extratos');
+    const msgs = []; let erro = false;
+    for (const f of files) {
+      B.msg = { tipo: 'ok', texto: 'Lendo ' + f.name + '...' }; render();
+      const bytes = new Uint8Array(await driveDownload(f.id));
+      const ok = await importarOFXBytes(bytes, f.name);
+      msgs.push(f.name + ': ' + B.msg.texto);
+      if (ok) await driveAPI('PATCH', '/files/' + f.id, {}, 'addParents=' + pastaExtratos + '&removeParents=' + ent + '&fields=id');
+      else erro = true;
+    }
+    B.msg = { tipo: erro ? 'erro' : 'ok', texto: msgs.join(' | '), lote: files.length === 1 && !erro ? B.msg.lote : undefined };
+  } catch (e) {
+    B.msg = { tipo: 'erro', texto: 'Não foi possível importar do Drive: ' + (e.message || e) };
+  }
+  render();
+}
+
+async function importarOFXBytes(bytes, nome) {
+  const B = S.banco;
+  if (!window.FusongOFX) { B.msg = { tipo: 'erro', texto: 'Leitor de OFX não carregado. Recarregue a página.' }; return false; }
+  if (!ehOFX(bytes)) { B.msg = { tipo: 'erro', texto: `"${nome}" não é um extrato OFX. No app do Itaú escolha Extrato → Exportar → formato OFX (Money/Quicken).` }; return false; }
   try {
     await carregarBanco();
-    const buf = await file.arrayBuffer();
     const hoje = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);
-    const r = FusongOFX.parse(new Uint8Array(buf), { regras: regrasOFX(), hoje });
+    const r = FusongOFX.parse(bytes, { regras: regrasOFX(), hoje });
+    if (!r.movimentos.length) { B.msg = { tipo: 'erro', texto: `"${nome}" não tem movimentos.` }; return false; }
     if (!r.validacao.ok) {
       B.msg = { tipo: 'erro', texto: `Importação bloqueada: o saldo do banco não confere em ${r.validacao.divergencias.length} dia(s) (${r.validacao.divergencias.map(d => isoToBr(d.dia) + ': diferença R$ ' + fmt(d.diferenca)).join('; ')}). Baixe o extrato de novo.` };
-      render(); return;
+      return false;
     }
     const existentes = new Set(B.linhas.map(l => l.chave));
     const novos = r.movimentos.filter(t => !existentes.has(t.chave) && t.data < hoje);
@@ -138,10 +182,11 @@ async function importarOFX(file) {
     B.ultimoSaldo = r.checkpoints.length ? r.checkpoints[r.checkpoints.length - 1] : null;
     B.msg = { tipo: 'ok', texto: `Extrato íntegro: ${r.validacao.verificados} saldos diários conferidos. ${novos.length} movimento(s) novo(s) importado(s); ${r.movimentos.length - novos.length - ignoradosHoje} já estavam no sistema${ignoradosHoje ? `; ${ignoradosHoje} de hoje ficam para a próxima importação` : ''}.`, lote };
     B.filtro = 'pendente';
+    return true;
   } catch (e) {
     B.msg = { tipo: 'erro', texto: 'Não foi possível importar: ' + (e.message || e) };
+    return false;
   }
-  render();
 }
 
 async function desfazerLote(lote) {
@@ -514,8 +559,11 @@ function renderConciliacao() {
   <div class="page-header">
     <div><div class="page-title">Conciliação bancária</div>
       <div style="color:var(--muted);font-size:11px;margin-top:2px">Extrato do banco → lançamentos. O banco é a verdade: valor e data vêm do extrato.</div></div>
-    <label class="btn btn-primary btn-sm" for="ofx-file" style="cursor:pointer">📥 Importar extrato OFX</label>
-    <input type="file" id="ofx-file" accept=".ofx,.OFX" hidden onchange="importarOFX(this.files[0]);this.value=''">
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <label class="btn btn-primary btn-sm" for="ofx-file" style="cursor:pointer">📥 Importar extrato OFX</label>
+      <button class="btn btn-secondary btn-sm" onclick="importarOFXDrive()">☁️ OFX da pasta Entrada</button>
+    </div>
+    <input type="file" id="ofx-file" hidden onchange="importarOFX(this.files[0]);this.value=''">
   </div>
   ${B.carregando ? `<div class="card" style="padding:14px;color:var(--muted);font-size:13px">⏳ Carregando extrato...</div>` : ''}
   ${B.erro ? `<div class="card" style="padding:14px;color:var(--red);font-size:13px">⚠️ ${escHtml(B.erro)}</div>` : ''}
