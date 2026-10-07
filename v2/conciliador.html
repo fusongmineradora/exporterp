@@ -1,0 +1,204 @@
+<title>Conciliador OFX Fu Song</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: uma coluna de trabalho — arquivo → validação → câmbio → movimentos; leitura de cima para baixo, como um extrato conferido */
+:root{
+  --bg:#F4F6F7; --surface:#FFFFFF; --ink:#13232E; --muted:#5B6B76; --line:#DCE3E7;
+  --accent:#0B6E8F; --accent-soft:#E2F1F6;
+  --good:#1D7A46; --good-soft:#E3F3E9; --warn:#9A6200; --warn-soft:#FBF0DA; --bad:#B42318; --bad-soft:#FBE6E4;
+  --f-ui:'Public Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --f-num:'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0E171D; --surface:#15222A; --ink:#E4ECF0; --muted:#93A4AE; --line:#26363F;
+  --accent:#4FB3D4; --accent-soft:#16323D;
+  --good:#5CC48A; --good-soft:#163024; --warn:#E3AE4A; --warn-soft:#33270F; --bad:#F2877D; --bad-soft:#3A1A17; color-scheme:dark }}
+:root[data-theme="dark"]{
+  --bg:#0E171D; --surface:#15222A; --ink:#E4ECF0; --muted:#93A4AE; --line:#26363F;
+  --accent:#4FB3D4; --accent-soft:#16323D;
+  --good:#5CC48A; --good-soft:#163024; --warn:#E3AE4A; --warn-soft:#33270F; --bad:#F2877D; --bad-soft:#3A1A17; color-scheme:dark }
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--f-ui)}
+.wrap{max-width:1040px;margin:0 auto;padding-inline:16px;padding-block:28px 56px;display:grid;gap:20px}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px}
+h1{font-size:24px;line-height:1.2;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
+.sub{color:var(--muted);margin:4px 0 0;max-width:62ch}
+h2{font-size:15px;margin:0;font-weight:700}
+.label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.num{font-family:var(--f-num);font-variant-numeric:tabular-nums}
+section{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px;display:grid;gap:14px;min-width:0}
+.drop{border:1.5px dashed var(--line);border-radius:10px;padding:18px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;background:var(--surface)}
+.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop p{margin:0;color:var(--muted);min-width:0}
+.btn{font:600 14px var(--f-ui);border:1px solid var(--accent);background:var(--accent);color:var(--surface);padding:9px 16px;border-radius:8px;cursor:pointer}
+.btn.ghost{background:transparent;color:var(--accent)}
+.btn:focus-visible,.chip:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tag{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:3px 9px;border-radius:999px}
+.tag.example{background:var(--warn-soft);color:var(--warn)}
+.tag.ok{background:var(--good-soft);color:var(--good)}
+.tag.bad{background:var(--bad-soft);color:var(--bad)}
+.tag.mid{background:var(--accent-soft);color:var(--accent)}
+.tag.none{background:var(--bg);color:var(--muted);border:1px solid var(--line)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.stat{display:grid;gap:2px}
+.stat .v{font-family:var(--f-num);font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
+.verdict{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border-radius:8px}
+.verdict.ok{background:var(--good-soft);color:var(--good)}
+.verdict.bad{background:var(--bad-soft);color:var(--bad)}
+.verdict b{display:block}
+.verdict span{color:var(--ink)}
+ul.notes{margin:0;padding-left:18px;color:var(--muted);display:grid;gap:4px}
+.scroll{overflow-x:auto;min-width:0}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.r,th.r{text-align:right}
+.in{color:var(--good)} .out{color:var(--ink)}
+.memo{color:var(--muted);font-size:12px}
+.fav{font-weight:600}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font:600 13px var(--f-ui);border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:6px 12px;border-radius:999px;cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.rules{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+input,select{font:14px var(--f-ui);color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
+.rulelist{display:flex;flex-wrap:wrap;gap:6px}
+.empty{color:var(--muted);padding:8px 0}
+footer{color:var(--muted);font-size:12.5px;max-width:70ch}
+@media (prefers-reduced-motion:no-preference){.drop{transition:background .15s,border-color .15s}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <div class="label">Fu Song ERP 2.0 · protótipo</div>
+      <h1>Conciliador de extrato OFX</h1>
+      <p class="sub">Leia o extrato do banco, confira se nenhuma linha se perdeu e veja como cada movimento seria classificado antes de virar lançamento.</p>
+    </div>
+    <span id="srcTag" class="tag example">Exemplo fictício carregado</span>
+  </header>
+
+  <label class="drop" id="drop" for="file">
+    <p>Escolha ou arraste um arquivo <b>.ofx</b>. O arquivo é lido só neste aparelho; nada é enviado.</p>
+    <span class="btn">Escolher extrato</span>
+    <input id="file" type="file" accept=".ofx,.OFX,application/x-ofx,text/plain" hidden>
+  </label>
+
+  <section aria-labelledby="h-res">
+    <div class="bar"><h2 id="h-res">Resumo do arquivo</h2><span class="memo" id="contaInfo"></span></div>
+    <div id="verdict"></div>
+    <div class="stats" id="stats"></div>
+    <ul class="notes" id="avisos"></ul>
+  </section>
+
+  <section aria-labelledby="h-camb">
+    <h2 id="h-camb">Câmbio recebido, agrupado por contrato</h2>
+    <div class="scroll"><table id="tCambio"></table></div>
+  </section>
+
+  <section aria-labelledby="h-mov">
+    <div class="bar">
+      <h2 id="h-mov">Movimentos e classificação sugerida</h2>
+      <div class="chips" role="group" aria-label="Filtro">
+        <button class="chip" data-f="todos" aria-pressed="true">Todos</button>
+        <button class="chip" data-f="sem">Sem regra</button>
+        <button class="chip" data-f="saida">Saídas</button>
+        <button class="chip" data-f="entrada">Entradas</button>
+        <button class="chip" data-f="cambio">Câmbio</button>
+      </div>
+    </div>
+    <form class="rules" id="ruleForm">
+      <span class="label">Ensinar uma regra</span>
+      <input id="ruleText" placeholder="Texto ou CNPJ/CPF (ex.: TRANSPORTADORA)" aria-label="Texto ou documento" style="flex:2 1 220px">
+      <input id="ruleCat" placeholder="Categoria (ex.: Frete rodoviário)" aria-label="Categoria" style="flex:1 1 180px">
+      <button class="btn ghost" type="submit">Aplicar</button>
+    </form>
+    <div class="rulelist" id="ruleList"></div>
+    <div class="scroll"><table id="tMov"></table></div>
+  </section>
+
+  <footer>Protótipo do módulo de importação do ERP 2.0. Nesta versão nada é gravado: as regras valem só enquanto a página estiver aberta. No ERP, as regras ficam na aba REGRAS e cada movimento vira um lançamento após a sua confirmação.</footer>
+</div>
+
+<script src="ofx.js"></script>
+<script>
+(function(){
+  const SAMPLE = "OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nSECURITY:NONE\nENCODING:USASCII\nCHARSET:1252\nCOMPRESSION:NONE\nOLDFILEUID:NONE\nNEWFILEUID:NONE\n\n<OFX>\n<BANKMSGSRSV1>\n<STMTTRNRS>\n<STMTRS>\n<CURDEF>BRL\n<BANKACCTFROM>\n<BANKID>0341\n<ACCTID>0000000000\n<ACCTTYPE>CHECKING\n</BANKACCTFROM>\n<BANKTRANLIST>\n<DTSTART>20260801100000[-03:EST]\n<DTEND>20260805100000[-03:EST]\n<STMTTRN>\n<TRNTYPE>CREDIT\n<DTPOSTED>20260731100000[-03:EST]\n<TRNAMT>1.00\n<FITID>20260731001\n<CHECKNUM>20260731001\n<MEMO>SALDO ANTERIOR\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>CREDIT\n<DTPOSTED>20260731100000[-03:EST]\n<TRNAMT>8000.00\n<FITID>20260731002\n<CHECKNUM>20260731002\n<MEMO>SALDO TOTAL DISPON\u00cdVEL DIA\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>CREDIT\n<DTPOSTED>20260803100000[-03:EST]\n<TRNAMT>27500.00\n<FITID>20260803001\n<CHECKNUM>20260803001\n<MEMO>LIQ EXPORT 4026000001\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>CREDIT\n<DTPOSTED>20260803100000[-03:EST]\n<TRNAMT>13750.00\n<FITID>20260803002\n<CHECKNUM>20260803002\n<MEMO>LIQ EXPORT 4026000001\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>DEBIT\n<DTPOSTED>20260803100000[-03:EST]\n<TRNAMT>-135.00\n<FITID>20260803003\n<CHECKNUM>20260803003\n<MEMO>TAR CAMB REC RECURS\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>DEBIT\n<DTPOSTED>20260803100000[-03:EST]\n<TRNAMT>-11500.00\n<FITID>20260803004\n<CHECKNUM>20260803004\n<MEMO>PIX ENVIADO TRANSPORTADORA EXEMPLO LTDA 11.111.111/0001-11\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>DEBIT\n<DTPOSTED>20260803100000[-03:EST]\n<TRNAMT>-11500.00\n<FITID>20260803005\n<CHECKNUM>20260803005\n<MEMO>PIX ENVIADO TRANSPORTADORA EXEMPLO LTDA 11.111.111/0001-11\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>CREDIT\n<DTPOSTED>20260803100000[-03:EST]\n<TRNAMT>26115.00\n<FITID>20260803006\n<CHECKNUM>20260803006\n<MEMO>SALDO TOTAL DISPON\u00cdVEL DIA\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>DEBIT\n<DTPOSTED>20260804100000[-03:EST]\n<TRNAMT>-550.00\n<FITID>20260804001\n<CHECKNUM>20260804001\n<MEMO>PIX ENVIADO PIX ENVIADO DESPACHANTE MODE\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>DEBIT\n<DTPOSTED>20260804100000[-03:EST]\n<TRNAMT>-4800.00\n<FITID>20260804002\n<CHECKNUM>20260804002\n<MEMO>PIX ENVIADO MINERACAO EXEMPLO 22.222.222/0001-22\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>CREDIT\n<DTPOSTED>20260804100000[-03:EST]\n<TRNAMT>0.37\n<FITID>20260804003\n<CHECKNUM>20260804003\n<MEMO>RENDIMENTOS REND PAGO APLIC AUT MAIS\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>CREDIT\n<DTPOSTED>20260804100000[-03:EST]\n<TRNAMT>20765.37\n<FITID>20260804004\n<CHECKNUM>20260804004\n<MEMO>SALDO TOTAL DISPON\u00cdVEL DIA\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>DEBIT\n<DTPOSTED>20260805100000[-03:EST]\n<TRNAMT>-169.00\n<FITID>20260805001\n<CHECKNUM>20260805001\n<MEMO>TAR PLANO ADAPT 1 07/26\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>DEBIT\n<DTPOSTED>20260805100000[-03:EST]\n<TRNAMT>-731.58\n<FITID>20260805002\n<CHECKNUM>20260805002\n<MEMO>PAGAMENTOS RECEITA FEDERAL 00.394.460/0058-87\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>DEBIT\n<DTPOSTED>20260805100000[-03:EST]\n<TRNAMT>-2500.00\n<FITID>20260805003\n<CHECKNUM>20260805003\n<MEMO>PIX ENVIADO PRESTADOR AUTONOMO 123.456.789-09\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>DEBIT\n<DTPOSTED>20260805100000[-03:EST]\n<TRNAMT>-1836.59\n<FITID>20260805004\n<CHECKNUM>20260805004\n<MEMO>DA\n</STMTTRN>\n<STMTTRN>\n<TRNTYPE>CREDIT\n<DTPOSTED>20260805100000[-03:EST]\n<TRNAMT>15528.20\n<FITID>20260805005\n<CHECKNUM>20260805005\n<MEMO>SALDO TOTAL DISPON\u00cdVEL DIA\n</STMTTRN>\n</BANKTRANLIST>\n<LEDGERBAL>\n<BALAMT>15528.20\n<DTASOF>20260805100000[-03:EST]\n</LEDGERBAL>\n</STMTRS>\n</STMTTRNRS>\n</BANKMSGSRSV1>\n</OFX>\n";
+  const brl = n => (n<0?'−':'') + 'R$ ' + Math.abs(n).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const dt = s => s ? s.slice(8,10)+'/'+s.slice(5,7)+'/'+s.slice(0,4) : '—';
+  const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const fmtDoc = (d,t) => !d ? '' : t==='CNPJ' ? d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/,'$1.$2.$3/$4-$5') : d.replace(/(\d{3})\d{6}(\d{2})/,'$1.•••.•••-$2');
+  let bytes = new TextEncoder().encode(SAMPLE), result = null, filtro = 'todos';
+  const regras = [];
+
+  function run(){
+    try { result = FusongOFX.parse(bytes, { regras }); }
+    catch(e){ document.getElementById('verdict').innerHTML = `<div class="verdict bad"><div><b>Não foi possível ler o arquivo</b><span>${esc(e.message)} Confira se é o extrato em formato OFX baixado do internet banking.</span></div></div>`; return; }
+    render();
+  }
+
+  function render(){
+    const r = result, v = r.validacao, s = r.resumo;
+    document.getElementById('contaInfo').textContent = `Banco ${r.conta.banco} · conta final ${String(r.conta.conta).slice(-4)} · ${dt(r.conta.inicio)} a ${dt(r.conta.fim)}`;
+    document.getElementById('verdict').innerHTML = v.ok
+      ? `<div class="verdict ok"><div><b>Extrato íntegro</b><span>${v.verificados} saldo(s) diário(s) do banco conferem centavo por centavo com a soma dos movimentos.${v.aviso?' '+esc(v.aviso):''}</span></div></div>`
+      : `<div class="verdict bad"><div><b>Saldo não confere em ${v.divergencias.length} dia(s)</b><span>Importação bloqueada. ${v.divergencias.map(d=>`${dt(d.dia)}: banco ${brl(d.saldoBanco)}, calculado ${brl(d.saldoCalculado)} (diferença ${brl(d.diferenca)})`).join('; ')}. Baixe o extrato novamente.</span></div></div>`;
+    const pct = s.movimentos ? Math.round(100*s.classificados/s.movimentos) : 0;
+    document.getElementById('stats').innerHTML = [
+      ['Movimentos reais', s.movimentos, `${s.linhasSaldo} linhas de saldo ignoradas`],
+      ['Entradas', brl(s.entradas), ''],
+      ['Saídas', brl(s.saidas), ''],
+      ['Classificados', pct+'%', `${s.classificados} de ${s.movimentos}`],
+      ['Com CNPJ/CPF', s.comDocumento, 'favorecido identificável'],
+    ].map(([l,val,h])=>`<div class="stat"><span class="label">${l}</span><span class="v">${val}</span><span class="memo">${h}</span></div>`).join('');
+    const av = r.avisos.slice();
+    if (r.rendimentosMes.length) av.push('Rendimentos agrupados por mês: ' + r.rendimentosMes.map(m=>`${m.mes.slice(5)}/${m.mes.slice(0,4)} ${brl(m.total)} (${m.linhas} linhas)`).join(' · '));
+    document.getElementById('avisos').innerHTML = av.map(a=>`<li>${esc(a)}</li>`).join('');
+
+    const tc = document.getElementById('tCambio');
+    tc.innerHTML = r.cambio.length
+      ? `<thead><tr><th>Data</th><th>Contrato</th><th class="r">Entradas</th><th class="r">Total recebido</th><th class="r">Tarifa</th></tr></thead><tbody>` +
+        r.cambio.map(g=>`<tr><td class="num">${dt(g.data)}</td><td class="num">${esc(g.contrato)}</td><td class="r num">${g.entradas.length}</td><td class="r num in">${brl(g.total)}</td><td class="r num">${g.tarifas.length?brl(g.tarifas.reduce((a,t)=>a+t.valor,0)):'—'}</td></tr>`).join('') + '</tbody>'
+      : `<tbody><tr><td class="empty">Nenhuma liquidação de câmbio neste período.</td></tr></tbody>`;
+
+    const lista = r.movimentos.filter(t => filtro==='todos' || (filtro==='sem' && t.classificacao.confianca==='nenhuma') || (filtro==='cambio' && t.contrato) || (filtro===t.sentido));
+    const conf = c => c==='alta' ? '<span class="tag ok">alta</span>' : c==='media' ? '<span class="tag mid">média</span>' : '<span class="tag none">pendente</span>';
+    document.getElementById('tMov').innerHTML = `<thead><tr><th>Data</th><th>Favorecido / descrição</th><th class="r">Valor</th><th>Categoria sugerida</th><th>Confiança</th></tr></thead><tbody>` +
+      (lista.length ? lista.map(t=>`<tr>
+        <td class="num">${dt(t.data)}${t.ocorrencia>1?`<div class="memo">${t.ocorrencia}ª igual no dia</div>`:''}</td>
+        <td><div class="fav">${esc(t.favorecido||t.memo)}</div><div class="memo">${esc(t.memo)}${t.documento?` · ${t.tipoDocumento} ${fmtDoc(t.documento,t.tipoDocumento)}`:''}</div></td>
+        <td class="r num ${t.valor>=0?'in':'out'}">${brl(t.valor)}</td>
+        <td>${esc(t.classificacao.categoria)||'<span class="memo">definir</span>'}<div class="memo">${esc(t.classificacao.motivo)}</div></td>
+        <td>${conf(t.classificacao.confianca)}</td></tr>`).join('') : `<tr><td colspan="5" class="empty">Nenhum movimento neste filtro.</td></tr>`) + '</tbody>';
+
+    document.getElementById('ruleList').innerHTML = regras.map((g,i)=>`<span class="tag mid">${esc(g.doc||g.texto)} → ${esc(g.categoria)} <button class="chip" style="padding:0 6px;border:0;background:transparent;color:inherit" data-del="${i}" aria-label="Remover regra">×</button></span>`).join('');
+  }
+
+  document.querySelectorAll('.chip[data-f]').forEach(b=>b.addEventListener('click',()=>{
+    filtro=b.dataset.f; document.querySelectorAll('.chip[data-f]').forEach(x=>x.setAttribute('aria-pressed', String(x===b))); render();
+  }));
+  document.getElementById('ruleList').addEventListener('click',e=>{const i=e.target.dataset.del; if(i!==undefined){regras.splice(+i,1); run();}});
+  document.getElementById('ruleForm').addEventListener('submit',e=>{
+    e.preventDefault();
+    const txt=document.getElementById('ruleText').value.trim(), cat=document.getElementById('ruleCat').value.trim();
+    if(!txt||!cat) return;
+    const dig=txt.replace(/\D/g,'');
+    regras.push((dig.length===14||dig.length===11)?{doc:dig,categoria:cat}:{texto:txt,categoria:cat});
+    document.getElementById('ruleText').value=''; document.getElementById('ruleCat').value='';
+    run();
+  });
+  function load(file){
+    const fr=new FileReader();
+    fr.onload=()=>{ bytes=new Uint8Array(fr.result); const t=document.getElementById('srcTag'); t.className='tag ok'; t.textContent=file.name; run(); };
+    fr.readAsArrayBuffer(file);
+  }
+  document.getElementById('file').addEventListener('change',e=>{ if(e.target.files[0]) load(e.target.files[0]); });
+  const drop=document.getElementById('drop');
+  ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over');}));
+  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over');}));
+  drop.addEventListener('drop',e=>{ const f=e.dataTransfer.files[0]; if(f) load(f); });
+  run();
+})();
+</script>
