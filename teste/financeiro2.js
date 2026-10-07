@@ -248,7 +248,18 @@ function sugestaoLinha(l) {
         const hit = abertos.find(e => e.vinculo === 'processo' && comps.some(c => c.processo === e.vinculoId));
         if (hit) escolhido = hit;
       }
-      return { acao: 'baixar', entry: escolhido, texto: `Dar baixa em "${escolhido.descricao}"` + (abertos.length > 1 ? ` (+${abertos.length - 1} com o mesmo valor — confira)` : '') };
+      return { acao: 'baixar', entry: escolhido, unico: abertos.length === 1, texto: `Dar baixa em "${escolhido.descricao}"` + (abertos.length > 1 ? ` (+${abertos.length - 1} com o mesmo valor — confira)` : '') };
+    }
+  }
+  // 1b) lançamento já pago (criado a partir de um comprovante) que ainda não foi ligado ao extrato
+  {
+    const tipoL = l.valor < 0 ? 'Despesa' : 'Receita';
+    const pagos = (S.lancamentos || []).filter(x => x.status === 'Pago' && x.tipo === tipoL && x.categoria !== 'Câmbio'
+      && !(x.docs && x.docs._banco) && x.docs && x.docs.comprovante
+      && Math.abs((Number(x.valor) || 0) - v) < 0.01 && diasEntre(brToIso2(x.data) || l.data, l.data) <= 4);
+    if (pagos.length) {
+      pagos.sort((a, b) => diasEntre(brToIso2(a.data) || l.data, l.data) - diasEntre(brToIso2(b.data) || l.data, l.data));
+      return { acao: 'baixar', entry: pagos[0], unico: pagos.length === 1, texto: `Ligar ao lançamento do comprovante "${pagos[0].descricao}"` + (pagos.length > 1 ? ` (+${pagos.length - 1} com o mesmo valor — confira)` : '') };
     }
   }
   // 2) comprovante anexado ao processo com o mesmo valor
@@ -333,7 +344,7 @@ async function persistir2() {
   await salvarBanco();
 }
 
-async function conciliarLinha(chave, modo) {
+async function conciliarLinha(chave, modo, silencioso) {
   const B = S.banco;
   const l = B.linhas.find(x => x.chave === chave);
   if (!l) return;
@@ -366,9 +377,10 @@ async function conciliarLinha(chave, modo) {
       l.status = 'conciliado'; l.lancId = obj.id; l.categoria = categoria; l.centro = centro;
       if (c.regra) await aprenderRegra(l, categoria, centro);
     }
+    if (silencioso) return true;
     await persistir2();
     showToast('✅ Conciliado');
-  } catch (e) { showToast('⚠️ ' + (e.message || e)); }
+  } catch (e) { if (silencioso) return false; showToast('⚠️ ' + (e.message || e)); }
   render();
 }
 
@@ -425,7 +437,7 @@ function gruposCambio(pendentes) {
   return Object.values(g);
 }
 
-async function conciliarCambio(k) {
+async function conciliarCambio(k, silencioso) {
   const B = S.banco;
   const pend = B.linhas.filter(l => l.status === 'pendente');
   const gr = gruposCambio(pend).find(x => x.k === k);
@@ -435,7 +447,7 @@ async function conciliarCambio(k) {
   if (!faturas.length) {
     const sel = document.getElementById('bc-camb-' + gr.contrato);
     const proc = sel ? sel.value : '';
-    if (!proc) { showToast('Anexe o contrato de câmbio na Caixa de Entrada ou escolha o processo'); return; }
+    if (!proc) { if (!silencioso) showToast('Anexe o contrato de câmbio na Caixa de Entrada ou escolha o processo'); return false; }
     faturas = [{ processo: proc, usd: 0 }];
   }
   const usdSoma = faturas.reduce((a, f) => a + f.usd, 0);
@@ -444,12 +456,19 @@ async function conciliarCambio(k) {
   const tarifa = gr.tarifas.reduce((a, l) => a + Math.abs(l.valor), 0);
   faturas.forEach(f => {
     const reais = Math.round(gr.total * parte(f) * 100) / 100;
-    const obj = {
+    const ja = (S.lancamentos || []).find(x => x.categoria === 'Câmbio' && x.vinculoId === f.processo && !(x.docs && x.docs._banco)
+      && x.docs && x.docs._cambio && String(x.docs._cambio.contrato) === String(gr.contrato));
+    if (ja) {
+      // o banco é a verdade: valor e data do extrato; o contrato fica como comprovante
+      ja.valor = reais; ja.data = isoToBr(gr.data); ja.status = 'Pago';
+      ja.docs._banco = gr.linhas.map(l => l.chave).join(','); ja.observacao = 'Extrato: LIQ EXPORT ' + gr.contrato;
+    }
+    const obj = ja || {
       id: genId(), tipo: 'Receita', status: 'Pago', descricao: `Câmbio contrato ${gr.contrato} — ${f.processo}` + (f.usd ? ` (USD ${fmt(f.usd)})` : ''),
       valor: reais, data: isoToBr(gr.data), empresa: '', categoria: 'Câmbio', vinculo: 'processo', vinculoId: f.processo,
       observacao: 'Extrato: LIQ EXPORT ' + gr.contrato, docs: { _banco: gr.linhas.map(l => l.chave).join(','), _cambio: { contrato: gr.contrato, usd: f.usd, taxa: ct ? ct.taxa : null }, comprovante: ct ? ct.url : '' },
     };
-    S.lancamentos.unshift(obj);
+    if (!ja) S.lancamentos.unshift(obj);
     if (tarifa) {
       S.lancamentos.unshift({
         id: genId(), tipo: 'Despesa', status: 'Pago', descricao: `Tarifa de câmbio ${gr.contrato} — ${f.processo}`,
@@ -460,11 +479,12 @@ async function conciliarCambio(k) {
     logAction('criar', 'EXTRATO_CAIXA', obj.id, `Câmbio ${gr.contrato} → ${f.processo} R$ ${reais.toFixed(2)}`);
   });
   [...gr.linhas, ...gr.tarifas].forEach(l => { l.status = 'conciliado'; l.lancId = 'cambio:' + gr.contrato; l.categoria = l.valor > 0 ? 'Câmbio' : 'Tarifa de câmbio'; l.centro = faturas.map(f => 'P:' + f.processo).join(' '); });
+  if (silencioso) return true;
   try { await persistir2(); showToast('✅ Câmbio conciliado'); } catch (e) { showToast('⚠️ ' + e.message); }
   render();
 }
 
-async function lancarRendimentos(mes) {
+async function lancarRendimentos(mes, silencioso) {
   const B = S.banco;
   const ls = B.linhas.filter(l => l.status === 'pendente' && /^RENDIMENTOS/i.test(l.memo) && l.data.slice(0, 7) === mes);
   if (!ls.length) return;
@@ -477,7 +497,34 @@ async function lancarRendimentos(mes) {
   };
   S.lancamentos.unshift(obj);
   ls.forEach(l => { l.status = 'conciliado'; l.lancId = obj.id; l.categoria = 'Rendimentos financeiros'; l.centro = 'ADM'; });
+  if (silencioso) return true;
   await persistir2(); showToast('✅ Rendimentos lançados'); render();
+}
+
+// Conciliação automática: só o que tem prova (contrato de câmbio, comprovante/lançamento único com o mesmo valor, rendimentos)
+async function autoConciliar() {
+  const B = S.banco;
+  const r = { cambio: 0, baixas: 0, rendimentos: 0, regras: 0 };
+  const ct = contratosCambio();
+  for (const gr of gruposCambio(B.linhas.filter(l => l.status === 'pendente'))) {
+    if (ct[gr.contrato] && await conciliarCambio(gr.k, true)) r.cambio++;
+  }
+  for (const l of B.linhas.filter(x => x.status === 'pendente')) {
+    if (/^RENDIMENTOS/i.test(l.memo)) continue;
+    const sug = sugestaoLinha(l);
+    if (sug && sug.acao === 'baixar' && sug.unico && await conciliarLinha(l.chave, 'baixar', true)) r.baixas++;
+  }
+  // regra do banco com categoria E centro definidos (tarifas, seguros, regras aprendidas para ADM)
+  r.regras = 0;
+  for (const l of B.linhas.filter(x => x.status === 'pendente' && !/^RENDIMENTOS/i.test(x.memo) && x.categoria && x.centro && !x.contrato)) {
+    const obj = novoLancamentoDeLinha(l, l.categoria, l.centro);
+    l.status = 'conciliado'; l.lancId = obj.id; r.regras++;
+  }
+  const meses = [...new Set(B.linhas.filter(l => l.status === 'pendente' && /^RENDIMENTOS/i.test(l.memo)).map(l => l.data.slice(0, 7)))];
+  for (const m of meses) if (await lancarRendimentos(m, true)) r.rendimentos++;
+  await persistir2();
+  r.pendentes = B.linhas.filter(l => l.status === 'pendente').length;
+  return r;
 }
 
 // ── Tela: Conciliação ───────────────────────────────────────
