@@ -434,7 +434,9 @@ async function lerEntrada() {
     const q = `'${folderId}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'`;
     const list = await driveAPI('GET', '/files', null,
       'q=' + encodeURIComponent(q) + '&fields=files(id,name,mimeType,size,md5Checksum,createdTime,webViewLink)&orderBy=createdTime desc&pageSize=100');
-    const files = list.files || [];
+    const todos = list.files || [];
+    const files = todos.filter(f => !/\.ofx$/i.test(f.name || ''));
+    E.ofxNaEntrada = todos.length - files.length;
     const itens = [];
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
@@ -837,6 +839,7 @@ function renderEntrada() {
   ${!window._sheetsToken ? `<div class="card" style="text-align:center;padding:30px;color:var(--muted)">Conecte ao Google Drive (botão no topo ou "Reconectar Drive" no menu) para ler a pasta Entrada.</div>` : ''}
   ${E.carregando ? `<div class="card" style="padding:18px;color:var(--muted);font-size:13px">⏳ ${escHtml(E.progresso || 'Lendo...')}</div>` : ''}
   ${E.erro ? `<div class="card" style="padding:16px;color:var(--red);font-size:13px">⚠️ ${escHtml(E.erro)}</div>` : ''}
+  ${E.ofxNaEntrada ? `<div class="card" style="padding:12px 14px;font-size:12.5px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><span>🏦 ${E.ofxNaEntrada} extrato(s) OFX na Entrada.</span><button class="btn btn-primary btn-xs" onclick="nav('conciliacao');setTimeout(importarOFXDrive,300)">Importar na Conciliação</button></div>` : ''}
   ${E.lido && !E.carregando && !E.itens.length ? `<div class="card" style="text-align:center;padding:36px 20px">
       <div style="font-size:40px;margin-bottom:10px">📥</div>
       <div style="font-weight:600;margin-bottom:6px">Nenhum arquivo esperando</div>
