@@ -511,6 +511,11 @@ async function analisarArquivo(f) {
   if (item.pastaProcessos.length > 1 && !item.aviso && !item.pastaErrada) {
     item.processosExtras = item.pastaProcessos.filter(id => id !== item.processo);
   }
+  // Comprovante de pagamento sem nenhuma pista de processo → sugere "despesa do mês" (confira)
+  if (!item.processo && item.tipo === 'pagamento' && !(item.candidatos || []).length) {
+    item.processo = '__ADM'; item.admAuto = true; if (item.confianca === 'alta') item.confianca = 'media';
+    item.aviso = (item.aviso ? item.aviso + ' ' : '') + 'Não cita nenhum processo: vai para os comprovantes do mês. Se for custo de um processo, escolha o processo.';
+  }
   if (item.processo === '__ADM' && !item.tipo) { item.tipo = 'pagamento'; item.confianca = 'media'; item.motivo = 'pasta de comprovantes do mês'; }
   // Contrato de câmbio que paga mais de uma fatura: anexa a todos os processos citados
   if (item.info.cambio) item.processosExtras = item.info.cambio.faturas.map(f => f.processo).filter(id => id !== item.processo && (S.processos || []).some(p => p.id === id));
@@ -680,7 +685,10 @@ function reidentificarPendentes() {
     if (it.processo && it.confianca === 'manual') return;
     const c = identificarProcesso(it.info, it.texto, it.nome);
     it.candidatos = c;
-    if (!it.processo && c[0]) it.processo = c[0].id;
+    if ((!it.processo || it.admAuto) && c[0]) {
+      it.processo = c[0].id;
+      if (it.admAuto) { it.admAuto = false; it.aviso = String(it.aviso || '').replace(/Não cita nenhum processo:[^.]*\.[^.]*\./, '').trim(); }
+    }
     it.duplicado = procurarDuplicado(it);
   });
 }
