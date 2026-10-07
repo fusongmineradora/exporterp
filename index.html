@@ -1080,8 +1080,9 @@ function render(){
 // ═══════════════════════════════════════════════════════════
 function renderDashboard(){
   const ps=S.processos;
-  const totalC=ps.reduce((a,p)=>a+tc(p),0);
-  const totalR=ps.reduce((a,p)=>a+(p.cambioReais||0),0);
+  const _tg=totaisGerais();
+  const totalC=_tg.custoProc;
+  const totalR=_tg.receita;
   const lucro=totalR-totalC;
   const emb=ps.filter(p=>p.status==='Embarcado').length;
   const porto=ps.filter(p=>p.status==='No Porto').length;
@@ -1164,7 +1165,7 @@ function renderDashboard(){
             </div>
             <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
               ${badge(p.status)}
-              <span style="font-family:'JetBrains Mono',monospace;color:var(--yellow);font-size:10px">R$ ${fmt(tc(p))}</span>
+              <span style="font-family:'JetBrains Mono',monospace;color:var(--yellow);font-size:10px">R$ ${fmt(procTotals(p).custo)}</span>
             </div>
           </div>
 
@@ -1296,14 +1297,14 @@ function renderProcessos(){
       </div>
       <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:6px">
         ${badge(p.status)}
-        <span style="font-family:'JetBrains Mono',monospace;color:var(--yellow);font-size:11.5px">R$ ${fmt(tc(p))}</span>
+        <span style="font-family:'JetBrains Mono',monospace;color:var(--yellow);font-size:11.5px">R$ ${fmt(procTotals(p).custo)}</span>
         <span style="color:var(--muted);font-size:9px">VER DETALHE →</span>
       </div>
     </div>`).join('')}`;
 }
 
 function renderProcessoDetalhe(p){
-  const custo=tc(p); const lucro=(p.cambioReais||0)-custo;
+  const _pt=procTotals(p); const custo=_pt.custo; const lucro=_pt.lucro; const _extraManual=custo-tc(p);
   const docItems=[['invoice','📄 Invoice'],['contrato','📃 Contrato'],['packingList','📦 Packing List'],['bl','🚢 BL - Bill of Lading'],['due','🏛️ DU-E'],['nfe','🧾 NF-E Entrada'],['nfeSaida','🧾 NF-E Saída'],['comprovantes','🖨️ Comprovantes Câmbio'],['certOrigem','🌐 Cert. Origem'],['seguro','🛡️ Seguro de Carga'],['pesagem','⚖️ Pesagem'],['outros','📁 Outros Documentos']];
   return `
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap">
@@ -1360,6 +1361,7 @@ function renderProcessoDetalhe(p){
       <div class="card-title"><div class="card-title-left">💸 Custos do Processo</div></div>
       ${[['Marítimo',p.custoMaritimo,'maritimo'],['Frete Rodoviário',p.custoFrete,'frete'],['Certificado de Origem',p.custoCertificado,'certificado'],['Armazém',p.custoArmazem,'armazem'],['Porto / Taxas',p.custoPorto,'porto'],['Despachante',p.custoDespachante,'despachante'],['Serviços de Terceiros',p.custoServTerceiros,'servicos'],['Impostos',p.custoImpostos,'impostos'],['Produto',p.custoProduto,'produto']].map(([l,v])=>`
         <div class="cost-row"><span class="c-label">${l}</span><span class="c-val">R$ ${fmt(v)}</span></div>`).join('')}
+      ${Math.abs(_extraManual)>0.005?`<div class="cost-row"><span class="c-label">Ajustes de lançamentos manuais</span><span class="c-val">R$ ${fmt(_extraManual)}</span></div>`:''}
       <div class="total-box">
         <span style="color:var(--muted);font-size:12px">Total Custos</span>
         <span style="color:var(--yellow);font-family:'Outfit',sans-serif;font-weight:800;font-size:15px">R$ ${fmt(custo)}</span>
@@ -1901,7 +1903,7 @@ function renderCambio(){
       <div style="font-size:36px;margin-bottom:12px">💱</div>
       <div>Nenhuma operação de câmbio registrada.</div>
     </div>` : ps.map(p=>{
-      const lucro = (p.cambioReais||0) - tc(p);
+      const lucro = procTotals(p).lucro;
       const nomeCliente = p.cliente ? p.cliente.split(' ').slice(0,3).join(' ') : p.id;
       const statusNorm = normalizeStatus(p.cambioStatus||'Em Aberto');
       const statusClass = statusNorm==='Pago'?'badge-emb':statusNorm==='Cancelado'?'badge-cancelado':'badge-porto';
@@ -1986,8 +1988,9 @@ function autoPreencherCambio(id){
 function renderCustos(){
   const tab=S.custosTab||'processo';
   const ps=S.processos;
-  const totalC=ps.reduce((a,p)=>a+tc(p),0);
-  const totalR=ps.reduce((a,p)=>a+(p.cambioReais||0),0);
+  const _tg=totaisGerais();
+  const totalC=_tg.custoProc;
+  const totalR=_tg.receita;
 
   const tabsHtml=`<div class="tabs">
     <button class="tab ${tab==='processo'?'active':''}" onclick="S.custosTab='processo';render()">💸 Por Processo</button>
@@ -2092,7 +2095,8 @@ function renderCustos(){
   }
 
   if(tab==='consolidado'){
-    const totalFixos=S.custosMensais.reduce((a,m)=>a+tcm(m),0);
+    // Custos fixos + despesas avulsas (sem processo) entram no consolidado
+    const totalFixos=_tg.custoFixo+_tg.outras;
     const totalGeral=totalC+totalFixos;
     const lucroGeral=totalR-totalGeral;
     return `
@@ -2109,11 +2113,11 @@ function renderCustos(){
       </div>
     </div>
     ${ps.map(p=>{
-      const c=tc(p); const l=(p.cambioReais||0)-c;
+      const _pt=procTotals(p); const c=_pt.custo; const l=_pt.lucro;
       return `<div class="card"><div class="card-title"><div class="card-title-left">${p.id} — ${p.produto}</div>${badge(p.status)}</div>
       <div class="g3">
         <div class="total-box"><span style="color:var(--muted);font-size:11px">Custos</span><span style="color:var(--yellow);font-family:'Outfit',sans-serif;font-weight:700">R$ ${fmt(c)}</span></div>
-        <div class="total-box"><span style="color:var(--muted);font-size:11px">Receita</span><span style="color:var(--green);font-family:'Outfit',sans-serif;font-weight:700">R$ ${fmt(p.cambioReais)}</span></div>
+        <div class="total-box"><span style="color:var(--muted);font-size:11px">Receita</span><span style="color:var(--green);font-family:'Outfit',sans-serif;font-weight:700">R$ ${fmt(_pt.receita)}</span></div>
         <div class="total-box"><span style="color:var(--muted);font-size:11px">Lucro</span><span style="color:${l>=0?'var(--green)':'var(--red)'};font-family:'Outfit',sans-serif;font-weight:700">R$ ${fmt(l)}</span></div>
       </div></div>`;}).join('')}`;
   }
@@ -2668,7 +2672,7 @@ function buildAllEntries(opts={}) {
           tipo: 'Receita',
           descricao: 'Câmbio Recebido — ' + p.id,
           valor: p.cambioReais||0,
-          data: p.cambioRecebimento || p.embarque || '',
+          data: p.cambioRecebimento || p.cambioFechamento || '',  // Fase 1: 'embarque' é o nº do embarque, não uma data
           empresa: p.cliente||'',
           categoria: 'Câmbio',
           vinculo: 'processo',
@@ -2710,7 +2714,8 @@ function buildAllEntries(opts={}) {
   }
 
   // Custos fixos mensais (automáticos)
-  if (!opts.tipo || opts.tipo === 'fixo') {
+  // Fase 1: ao filtrar por processo, custos fixos NÃO entram (antes eram somados em todo processo)
+  if (!opts.filtroProcessoId && (!opts.tipo || opts.tipo === 'fixo')) {
     (S.custosMensais || []).forEach((m, mi) => {
       const mesId = 'fixos_' + (m.id || m.mes || mi);
       if (opts.filtroMesFixoId && String(m.id) !== String(opts.filtroMesFixoId)) return;
@@ -2766,6 +2771,30 @@ function buildAllEntries(opts={}) {
   });
 
   return out;
+}
+
+// ── TOTAIS UNIFICADOS (Fase 1) ─────────────────────────────
+// Fonte única: buildAllEntries (automáticos + lançamentos manuais).
+// Dashboard, Câmbio, Custos, Consolidado e PDFs usam estas funções,
+// garantindo que um lançamento manual apareça em todos os totais.
+// Status "Cancelado" nunca entra na soma.
+function _somaEntries(arr, pred){
+  return arr.filter(e => e.status !== 'Cancelado' && pred(e))
+            .reduce((a,e) => a + (parseFloat(e.valor)||0), 0);
+}
+function procTotals(p){
+  const es = buildAllEntries({ filtroProcessoId: p.id });
+  const receita = _somaEntries(es, e => e.tipo==='Receita' || e.tipo==='Reembolso');
+  const custo   = _somaEntries(es, e => e.tipo==='Despesa');
+  return { receita, custo, lucro: receita - custo };
+}
+function totaisGerais(){
+  const es = buildAllEntries();
+  const receita   = _somaEntries(es, e => e.tipo==='Receita' || e.tipo==='Reembolso');
+  const custoProc = _somaEntries(es, e => e.tipo==='Despesa' && e.vinculo==='processo');
+  const custoFixo = _somaEntries(es, e => e.tipo==='Despesa' && e.vinculo==='fixo');
+  const outras    = _somaEntries(es, e => e.tipo==='Despesa' && e.vinculo!=='processo' && e.vinculo!=='fixo');
+  return { receita, custoProc, custoFixo, outras, lucro: receita - custoProc - custoFixo - outras };
 }
 
 // Renderiza UM lançamento como card compacto (3 linhas).
@@ -3607,10 +3636,11 @@ function abrirDocLanc(id, docKey){
 // ═══════════════════════════════════════════════════════════
 function renderRelatorios(){
   const ps = S.processos;
-  const totalC = ps.reduce((a,p)=>a+tc(p),0);
-  const totalR = ps.reduce((a,p)=>a+(p.cambioReais||0),0);
+  const _tg = totaisGerais();
+  const totalC = _tg.custoProc;
+  const totalR = _tg.receita;
   const lucro  = totalR - totalC;
-  const totalF = S.custosMensais.reduce((a,m)=>a+tcm(m),0);
+  const totalF = _tg.custoFixo + _tg.outras;
 
   const relatorios = [
     {
@@ -3919,14 +3949,16 @@ function gerarRelatorioFinanceiro(){
     y = pdfRow(doc,'Receita (R$)','R$ '+fmt(p.cambioReais),y,[22,163,74]);
     y = pdfRow(doc,'IOF','R$ '+fmt(p.cambioIOF),y,[220,38,38]);
     y = pdfRow(doc,'Spread','R$ '+fmt(p.cambioSpread),y,[220,38,38]);
-    y = pdfRow(doc,'Total Custos','R$ '+fmt(tc(p)),y,[245,158,11]);
-    const lucro = (p.cambioReais||0)-tc(p);
+    const _pt = procTotals(p);
+    y = pdfRow(doc,'Total Custos','R$ '+fmt(_pt.custo),y,[245,158,11]);
+    const lucro = _pt.lucro;
     y = pdfTotal(doc,'Lucro Operacional','R$ '+fmt(lucro),y,lucro>=0?[22,163,74]:[220,38,38]);
   });
 
   if(y>230){ y=pdfNewPage(doc); }
-  const totalC=S.processos.reduce((a,p)=>a+tc(p),0);
-  const totalR=S.processos.reduce((a,p)=>a+(p.cambioReais||0),0);
+  const _tg=totaisGerais();
+  const totalC=_tg.custoProc;
+  const totalR=_tg.receita;
   const lucroTotal=totalR-totalC;
   y = pdfSection(doc,'CONSOLIDADO GERAL', y);
   y = pdfRow(doc,'Receita Total','R$ '+fmt(totalR),y,[22,163,74]);
