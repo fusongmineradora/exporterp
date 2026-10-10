@@ -238,8 +238,17 @@ function sugestaoLinha(l) {
   const v = Math.abs(l.valor);
   // 1) já há um lançamento em aberto com o mesmo valor → dar baixa
   if (l.valor < 0) {
-    const abertos = buildAllEntries().filter(e => e.tipo === 'Despesa' && e.status === 'Em Aberto' && Math.abs((Number(e.valor) || 0) - v) < 0.01
-      && (!e.data || diasEntre(brToIso2(e.data) || l.data, l.data) <= 10));
+    const dataRef = e => {
+      if (e.data) return brToIso2(e.data);
+      const pr = e._sourceField && (S.processos || []).find(x => x.id === e._sourceProcessoId);
+      const f = pr && pr.docs && pr.docs._custoDocs && pr.docs._custoDocs[e._sourceField] && (pr.docs._custoDocs[e._sourceField].fiscais || [])[0];
+      return f && f.data ? brToIso2(f.data) : '';
+    };
+    const abertos = buildAllEntries().filter(e => e.tipo === 'Despesa' && e.status === 'Em Aberto' && Math.abs((Number(e.valor) || 0) - v) < 0.01).filter(e => {
+      const d = dataRef(e); e._dataRef = d;
+      if (!d) return true;                                   // sem data: só sugestão (não é automático)
+      return e.data ? diasEntre(d, l.data) <= 10 : (l.data >= d ? diasEntre(d, l.data) <= 75 : diasEntre(d, l.data) <= 5);
+    });
     if (abertos.length) {
       // vários em aberto com o mesmo valor → prefere o processo que tem comprovante com esse valor e data
       let escolhido = abertos[0];
@@ -248,8 +257,20 @@ function sugestaoLinha(l) {
         const hit = abertos.find(e => e.vinculo === 'processo' && comps.some(c => c.processo === e.vinculoId));
         if (hit) escolhido = hit;
       }
-      return { acao: 'baixar', entry: escolhido, unico: abertos.length === 1, texto: `Dar baixa em "${escolhido.descricao}"` + (abertos.length > 1 ? ` (+${abertos.length - 1} com o mesmo valor — confira)` : '') };
+      return { acao: 'baixar', entry: escolhido, unico: abertos.length === 1 && !!escolhido._dataRef, texto: `Dar baixa em "${escolhido.descricao}"` + (abertos.length > 1 ? ` (+${abertos.length - 1} com o mesmo valor — confira)` : '') };
     }
+  }
+  // 1a) custo em aberto do mesmo fornecedor com diferença pequena (centavos / juros) → sugere baixa, você confirma
+  if (l.valor < 0) {
+    const nf = s2 => String(s2 || '').toUpperCase().normalize('NFD').replace(/[^A-Z0-9]/g, '');
+    const fav = nf(l.favorecido || l.memo);
+    const cands = buildAllEntries().filter(e => e._computed && e._sourceField && e.status === 'Em Aberto' && Number(e.valor) > 0).filter(e => {
+      const pr = (S.processos || []).find(x => x.id === e._sourceProcessoId) || {};
+      const emp = nf((pr.docs && pr.docs._costEmpresa && pr.docs._costEmpresa[e._sourceField]) || e.empresa);
+      const tol = Math.max(5, Number(e.valor) * 0.01);
+      return emp.length >= 6 && fav.length >= 6 && (emp.startsWith(fav.slice(0, 10)) || fav.startsWith(emp.slice(0, 10))) && Math.abs(Number(e.valor) - v) <= tol;
+    });
+    if (cands.length) return { acao: 'baixar', entry: cands[0], unico: false, texto: `Dar baixa em "${cands[0].descricao}" (R$ ${fmt(cands[0].valor)} na nota; o banco pagou R$ ${fmt(v)})` + (cands.length > 1 ? ` (+${cands.length - 1} parecido — confira)` : '') };
   }
   // 1b) lançamento já pago (criado a partir de um comprovante) que ainda não foi ligado ao extrato
   {
@@ -355,6 +376,14 @@ async function conciliarLinha(chave, modo, silencioso) {
   const l = B.linhas.find(x => x.chave === chave);
   if (!l) return;
   const sug = sugestaoLinha(l);
+  if (!silencioso) {
+    const c0 = modo === 'baixar' && sug && sug.entry ? (sug.entry.vinculo === 'processo' ? 'P:' + sug.entry.vinculoId : '') : (lerControles(chave).centro || (sug && sug.centro) || '');
+    const pr = c0.startsWith('P:') ? (S.processos || []).find(x => x.id === c0.slice(2)) : null;
+    const ref = pr && (brToIso2(pr.saida) || brToIso2(pr.logEmbarque));
+    if (ref && diasEntre(ref, l.data) > 90 && l.data > ref) {
+      if (!await uiConfirm(`Este pagamento é de ${isoToBr(l.data)}, mas o ${pr.id} embarcou/saiu em ${isoToBr(ref)} (${Math.round(diasEntre(ref, l.data))} dias antes). Tem certeza que é deste processo?`, 'Confira o processo', 'Sim, é deste processo', 'Cancelar')) return;
+    }
+  }
   try {
     if (modo === 'baixar' && sug && sug.acao === 'baixar') {
       if (!darBaixa(sug.entry, l)) throw new Error('Não foi possível dar baixa no lançamento.');
@@ -615,6 +644,7 @@ function renderConciliacao() {
     <div style="display:flex;gap:6px;flex-wrap:wrap">
       <label class="btn btn-primary btn-sm" for="ofx-file" style="cursor:pointer">📥 Importar extrato OFX</label>
       <button class="btn btn-secondary btn-sm" onclick="importarOFXDrive()">☁️ OFX da pasta Entrada</button>
+      <button class="btn btn-secondary btn-sm" style="border-color:var(--green);color:var(--green)" onclick="conciliarAutomatico()">⚡ Conciliar automático</button>
     </div>
     <input type="file" id="ofx-file" hidden onchange="importarOFX(this.files[0]);this.value=''">
   </div>
@@ -754,4 +784,16 @@ function renderResultados() {
   <div style="font-size:11px;color:var(--muted);margin-top:10px;line-height:1.6">${tab === 'clientes'
     ? 'Câmbio recebido vem dos contratos de câmbio anexados (com as faturas de cada processo) ou, sem contrato, do valor recebido informado no processo. Invoices embarcadas contam processos com status Embarcado, No Destino ou Concluído.'
     : 'Resultado = câmbio recebido para o processo (ou, sem câmbio, a NF-e de saída) menos os custos. Fica provisório enquanto faltar NF-e de saída, câmbio ou houver custos em aberto.'}</div>`;
+}
+
+async function conciliarAutomatico() {
+  const B = S.banco;
+  if (!B.linhas.some(l => l.status === 'pendente')) { showToast('Nada pendente para conciliar'); return; }
+  if (!await uiConfirm('Conciliar sozinho só o que tem prova:\n• câmbio com o contrato anexado\n• pagamento com comprovante/custo do mesmo valor (um só candidato)\n• tarifas e regras com categoria e centro definidos\n• rendimentos do mês\n\nO resto continua pendente para você decidir.', 'Conciliar automático', 'Conciliar', 'Cancelar')) return;
+  showSyncIndicator('Conciliando...');
+  try {
+    const r = await autoConciliar();
+    B.msg = { tipo: 'ok', texto: `Conciliação automática: ${r.cambio} câmbio(s), ${r.baixas} pagamento(s) ligados a comprovantes/custos, ${r.regras} tarifa(s)/regra(s), ${r.rendimentos} mês(es) de rendimento. ${r.pendentes} linha(s) continuam pendentes.` };
+  } catch (e) { B.msg = { tipo: 'erro', texto: 'Erro na conciliação automática: ' + (e.message || e) }; }
+  hideSyncIndicator(); render();
 }
