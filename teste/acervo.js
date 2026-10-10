@@ -246,11 +246,15 @@ function enriquecerInfo(item) {
   const mx = re => { const m = U.match(re); return m ? m[1].trim() : ''; };
   if (item.tipo === 'cte' || item.tipo === 'mdfe') {
     if (!info.transportadora) info.transportadora = info.emitNome || mx(/EMITENTE:\s*([A-ZÀ-Ú0-9 .&-]+?(?:LTDA|S\.?A\.?|EIRELI|ME)\b)/i) || mx(/\b([A-ZÀ-Ú][A-ZÀ-Ú .&-]{3,60}TRANSPORTES?\s+(?:LTDA|S\.?A\.?|EIRELI|ME))\b/);
-    const rota = U.replace(/(?:ORIGEM|DESTINO) DA PRESTA[CÇ][AÃ]O/gi, '|').match(/\|[\s|]*([A-ZÀ-Ú][A-ZÀ-Ú ]+?)\s+-\s+([A-Z]{2})\s+-\s+\d{7}[\s|]{0,20}?([A-ZÀ-Ú][A-ZÀ-Ú ]+?)\s+-\s+([A-Z]{2})\s+-\s+\d{7}/);
-    if (rota && !info.munIni) { info.munIni = titulo(rota[1]) + ' / ' + rota[2]; info.munFim = titulo(rota[3]) + ' / ' + rota[4]; }
+    const RUIDO = /^(BRASIL|BRAZIL|LTDA|S\.?A\.?|ME|EIRELI|SALES|INSIDE|PAIS|FONE|CEP|MUNIC[IÍ]PIO|ENDERE[CÇ]O|DESTINAT[AÁ]RIO|REMETENTE|TOMADOR|EXPEDIDOR|RECEBEDOR|DA|DE|DO|PRESTA[CÇ][AÃ]O|ORIGEM|DESTINO|INDUSTR|-)$/;
+    const cidades = [...U.replace(/(?:ORIGEM|DESTINO) DA PRESTA[CÇ][AÃ]O/gi, ' ').matchAll(/((?:[A-ZÀ-Ú.]+\s+){0,4}[A-ZÀ-Ú.]+)\s+-\s+([A-Z]{2})\s+-\s+(\d{7})\b/g)].map(m => {
+      const w = m[1].trim().split(/\s+/); while (w.length > 1 && RUIDO.test(w[0])) w.shift();
+      return { c: w.join(' '), uf: m[2] };
+    });
+    if (cidades.length && !info.munIni) { info.munIni = titulo(cidades[0].c) + ' / ' + cidades[0].uf; if (cidades[1]) info.munFim = titulo(cidades[1].c) + ' / ' + cidades[1].uf; }
     if (!info.data) { const d = dataBrDe(U); if (d) info.data = brToIso(d); }
-    if (!info.valor) info.valor = numBR(mx(/VALOR A RECEBER\s+([\d.]+,\d{2})/i) || mx(/VALOR TOTAL DO SERVI[CÇ]O\s+(?:VALOR FRETE\s+)?([\d.]+,\d{2})/i));
-    info.endEntrega = info.endEntrega || mx(/END\.?\s*ENT\.?:\s*(.+?)(?:\s{2,}|DADOS ESPEC|$)/i);
+    if (!info.valor) info.valor = numBR(mx(/VALOR A RECEBER\s+([\d.]+,\d{2})/i) || mx(/VALOR FRETE\s*([\d.]+,\d{2})/i) || mx(/([\d.]+,\d{2})\s*VALOR FRETE/i) || mx(/VALOR TOTAL DO SERVI[CÇ]O\s+(?:VALOR FRETE\s+)?([\d.]+,\d{2})/i));
+    info.endEntrega = info.endEntrega || mx(/END\.?\s*ENT\.?:\s*(.+?)(?:\s{2,}|\s+OBSERVA|DADOS ESPEC|$)/i);
   }
   if (item.tipo === 'nfe') {
     if (!info.emitNome) info.emitNome = mx(/RECEBEMOS DE\s+(.+?)\s+OS PRODUTOS/i);
@@ -259,9 +263,10 @@ function enriquecerInfo(item) {
     if (!info.transpNome) info.transpNome = mx(/TRANSPORTADOR[\s\S]{0,140}?CNPJ \/ CPF\s+([A-ZÀ-Ú][A-ZÀ-Ú .&-]{3,60}?)\s+\d-/i);
   }
   if (item.tipo === 'nfse') {
-    if (!info.emitNome) info.emitNome = mx(/Nome empresarial:\s*(.+?)\s+Endere[cç]o/i) || mx(/RECEBI\(EMOS\) DA EMPRESA:\s*(.+?)\s+A NOTA/i);
-    if (!info.valor) info.valor = numBR(mx(/VALOR (?:TOTAL )?DO SERVI[CÇ]O:?\s*R?\$?\s*([\d.]+,\d{2})/i) || mx(/Valor l[ií]quido da NFS-?e[\s\S]{0,60}?([\d.]+,\d{2})/i));
-    if (!info.data) { const d = mx(/EMITIDA EM\s+(\d{2}\/\d{2}\/\d{4})/i) || dataBrDe(U); if (d) info.data = brToIso(d); }
+    if (!info.emitNome) info.emitNome = mx(/Nome empresarial:\s*(.+?)\s+Endere[cç]o/i) || mx(/RECEBI\(EMOS\) DA EMPRESA:\s*(.+?)\s+A NOTA/i)
+      || mx(/(?:EMITENTE DA NFS-?e|Prestador do Servi[cç]o)[\s\S]{0,120}?Nome \/ Nome Empresarial\s+(.+?)\s+(?:Inscri|CNPJ|CEP)/i) || mx(/Nome \/ Nome Empresarial\s+(.+?)\s+(?:Inscri|CNPJ|CEP)/i);
+    if (!info.valor) info.valor = numBR(mx(/VALOR (?:TOTAL )?DO SERVI[CÇ]O:?\s*R?\$?\s*([\d.]+,\d{2})/i) || mx(/Valor l[ií]quido da NFS-?e[\s\S]{0,60}?([\d.]+,\d{2})/i) || mx(/VALOR TOTAL DA NFS-?E[\s\S]{0,80}?R\$\s*([\d.]+,\d{2})/i));
+    if (!info.data) { const d = mx(/EMITIDA EM\s+(\d{2}\/\d{2}\/\d{4})/i) || mx(/Data da emiss[aã]o da NFS-?e\s+(\d{2}\/\d{2}\/\d{4})/i) || dataBrDe(U); if (d) info.data = brToIso(d); }
   }
   if (item.tipo === 'recibo') {
     const J = U.replace(/\b([A-ZÀ-Ú]) (?=[A-ZÀ-Ú]\b)/g, '$1');   // "V A L O R T O T A L" → "VALORTOTAL"
@@ -269,9 +274,30 @@ function enriquecerInfo(item) {
     if (!info.emitNome) info.emitNome = mx(/RAZ\s?[AÃ]O SOCIAL\s+(.+?)\s+CNPJ/i) || mx(/RECEBI(?:\(EMOS\))?\s+DE\s+(.+?)\s+(?:A|O)\s+(?:QUANTIA|IMPORT)/i);
     if (!info.data) { const m = U.match(/(\d{1,2}) de ([A-Za-zçÇ]+) de (\d{4})/); if (m && MESES_PT[m[2].toLowerCase()]) info.data = `${m[3]}-${MESES_PT[m[2].toLowerCase()]}-${m[1].padStart(2, '0')}`; else { const d = dataBrDe(U); if (d) info.data = brToIso(d); } }
   }
+  if (item.tipo === 'bl') {
+    const C = T.replace(/\s+/g, '');
+    const cx = re => { const m = C.match(re); return m ? m[1] : ''; };
+    info.booking = info.booking || cx(/BookingNo\.?(\d{8,12})/i) || cx(/B\/LNo\.?:?(\d{8,12})/i) || cx(/B\/L:(\d{8,12})/i);
+    const emb = cx(/ShippedonBoardDate(?:\(LocalTime\))?:?(\d{4}-\d{2}-\d{2})/i) || cx(/ShippedonBoard[^0-9]{0,40}(\d{4}-\d{2}-\d{2})/i);
+    const emb2 = !emb && (C.match(/ShippedonBoard[^0-9]{0,40}(\d{2})[\/.-](\d{2})[\/.-](\d{4})/i));
+    info.embarque = emb ? emb.split('-').reverse().join('/') : emb2 ? `${emb2[1]}/${emb2[2]}/${emb2[3]}` : '';
+    info.dueNumero = info.dueNumero || cx(/DU-?E:?(\d{2}BR\d{9}-?\d)/i) || cx(/(\d{2}BR\d{9}-\d)/);
+    info.refProcesso = cx(/INVOICEN[O°º.]*:?(FS\d{6})/i) || ((T.toUpperCase().match(/\bFS\s?\d{6}\b/) || [''])[0].replace(/\s/g, ''));
+    const lacres = new Set((U.match(/\b[A-Z]{2}\s?-\s?[A-Z]{2}\d{5,9}\b/g) || []).map(x => x.replace(/\s/g, '')));
+    info.containers = [...new Set((C.match(/[A-Z]{3}U\d{7}/g) || []))].filter(c => !lacres.has(c));
+    info.lacre = [...lacres][0] || '';
+    info.navio = (U.match(/V\s*e\s*s\s*s\s*e\s*l\s+(.{3,40}?)\s+V\s*o\s*y\s*a\s*g\s*e/i) || [])[1] || '';
+    info.navio = info.navio.replace(/\s+(?=\S\s)/g, m => m).replace(/\s+/g, ' ').trim();
+    info.armador = /MAEU|MAERSK/i.test(C) ? 'MAERSK' : /COSU|COSCO/i.test(C) ? 'COSCO' : /MSCU|\bMSC\b/i.test(C) ? 'MSC' : /CMDU|CMA/i.test(C) ? 'CMA CGM' : /HLCU|HAPAG/i.test(C) ? 'Hapag-Lloyd' : /EGLV|EVERGREEN/i.test(C) ? 'Evergreen' : '';
+  }
   if (item.tipo === 'due') {
     info.dueNumero = info.dueNumero || mx(/\b(\d{2}BR\d{9}-?\d)\b/i);
     info.dueChave = info.dueChave || mx(/Chave de acesso:?\s*([0-9A-Z]{14})\b/i);
+  }
+  {
+    const ct = U.match(/\b(FS\d{6})S?\s+(\d{9,10})\s+([A-Z]{4}\d{7})\b/);   // "FS260097 271229537 SEKU1633624"
+    if (ct) { info.refProcesso = ct[1]; info.booking = ct[2]; info.container = ct[3]; }
+    else { const c = U.match(/\b([A-Z]{3}U\d{7})\b/); if (c) info.container = info.container || c[1]; }
   }
   if (DOCS_COM_CUSTO.includes(item.tipo) && item.campoCusto === undefined) item.campoCusto = campoCustoSugerido(item);
 }
@@ -279,8 +305,9 @@ function enriquecerInfo(item) {
 function campoCustoSugerido(item) {
   if (item.tipo === 'cte') return 'custoFrete';
   const info = item.info || {};
-  const quem = normTxt([item.nome, info.emitNome, info.pagamento && info.pagamento.recebedor, String(item.texto || '').slice(0, 800)].filter(Boolean).join(' '));
-  const cat = item.categoria || categoriaPeloNome(normTxt([item.nome, info.emitNome, info.pagamento && info.pagamento.recebedor].filter(Boolean).join(' '))) || categoriaPeloNome(quem);
+  const quem = normTxt([item.nomeOriginal || item.nome, info.emitNome, info.pagamento && info.pagamento.recebedor, String(item.texto || '').slice(0, 800)].filter(Boolean).join(' '));
+  const cat = categoriaPeloNome(normTxt([info.emitNome, info.pagamento && info.pagamento.recebedor].filter(Boolean).join(' ')))
+    || item.categoria || categoriaPeloNome(normTxt(item.nomeOriginal || item.nome)) || categoriaPeloNome(quem);
   if (CAMPO_POR_CATEG[cat]) return CAMPO_POR_CATEG[cat];
   if (item.tipo === 'nfe') return 'custoProduto';
   if (item.tipo === 'nfse') return 'custoServTerceiros';
@@ -299,7 +326,8 @@ function recalcularCustos(p, campo) {
   const pago = Math.max(pix, recibo);   // recibo é quitação: já inclui os PIX daquele pagamento
   const total = fiscal || pago;
   p[campo] = Math.round(total * 100) / 100;
-  p[campo + '_status'] = pago > 0 && pago + 0.01 >= total ? 'Pago' : 'Em Aberto';
+  const peloBanco = p.docs._costBanco && p.docs._costBanco[campo];
+  p[campo + '_status'] = peloBanco || (pago > 0 && pago + 0.01 >= total) ? 'Pago' : 'Em Aberto';
   const datas = (reg.pagos || []).map(d => d.data).filter(Boolean).sort();
   if (datas.length) { p.docs._costData = p.docs._costData || {}; p.docs._costData[campo] = datas[datas.length - 1]; }
   const comp = (reg.pagos || []).find(d => d.url);
@@ -351,9 +379,22 @@ function aplicarDocNoProcesso(item, p, upd) {
   if (item.tipo === 'due') {
     if (info.dueNumero && !p.dueNumero) { p.dueNumero = info.dueNumero; mud.push('dueNumero'); }
     if (info.dueChave && !p.dueChave) { p.dueChave = info.dueChave; mud.push('dueChave'); }
-    if (p.status === 'A Coletar' || p.status === 'No Armazém') p.status = 'No Porto';
   }
-  if (item.tipo === 'bl' && ['A Coletar', 'No Armazém', 'No Porto'].includes(p.status)) p.status = 'Embarcado';
+  if (item.tipo === 'bl') {
+    const set = (k, v) => { if (v && !p[k]) { p[k] = v; mud.push(k); } };
+    set('booking', info.booking);
+    set('saida', info.embarque);
+    set('dueNumero', info.dueNumero);
+    if (info.armador && (!p.companhia || p.companhia === 'MAERSK')) { if (p.companhia !== info.armador) mud.push('companhia'); p.companhia = info.armador; }
+    if ((info.containers || []).length && !(p.containers || []).some(Boolean)) {
+      p.containers = info.containers.slice(); p.container = info.containers[0]; p.qtdContainer = String(info.containers.length); mud.push('container');
+    }
+    p.docs._bl = { booking: info.booking, embarque: info.embarque, navio: info.navio, lacre: info.lacre, containers: info.containers, due: info.dueNumero };
+  }
+  if (info.refProcesso === p.id && item.tipo !== 'bl') {
+    if (info.booking && !p.booking) { p.booking = info.booking; mud.push('booking'); }
+    if (info.container && !(p.containers || []).some(Boolean)) { p.containers = [info.container]; p.container = info.container; mud.push('container'); }
+  }
   // custos
   const campo = item.campoCusto !== undefined ? item.campoCusto : campoCustoSugerido(item);
   const valor = Number(info.valor) || 0;
@@ -363,7 +404,8 @@ function aplicarDocNoProcesso(item, p, upd) {
     const pago = item.tipo === 'pagamento' || item.tipo === 'recibo';
     const lista = pago ? reg.pagos : reg.fiscais;
     const chave = (!pago && info.chave) || url || item.fileId;
-    if (!lista.some(d => d.k === chave)) {
+    const mesmaNota = !pago && lista.some(d => Math.abs((Number(d.valor) || 0) - valor) < 0.01 && (!info.chave || !/^\d{44}$/.test(d.k)));
+    if (!lista.some(d => d.k === chave) && !mesmaNota) {
       lista.push({ k: chave, url, valor, tipo: item.tipo, data: info.data ? isoToBr(info.data) : (info.pagamento && info.pagamento.data) || '', nome: (upd && upd.name) || item.nome, de: info.emitNome || (info.pagamento && info.pagamento.recebedor) || '' });
       recalcularCustos(p, campo);
       mud.push(PROCESS_COST_FIELDS[campo] + (pago ? ' pago' : ' devido') + ' R$ ' + valor.toFixed(2));
@@ -384,16 +426,24 @@ async function atualizarProcessosPelosDocs(ids, silencioso) {
     p.docs = p.docs || {};
     // lançamentos criados pela versão anterior a partir de documentos do processo viram campos do processo
     S.lancamentos = (S.lancamentos || []).filter(l => !(l.docs && l.docs._origem === 'entrada' && l.vinculo === 'processo' && l.vinculoId === p.id && !l.docs._banco));
+    // zera os custos que vieram de documentos (serão recalculados) — baixa pelo banco é mantida
+    Object.keys(p.docs._custoDocs || {}).forEach(c => {
+      if (!(p.docs._costBanco && p.docs._costBanco[c])) { p[c] = 0; p[c + '_status'] = 'Em Aberto'; }
+      if (p.docs['_lanc_' + c]) { delete p.docs['_lanc_' + c].nfe; delete p.docs['_lanc_' + c].comprovante; }
+      if (p.docs._costEmpresa) delete p.docs._costEmpresa[c];
+    });
     p.docs._custoDocs = {}; delete p.docs._cambioDocs;
     const files = (p.docs._files) || {};
     for (const [tipo, arr] of Object.entries(files)) {
       if (['invoice', 'contrato', 'outros'].includes(tipo)) continue;
       for (const f of arr || []) {
-        if (!f.id) continue;
+        if (!f.id || (f.atalho && tipo !== 'comprovantes')) continue;
+        if (!f.nomeOriginal) { try { const m = await driveAPI('GET', '/files/' + f.id, null, 'fields=description'); const o = String(m.description || '').match(/Nome original:\s*(.+?)\s*(?:·|$)/); if (o) f.nomeOriginal = o[1].trim(); } catch (e) {} }
         if (!silencioso && S.entrada) { S.entrada.progresso = `Relendo ${p.id}: ${f.name}`; render(); }
         try {
           const it = await analisarArquivo({ id: f.id, name: f.name, mimeType: /\.xml$/i.test(f.name) ? 'application/xml' : /\.pdf$/i.test(f.name) ? 'application/pdf' : /\.(png|jpe?g)$/i.test(f.name) ? 'image/png' : '', size: 1000 });
           it.tipo = tipo;                       // o tipo já foi confirmado ao anexar
+          if (f.nomeOriginal) it.nomeOriginal = f.nomeOriginal;
           if ((!Number(it.info.valor) || f.valorManual) && Number(f.valor)) it.info.valor = Number(f.valor);
           if (!it.info.data && f.data) it.info.data = /^\d{4}-/.test(f.data) ? f.data : brToIso(f.data);
           delete it.campoCusto; enriquecerInfo(it);   // reler com o tipo confirmado
@@ -402,7 +452,7 @@ async function atualizarProcessosPelosDocs(ids, silencioso) {
         } catch (e) { console.warn('reler', f.name, e.message); }
       }
     }
-    p.docs._docsV = 2; n++;
+    p.docs._docsV = 3; n++;
   }
   if (S.entrada) S.entrada.progresso = '';
   await saveToSheets();
@@ -413,7 +463,7 @@ async function atualizarProcessosPelosDocs(ids, silencioso) {
 let _migrandoDocs = false;
 async function migrarDocsV2() {
   if (_migrandoDocs || !window._sheetsToken) return;
-  const ids = (S.processos || []).filter(p => p.docs && p.docs._files && Object.keys(p.docs._files).length && p.docs._docsV !== 2).map(p => p.id);
+  const ids = (S.processos || []).filter(p => p.docs && p.docs._files && Object.keys(p.docs._files).length && p.docs._docsV !== 3).map(p => p.id);
   if (!ids.length) return;
   _migrandoDocs = true;
   try { await atualizarProcessosPelosDocs(ids, true); showToast(`✅ ${ids.length} processo(s) atualizados pelos documentos anexados`); render(); }

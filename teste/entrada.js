@@ -68,9 +68,38 @@ async function loadFromSheets() {
   if (changed) {
     try { await saveToSheets(); } catch (e) {}
   }
+  _carregadoEm = new Date().toISOString();
   if (S.page === 'entrada' || S.page === 'dashboard') render();
   if (typeof migrarDocsV2 === 'function') setTimeout(migrarDocsV2, 800);
 }
+
+// ── Duas abas / dois aparelhos: avisa antes de sobrescrever alterações feitas em outro lugar ──
+const _SESSAO = Math.random().toString(36).slice(2, 10);
+let _carregadoEm = '';
+async function _lerMarca() {
+  try { const r = await sheetsAPI('GET', `/${SHEET_ID}/values/CONFIG!E1`); return String(((r.values || [])[0] || [])[0] || ''); } catch (e) { return ''; }
+}
+async function _gravarMarca() {
+  try { await sheetsAPI('PUT', `/${SHEET_ID}/values/CONFIG!D1:E1?valueInputOption=RAW`, { values: [['ultima_gravacao', _SESSAO + '|' + new Date().toISOString()]] }); } catch (e) {}
+}
+const _saveToSheetsBase = saveToSheets;
+let _conflitoAberto = false;
+saveToSheets = async function () {
+  await ensureTestSheet();
+  if (_carregadoEm && !_conflitoAberto) {
+    const [sid, quando] = (await _lerMarca()).split('|');
+    if (sid && sid !== _SESSAO && quando > _carregadoEm) {
+      _conflitoAberto = true;
+      const recarregar = await uiConfirm(`Os dados foram alterados em outro aparelho ou aba às ${new Date(quando).toLocaleTimeString('pt-BR')}, depois que você abriu esta tela.\n\nSe salvar agora, o que foi feito lá pode ser perdido. Recarregar os dados antes? (a sua última alteração precisará ser refeita)`, 'Alterações em outro lugar', 'Recarregar', 'Salvar mesmo assim');
+      _conflitoAberto = false;
+      if (recarregar) { await loadFromSheets(); showToast('Dados recarregados'); render(); return; }
+    }
+  }
+  const r = await _saveToSheetsBase.apply(this, arguments);
+  await _gravarMarca();
+  _carregadoEm = new Date().toISOString();
+  return r;
+};
 
 // ── 2. DOCUMENTOS COM VÁRIOS ARQUIVOS ───────────────────────
 function docCount(p, k) {
@@ -153,7 +182,7 @@ async function pdfTexto(buf) {
   for (let i = 1; i <= n; i++) {
     const page = await doc.getPage(i);
     const tc = await page.getTextContent();
-    out += tc.items.map(it => it.str).join(' ') + '\n';
+    out += tc.items.map(it => it.str + (it.hasEOL ? '\n' : ' ')).join('') + '\n';
   }
   return out;
 }
@@ -334,14 +363,14 @@ function lerCambio(texto) {
 // Comprovante de PIX/transferência/boleto do Itaú
 function lerPagamento(texto) {
   const T = String(texto || '');
-  if (!/comprovante\s+de\s+(transfer[eê]ncia|pagamento|pix)|comprovante\s+pix|pix\s+(enviado|realizado)|transfer[eê]ncia\s+(realizada|efetuada)|pagamento\s+(realizado|efetuado)/i.test(T)) return null;
+  if (!/comprovante\s+de\s+(transfer[eê]ncia|pagamento|pix)|comprovante\s+pix|pix\s+(enviado|realizado)|transfer[eê]ncia\s+(realizada|efetuada)|pagamento\s+(realizado|efetuado)|via\s+SISPAG|valor\s+da\s+transfer[eê]ncia|tipo\s+de\s+transfer[eê]ncia|autentica[cç][aã]o\s+do\s+comprovante|ID\s+da\s+transa[cç][aã]o\s*:?\s*E\d{8}/i.test(T)) return null;
   const g = re => { const m = T.match(re); return m ? m[1].trim() : ''; };
   return {
     valor: numBR(g(/\bvalor(?:\s+do\s+pagamento|\s+da\s+transfer[eê]ncia)?\s*:?\s*R\$\s*([\d.,]+)/i)),
     data: g(/data\s+d[ao]\s+(?:transfer[eê]ncia|pagamento)\s*:?\s*(\d{2}\/\d{2}\/\d{4})/i),
     recebedor: g(/nome\s+do\s+recebedor\s*:?\s*([^\n]+)/i),
     documento: g(/CPF\/CNPJ\s+do\s+recebedor\s*:?\s*([\d.\/\-*]+)/i),
-    identificacao: g(/identifica[cç][aã]o\s+no\s+comprovante\s*:?\s*([^\n]+)/i),
+    identificacao: g(/identifica[cç][aã]o\s+no\s+(?:seu\s+)?comprovante\s*:?\s*\n?\s*([^\n]+)/i),
     idTransacao: g(/ID\s+da\s+transa[cç][aã]o\s*:?\s*(E[0-9A-Z]{20,})/i),
     tipoPagamento: g(/tipo\s+de\s+pagamento\s*:?\s*([^\n]+)/i),
   };
@@ -351,6 +380,13 @@ function completarPagamento(pag, texto) {
   const T = String(texto || '');
   if (!pag.valor) { const m = T.match(/R\$\s*([\d.]+,\d{2})/); if (m) { pag.valor = numBR(m[1]); pag.valorIncerto = true; } }
   if (!pag.data) { const m = T.match(/\b(\d{2}\/\d{2}\/\d{4})\b/); if (m) pag.data = m[1]; }
+  if (!pag.data) {   // "10 jun. 2026, 16:26:10, via SISPAG"
+    const M = { jan: '01', fev: '02', mar: '03', abr: '04', mai: '05', jun: '06', jul: '07', ago: '08', set: '09', out: '10', nov: '11', dez: '12' };
+    const m = T.match(/\b(\d{1,2})\s+(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[a-zç]*\.?\s+(?:de\s+)?(\d{4})/i);
+    if (m) pag.data = m[1].padStart(2, '0') + '/' + M[m[2].toLowerCase()] + '/' + m[3];
+  }
+  if (!pag.recebedor) { const m = T.match(/(?:^|\n)\s*para\s*\n\s*([A-ZÀ-Ú0-9][^\n]{2,70})/i); if (m) pag.recebedor = m[1].trim(); }
+  if (pag.identificacao) pag.identificacao = pag.identificacao.replace(/\s+/g, '').toUpperCase();
   if (!pag.recebedor) { const m = T.match(/(?:recebedor|favorecido|para|destinat[aá]rio)\s*:?\s*\n?\s*([A-ZÀ-Ú][^\n]{2,60})/i); if (m) pag.recebedor = m[1].trim(); }
   return pag;
 }
@@ -359,6 +395,10 @@ function normTxt(s) { return String(s || '').toUpperCase().replace(/\s+/g, ' ');
 
 function classificarDocumento(texto, nome) {
   const T = normTxt(texto), N = normTxt(nome);
+  const C = T.replace(/\s+/g, '');
+  if (/WAYBILL|BILLOFLADING/.test(C) && /SHIPPEDONBOARD|BOOKINGNO|PORTOFLOADING/.test(C) && !chavesDoTexto(String(texto || '')).length) {
+    return { tipo: 'bl', confianca: 'alta', motivo: 'BL / waybill' };
+  }
   // 1) chave de acesso → nota/CT-e/MDF-e
   const chaves = chavesDoTexto(String(texto || '') + ' ' + String(nome || ''));
   if (chaves.length) {
@@ -416,6 +456,7 @@ function identificarProcesso(info, texto, nome) {
     refs.forEach(ch => { if (idx[ch] === p.id) { score += 100; motivos.push('cita nota já anexada'); } });
     if (info.chave && idx[info.chave] === p.id) { score += 100; motivos.push('mesma chave já anexada'); }
     if (info.cambio && info.cambio.faturas.some(f => f.processo === id)) { score += 150; motivos.push('fatura no contrato de câmbio'); }
+    if (info.refProcesso && info.refProcesso === id.replace(/S$/, '')) { score += 150; motivos.push('processo citado no documento (invoice)'); }
     if (info.pagamento && normTxt(info.pagamento.identificacao).replace(/\s/g, '').replace(/^(FS\d{6})S$/, '$1') === id.replace(/^(FS\d{6})S$/, '$1')) { score += 150; motivos.push('identificação no comprovante'); }
     if (score > 0) cands.push({ id: p.id, score, motivos: [...new Set(motivos)] });
   });
@@ -685,7 +726,8 @@ async function confirmarEntrada(i, silencioso) {
         categoria: item.categoria || '',
         cambio: item.info.cambio ? { faturas: item.info.cambio.faturas, referencia: item.info.cambio.referencia, contratoExtrato: item.info.cambio.contratoExtrato, taxa: item.info.cambio.taxa, usdFatura: fatura ? fatura.usd : null, usdTotal: item.info.cambio.valorMoeda, reaisTotal: item.info.cambio.valorReais, data: item.info.cambio.data } : undefined,
         pagamento: item.info.pagamento || undefined,
-        origem: 'entrada', em: new Date().toISOString(),
+        origem: 'entrada', em: new Date().toISOString(), nomeOriginal: item.nome,
+        atalho: proc.id !== p.id ? true : undefined,
         campoCusto: item.campoCusto !== undefined ? item.campoCusto : undefined, valorManual: item.valorManual ? true : undefined,
         pastaOriginal: item.pastaErrada && proc.id === item.pastaErrada.certo ? item.pastaErrada.estava.join('+') : undefined,
       });
