@@ -981,6 +981,7 @@ setTimeout(async function esperarDados() {
     mudou += juntarProcessosRenumerados();
     (S.processos || []).forEach(p => { mudou += aplicarPrevistos(p); });
     try { mudou += lancamentosRepetidos(); mudou += vinculosDoBanco(); } catch (e) { console.warn('vínculos do banco', e); }
+    try { mudou += assessoriaPeloSaldo(); } catch (e) { console.warn('assessoria', e); }
     const novosCad = cadastrosPelosArquivos();
     // só grava se algo mudou de verdade (evita regravar a planilha inteira a cada vez que abre)
     if (novosCad > 0 || (f0 == null ? mudou : foto() !== f0)) saveToSheets().catch(() => {});
@@ -1692,7 +1693,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '57';
+const VERSAO_TESTE = '58';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -2025,6 +2026,67 @@ function lancamentosRepetidos() {
   });
   if (tirar.size) { S.lancamentos = L.filter(l => !tirar.has(l)); tirar.forEach(l => logAction('excluir', 'EXTRATO_CAIXA', l.id, 'Lançamento repetido: ' + (l.descricao || '') + ' R$ ' + l.valor)); }
   return tirar.size;
+}
+// ═══════════════════════════════════════════════════════════════
+// Assessoria Ademir / FFA: conta fechada pelo SALDO (decisão de 11/10/2026).
+// Processos já pagos: 1 container = R$ 1.200, 2 containers = R$ 2.400. Não precisa ligar cada comprovante ao seu processo:
+// soma tudo o que saiu para o Ademir/FFA no extrato e compara com o que é devido. Os demais seguem em aberto (previsto).
+// ═══════════════════════════════════════════════════════════════
+const ASSESSORIA_PAGOS = { FS260096: 1200, FS260097: 1200, FS260098: 1200, FS260099: 1200, FS260100: 1200, FS260101: 1200, FS260102: 1200, FS260104: 1200, FS260107: 1200, FS260108: 1200, FS260109: 1200, FS260109S: 1200, FS260111: 1200, FS260106: 2400, FS260112: 2400 };
+const ASSESSORIA_RE = /\bFFA\s+COMERCIO|ADEMIR\s+FURTADO/;
+const ASSESSORIA_DECISAO = '2026-10-11';
+function ehLinhaAssessoria(l) { return l && l.valor < 0 && ASSESSORIA_RE.test(semAcento((l.favorecido || '') + ' ' + (l.memo || ''))); }
+function assessoriaPeloSaldo() {
+  let n = 0;
+  Object.entries(ASSESSORIA_PAGOS).forEach(([id, v]) => {
+    const p = (S.processos || []).find(x => x.id === id); if (!p) return;
+    p.docs = p.docs || {};
+    const c = 'custoServTerceiros';
+    if (p.docs._assessoriaSaldo && Number(p[c]) === v && p[c + '_status'] === 'Pago') return;
+    p.docs._assessoriaSaldo = true;
+    p.docs._valorManual = Object.assign({}, p.docs._valorManual, { [c]: v });
+    p.docs._statusManual = Object.assign({}, p.docs._statusManual, { [c]: 'Pago' });
+    if (p.docs._previsto) { delete p.docs._previsto[c]; if (!Object.keys(p.docs._previsto).length) delete p.docs._previsto; }
+    p.docs._costEmpresa = Object.assign({}, p.docs._costEmpresa, { [c]: 'Assessoria (Ademir / FFA)' });
+    p[c] = v; p[c + '_status'] = 'Pago';
+    if (p.docs._custoDocs && p.docs._custoDocs[c]) recalcularCustos(p, c);
+    n++;
+  });
+  // linhas do extrato para o Ademir/FFA até a decisão: entram na conta pelo saldo (sem precisar escolher o processo)
+  ((S.banco && S.banco.linhas) || []).forEach(l => {
+    if (!ehLinhaAssessoria(l) || l.data > ASSESSORIA_DECISAO || l.status !== 'pendente') return;
+    l.status = 'conciliado'; l.lancId = 'saldo:ASSESSORIA'; l.categoria = 'Serviços de Terceiros'; l.centro = 'Assessoria (saldo)'; l.obs = 'Assessoria Ademir/FFA — acerto pelo saldo'; n++;
+  });
+  return n;
+}
+function contaAssessoria() {
+  const linhas = ((S.banco && S.banco.linhas) || []).filter(l => ehLinhaAssessoria(l) && l.status !== 'ignorado').sort((a, b) => a.data.localeCompare(b.data));
+  const pago = Math.round(linhas.reduce((a, l) => a + Math.abs(l.valor), 0) * 100) / 100;
+  const devidos = [], abertos = [];
+  (S.processos || []).filter(p => p.status !== 'Cancelado').forEach(p => {
+    const v = Number(p.custoServTerceiros) || 0;
+    const ehDele = ASSESSORIA_PAGOS[p.id] || /ADEMIR|FFA|ASSESSORIA/i.test(String(((p.docs || {})._costEmpresa || {}).custoServTerceiros || ''));
+    if (!ehDele || !v) return;
+    (p.custoServTerceiros_status === 'Pago' ? devidos : abertos).push({ id: p.id, valor: v, previsto: !!(p.docs && p.docs._previsto && p.docs._previsto.custoServTerceiros) });
+  });
+  const devido = Math.round(devidos.reduce((a, x) => a + x.valor, 0) * 100) / 100;
+  const emAberto = Math.round(abertos.reduce((a, x) => a + x.valor, 0) * 100) / 100;
+  return { linhas, pago, devidos, devido, abertos, emAberto, diferenca: Math.round((pago - devido) * 100) / 100 };
+}
+function blocoContaAssessoria() {
+  const c = contaAssessoria(); if (!c.linhas.length && !c.devidos.length) return '';
+  const m = v => 'R$ ' + (Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const dif = c.diferenca, aberto = !!S._contaAss;
+  const txtDif = Math.abs(dif) < 0.01 ? '<span style="color:var(--green)">conta fechada</span>' : dif < 0 ? `<span style="color:var(--yellow)">faltam ${m(-dif)} no extrato</span>` : `<span style="color:var(--accent)">crédito de ${m(dif)} (pago a mais)</span>`;
+  return `<div style="padding:9px 12px;border-radius:10px;background:var(--bg3)">
+    <div style="display:flex;justify-content:space-between;gap:10px;cursor:pointer" onclick="S._contaAss=!S._contaAss;render()"><div><div style="font-size:14px;font-weight:600">Assessoria Ademir / FFA ${aberto ? '▾' : '▸'}</div><div style="font-size:12.5px;color:var(--muted2)">pago ${m(c.pago)} · devido pelos processos pagos ${m(c.devido)} · ${txtDif}</div></div><div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;white-space:nowrap">${m(c.emAberto)} a pagar</div></div>
+    ${aberto ? `<div style="font-size:12.5px;padding-top:8px;display:grid;gap:4px">
+      <div style="font-weight:600">Saídas no extrato para Ademir/FFA</div>${c.linhas.map(l => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${isoToBr(l.data)} · ${escHtml((l.favorecido || l.memo).slice(0, 40))}</span><span style="font-family:'JetBrains Mono',monospace">${m(Math.abs(l.valor))}</span></div>`).join('')}
+      <div style="font-weight:600;padding-top:6px">Processos já pagos (${c.devidos.length})</div><div style="color:var(--muted2)">${c.devidos.map(x => escHtml(x.id.replace(/^FS260/, '')) + ' ' + m(x.valor)).join(' · ')}</div>
+      <div style="font-weight:600;padding-top:6px">Em aberto (${c.abertos.length})</div><div style="color:var(--muted2)">${c.abertos.map(x => escHtml(x.id.replace(/^FS260/, '')) + ' ' + m(x.valor) + (x.previsto ? ' (previsto)' : '')).join(' · ') || '—'}</div>
+      ${dif < -0.009 ? `<div style="color:var(--yellow);padding-top:6px">A diferença de ${m(-dif)} pode ter sido paga por outra conta, em dinheiro, ou ainda não foi paga.</div>` : ''}
+    </div>` : ''}
+  </div>`;
 }
 // câmbio: taxa com 4 casas
 function arredondarTaxas() { let n = 0; (S.processos || []).forEach(p => { const t = Number(p.cambioTaxa); if (t && String(p.cambioTaxa).length > 6) { p.cambioTaxa = Math.round(t * 10000) / 10000; n++; } }); return n; }
