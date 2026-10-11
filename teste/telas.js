@@ -72,6 +72,7 @@ function pendenciasProcesso(p) {
     if (e.valor > 0 && e.status === 'Pago' && !e.nota && !e.soRecibo && !faturaDepois && c !== 'custoImpostos') out.push({ tipo: 'nota', texto: PROCESS_COST_FIELDS[c] + ' pago sem nota/fatura' });
     if (e.valor > 0 && e.status === 'Pago' && !e.comp) out.push({ tipo: 'comprovante', texto: PROCESS_COST_FIELDS[c] + ' sem comprovante' });
   });
+  Object.entries((p.docs && p.docs._costAdiant) || {}).forEach(([c, v]) => out.push({ tipo: 'nota', texto: `${PROCESS_COST_FIELDS[c]}: adiantamento de ${brl(v)} — aguardando a nota e o saldo` }));
   const inv = Number(p.cambioInvoice) || 0, rec = Number(p.cambioRecebido) || 0;
   if (f >= 3 && inv > 0 && rec + 0.01 < inv) out.push({ tipo: 'cambio', texto: rec ? `câmbio parcial: falta ${usd(inv - rec)}` : 'câmbio não recebido' });
   return out;
@@ -141,6 +142,7 @@ function renderInicio() {
         <div style="font-size:12.5px;color:var(--muted2)">${escHtml(x.empresa || 'fornecedor não identificado')}${x.dataNota ? ' · nota de ' + escHtml(x.dataNota) : ''}${x.dias != null && x.dias > 30 ? ` · <span style="color:var(--yellow);font-weight:600">em aberto há ${x.dias} dias</span>` : ''}${x.aberto < x.valor ? ` · pago ${m2(x.valor - x.aberto)} de ${m2(x.valor)}` : ''}</div></div>
         <div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;white-space:nowrap">${m2(x.aberto)}</div>
       </div>`).join('')}${pagar.length > 8 ? `<div style="font-size:12.5px;color:var(--muted2);padding-top:8px">+ ${pagar.length - 8} outros</div>` : ''}</div>` : `<div style="font-size:13.5px;color:var(--muted2)">Nenhum custo em aberto.</div>`}
+    ${(() => { const ad = []; (S.processos || []).forEach(q => Object.entries((q.docs && q.docs._costAdiant) || {}).forEach(([c, v]) => ad.push({ q, c, v, emp: (q.docs._costEmpresa || {})[c] || '' }))); return ad.length ? `<div style="padding:9px 12px;border-radius:10px;background:var(--bg3)"><div style="font-size:14px;font-weight:600">Adiantamentos aguardando nota</div>${ad.map(x => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding-top:6px"><span>${linkProc(x.q.id)} · ${escHtml(PROCESS_COST_FIELDS[x.c])}${x.emp ? ' · ' + escHtml(x.emp) : ''}</span><span style="font-family:'JetBrains Mono',monospace">${m2(x.v)} adiantado</span></div>`).join('')}<div style="font-size:11.5px;color:var(--muted2);padding-top:6px">Quando a nota chegar, o saldo a pagar aparece aqui em "A pagar".</div></div>` : ''; })()}
     ${typeof reembolsosAbertos === 'function' && reembolsosAbertos().length ? `<div style="display:flex;justify-content:space-between;gap:10px;padding:9px 12px;border-radius:10px;background:var(--bg3)"><div><div style="font-size:14px;font-weight:600">Reembolso ao sócio</div><div style="font-size:12.5px;color:var(--muted2)">${reembolsosAbertos().length} despesa(s) pagas no cartão / conta pessoal</div></div><div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;white-space:nowrap">${m2(reembolsosAbertos().reduce((a, l) => a + (Number(l.valor) || 0), 0))}</div></div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
       <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--green)">A receber (câmbio)</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--green)">${usd(totalReceberUsd)}</div><div style="font-size:11.5px;color:var(--muted2)">${px ? '≈ ' + brl(totalReceberUsd * px) + ' no dólar de hoje' : receber.map(x => x.p.id).slice(0, 3).join(' · ') || '—'}</div></div>
@@ -245,7 +247,12 @@ function renderProcesso2() {
         ${CHECKLIST.map(x => { const a = x.tipos.map(t => arquivos(p, t)[0]).find(Boolean); return check(!!a, x.nome, a && a.url, !a && f >= x.fase); }).join('')}
       </div>
       <div style="font-size:12px;color:var(--muted2)">Opcionais: ${OPCIONAIS.map(([t, n]) => n + (arquivos(p, t).length ? ' ✓' : '')).join(' · ')}</div>
-      <button class="btn btn-primary btn-sm" style="min-height:44px" onclick="nav('entrada')">Anexar documento</button>`)}
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm" style="min-height:44px" onclick="S._verArquivos=S._verArquivos==='${escHtml(p.id)}'?null:'${escHtml(p.id)}';render()">📎 Ver arquivos anexados (${totalArquivos(p)})</button>
+        ${p.docs && p.docs._folderUrl ? `<a class="btn btn-secondary btn-sm" style="min-height:44px;text-decoration:none;display:inline-flex;align-items:center" href="${sanitizeUrl(p.docs._folderUrl)}" target="_blank" rel="noopener noreferrer">📂 Pasta no Drive</a>` : ''}
+        <button class="btn btn-primary btn-sm" style="min-height:44px" onclick="nav('entrada')">Anexar documento</button>
+      </div>
+      ${S._verArquivos === p.id ? listaArquivos(p) : ''}`)}
 
     ${card(`${titulo2('Custos', `<span style="font-family:'JetBrains Mono',monospace;font-size:15px">${brl(c.custo)}</span>`)}
       ${linhasCusto.map(({ k, e }) => `<div style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px solid var(--border)">
@@ -424,4 +431,19 @@ function blocoFixos() {
   return card(`${titulo2('Despesas fixas', `<span style="font-family:'JetBrains Mono',monospace;font-size:15px">${brl(total)} neste mês</span>`)}
     <div style="display:flex;flex-direction:column">${doMes.map(linha).join('')}${outras.length ? `<div style="font-size:12px;color:var(--muted2);padding-top:10px">Anuais em outros meses</div>${outras.map(linha).join('')}` : ''}</div>
     ${novo}`);
+}
+
+
+// Lista de todos os arquivos anexados ao processo, agrupados por tipo, com link para abrir
+function totalArquivos(p) { return Object.entries(((p.docs || {})._files) || {}).reduce((a, [, arr]) => a + (arr || []).length, 0); }
+function listaArquivos(p) {
+  const grupos = Object.entries(((p.docs || {})._files) || {}).filter(([, arr]) => (arr || []).length);
+  if (!grupos.length) return '<div style="font-size:13px;color:var(--muted2)">Nenhum arquivo anexado ainda.</div>';
+  const nomeTipo = t => (typeof tipoLabel === 'function' ? tipoLabel(t) : t);
+  return `<div style="display:flex;flex-direction:column;gap:10px">${grupos.map(([t, arr]) => `
+    <div><div style="font-size:11.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted2);margin-bottom:4px">${escHtml(nomeTipo(t))} (${arr.length})</div>
+    ${arr.map(f => `<a href="${sanitizeUrl(f.url)}" target="_blank" rel="noopener noreferrer" style="display:flex;justify-content:space-between;gap:10px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:5px;color:var(--text);text-decoration:none;min-height:44px;align-items:center">
+      <span style="min-width:0"><span style="display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(f.nomeOriginal || f.name || 'arquivo')}</span>
+      <span style="font-size:11.5px;color:var(--muted2)">${[f.emitente, f.valor ? brl(f.valor) : '', f.data ? (String(f.data).includes('-') ? isoToBr(f.data) : f.data) : '', f.atalho ? 'atalho (arquivo em outro processo)' : ''].filter(Boolean).map(escHtml).join(' · ')}</span></span>
+      <span style="color:var(--accent);white-space:nowrap;font-size:13px">Abrir ↗</span></a>`).join('')}</div>`).join('')}</div>`;
 }

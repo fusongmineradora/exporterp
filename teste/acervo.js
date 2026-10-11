@@ -269,6 +269,11 @@ function enriquecerInfo(item) {
     if (!info.valor) info.valor = numBR(mx(/VALOR (?:TOTAL )?DOS? SERVI[CÇ]OS?:?\s*R?\$?\s*([\d.]+,\d{2})/i) || mx(/Valor l[ií]quido da NFS-?e[\s\S]{0,60}?([\d.]+,\d{2})/i) || mx(/VALOR TOTAL DA NFS-?E[\s\S]{0,80}?R\$\s*([\d.]+,\d{2})/i));
     // NFS-e municipal (layout "VALOR SERVIÇO (R$) ... ISS (R$) 450,00", prestador no fim)
     if (!info.valor) info.valor = numBR(mx(/VALOR SERVI[CÇ]O \(R\$\)[\s\S]{0,200}?([\d.]+,\d{2})/i));
+    if (!info.valor) {   // último recurso: o valor que se repete (valor do serviço = base de cálculo = valor líquido)
+      const cont = {}; (U.match(/(?<![\d.,])\d{1,3}(?:\.\d{3})*,\d{2}(?![\d])/g) || []).map(numBR).filter(v => v > 0).forEach(v => { cont[v] = (cont[v] || 0) + 1; });
+      const rep = Object.entries(cont).filter(([, n]) => n >= 2).map(([v]) => Number(v)).sort((a, b) => b - a);
+      if (rep.length) info.valor = rep[0];
+    }
     if (!info.emitNome) { const r = [...U.matchAll(/Raz[aã]o Social:\s*(.+?)\s+(?:Endere[cç]o|Nome Fantasia)/gi)].map(m => m[1].trim()).find(n => !/FU\s?SONG/i.test(n)); if (r) info.emitNome = r; }
     if (!info.emitCnpj) { const c = [...U.matchAll(/CPF\/CNPJ:\s*([\d.\/-]{14,18})/gi)].map(m => m[1].replace(/\D/g, '')).filter(x => x.length === 14 && x !== FU_SONG_CNPJ); if (c.length) info.emitCnpj = c[c.length - 1]; }
     if (!info.data) { const d = mx(/EMITID[OA] EM\s+(\d{2}\/\d{2}\/\d{4})/i); if (d) info.data = brToIso(d); }
@@ -374,7 +379,11 @@ function recalcularCustos(p, campo) {
   const total = fiscal || pago;
   p[campo] = Math.round(total * 100) / 100;
   const peloBanco = p.docs._costBanco && p.docs._costBanco[campo];
-  p[campo + '_status'] = peloBanco || (pago > 0 && pago + 0.01 >= total) ? 'Pago' : 'Em Aberto';
+  // adiantamento ao fornecedor sem a nota ainda: fica "Em Aberto" até chegar a nota (e o saldo, se houver)
+  const adiant = (reg.pagos || []).filter(d => d.adiant).reduce((a, d) => a + (Number(d.valor) || 0), 0);
+  p.docs._costAdiant = p.docs._costAdiant || {};
+  if (adiant > 0 && !fiscal) p.docs._costAdiant[campo] = Math.round(adiant * 100) / 100; else delete p.docs._costAdiant[campo];
+  p[campo + '_status'] = adiant > 0 && !fiscal ? 'Em Aberto' : peloBanco || (pago > 0 && pago + 0.01 >= total) ? 'Pago' : 'Em Aberto';
   const datas = (reg.pagos || []).map(d => d.data).filter(Boolean).sort();
   if (datas.length) { p.docs._costData = p.docs._costData || {}; p.docs._costData[campo] = datas[datas.length - 1]; }
   const comp = (reg.pagos || []).find(d => d.url);
@@ -461,7 +470,7 @@ function aplicarDocNoProcesso(item, p, upd) {
     const mesmaNota = !pago && lista.some(d => (Math.abs((Number(d.valor) || 0) - valor) < 0.01 && (!info.chave || !/^\d{44}$/.test(d.k)))
       || (d.tipo !== item.tipo && (d.tipo === 'faturaFrete' || item.tipo === 'faturaFrete') && nf(d.de) && nf(d.de) === nf(info.emitNome) && Math.abs((Number(d.valor) || 0) - valor) <= Math.max(5, valor * 0.05)));
     if (!lista.some(d => d.k === chave) && !mesmaNota) {
-      lista.push({ k: chave, url, valor, tipo: item.tipo, data: info.data ? isoToBr(info.data) : (info.pagamento && info.pagamento.data) || '', nome: (upd && upd.name) || item.nome, de: info.emitNome || (info.pagamento && info.pagamento.recebedor) || '' });
+      lista.push({ k: chave, url, valor, tipo: item.tipo, adiant: info.adiantamento && pago ? true : undefined, data: info.data ? isoToBr(info.data) : (info.pagamento && info.pagamento.data) || '', nome: (upd && upd.name) || item.nome, de: info.emitNome || (info.pagamento && info.pagamento.recebedor) || '' });
       // pago com o cartão / conta pessoal do sócio: conta como pago no processo e vira reembolso a fazer
       if (!pago && item.pagoPor === 'socio' && !reg.pagos.some(d => d.k === 'socio:' + chave)) reg.pagos.push({ k: 'socio:' + chave, url, valor, tipo: 'socio', data: info.data ? isoToBr(info.data) : '', nome: 'pago pelo sócio (reembolsar)', de: info.emitNome || '' });
       recalcularCustos(p, campo);
@@ -624,7 +633,7 @@ async function executarImportacaoTudo() {
     const arquivos = [], ofx = [];
     const fila = [];
     sel.forEach(p => {
-      if (p.tipo === 'soltos') p.arquivos.forEach(f => arquivos.push({ ...f, contexto: FS_DE(f.name) || '' }));
+      if (p.tipo === 'soltos') p.arquivos.filter(f => !ACERVO_IGNORAR_ARQ.test(f.name)).forEach(f => arquivos.push({ ...f, contexto: FS_DE(f.name) || '' }));
       else fila.push({ id: p.id, contexto: p.tipo === 'processo' ? FS_DE(p.nome) : p.tipo === 'comprovantes' ? 'ADM' : '', extrato: p.tipo === 'extrato', nome: p.nome });
     });
     while (fila.length) {

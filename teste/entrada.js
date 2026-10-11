@@ -206,7 +206,7 @@ function chavesDoTexto(txt) {
   // (como sai no DANFE/DACTE). Exige fronteira antes e depois, e dígito verificador válido.
   const out = [];
   const t = String(txt || '');
-  const re = /(?<![\d])(?:\d{44}|\d{4}(?:[ .]\d{4}){10})(?![\d])/g;
+  const re = /(?<![\d])(?:\d{44}|\d{4}(?:[\s.]{1,3}\d{4}){10})(?![\d])/g;
   let m;
   while ((m = re.exec(t))) {
     const ch = m[0].replace(/\D/g, '');
@@ -294,6 +294,7 @@ function valorDanfe(texto) {
 
 // Documento comum (PDF ou nome do arquivo): ordem importa
 const REGRAS_TIPO = [
+  ['nfe', /DANFE[\s\S]{0,300}NOTA\s+FISCAL\s+ELETR[OÔ]NICA|DOCUMENTO\s+AUXILIAR\s+DA\s+NOTA\s+FISCAL\s+ELETR[OÔ]NICA/],
   ['faturaFrete', /FATURA\s+(?:DE\s+)?EXPORTA[CÇ][AÃ]O\s+MAR[IÍ]TIMA|FATURA\s+DE\s+FRETE|FREIGHT\s+INVOICE|DEBIT\s+NOTE|NUMER[AÁ]RIO/],
   ['nfse', /NOTA\s+FISCAL\s+(ELETR[OÔ]NICA\s+)?DE\s+SERVI[CÇ]OS?|\bNFS-?E\b|DANFSE/],
   ['recibo', /^\s*RECIBO\b|RECIBO\s+DE\s+PAGAMENTO|\bRPA\b|RECIBO\s+DE\s+PAGAMENTO\s+A\s+AUT[OÔ]NOMO/],
@@ -519,7 +520,7 @@ async function lerEntrada() {
     E.folderUrl = 'https://drive.google.com/drive/folders/' + folderId;
     const q = `'${folderId}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'`;
     const todos = await driveListAll(q, 'id,name,mimeType,size,md5Checksum,createdTime,webViewLink');
-    const files = todos.filter(f => !/\.ofx$/i.test(f.name || ''));
+    const files = todos.filter(f => !/\.(ofx|html?|js|css)$/i.test(f.name || ''));
     E.ofxNaEntrada = todos.length - files.length;
     const itens = [];
     for (let i = 0; i < files.length; i++) {
@@ -590,6 +591,7 @@ async function analisarArquivo(f) {
     if (c.categoria) item.categoria = c.categoria;
   }
   if (typeof enriquecerInfo === 'function') { try { enriquecerInfo(item); } catch (e) { console.warn('enriquecer', e); } }
+  if (/ADIANTAMENTO|ANTECIPA/i.test(nome + ' ' + ((item.info.pagamento && item.info.pagamento.identificacao) || ''))) item.info.adiantamento = true;
   item._base = { tipo: item.tipo, confianca: item.confianca, motivo: item.motivo };
   return identificarItem(item);
 }
