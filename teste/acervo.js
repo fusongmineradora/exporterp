@@ -381,7 +381,7 @@ function recalcularCustos(p, campo) {
   const quitaTudo = recibo > 0 && (!fiscal || recibo + 0.01 >= fiscal * 0.98);
   const pago = !recibo ? pix : quitaTudo ? Math.max(pix, recibo) : pix + reciboSoma;
   // marítimo, armazém e serviços de terceiros: vale o que foi pago (a fatura/nota é opcional e às vezes é de outra coisa)
-  const total = ['custoMaritimo', 'custoArmazem', 'custoServTerceiros'].includes(campo) ? Math.max(fiscal, pago) : (fiscal || pago);
+  const total = ['custoMaritimo', 'custoArmazem', 'custoServTerceiros', 'custoDespachante'].includes(campo) ? Math.max(fiscal, pago) : (fiscal || pago);
   const manual = p.docs._valorManual && p.docs._valorManual[campo] != null ? Number(p.docs._valorManual[campo]) : null;
   p[campo] = Math.round((manual != null ? manual : total) * 100) / 100;
   const peloBanco = p.docs._costBanco && p.docs._costBanco[campo];
@@ -616,7 +616,7 @@ function lerNomePastaProcesso(nome) {
     const tok = t.replace(/[^0-9S]/g, ''), dig = tok.replace(/S$/, '');
     ids.push('FS' + id.slice(2, 8 - dig.length) + dig + (tok.endsWith('S') ? 'S' : ''));
   });
-  const r = { id, ids: [...new Set(ids.map(processoAtual))], cancelado: /CANCELAD/i.test(nome) };
+  const r = { id, ids: [...new Set(ids.map(processoAtual))], cancelado: /CANCELAD/i.test(nome), nome: String(nome || '').trim() };
   const resto = partes.slice(1).filter(x => !/^(booking\s+pendente|pendente|cancelad[oa])$/i.test(x));
   const bk = resto[0] ? resto[0].split(/\s*\+\s*/) : null;
   if (bk && bk.every(x => /^[A-Z0-9]{6,20}$/i.test(x) && /\d/.test(x))) { r.bookings = bk.map(x => x.toUpperCase()); r.booking = r.bookings[0]; resto.shift(); }
@@ -765,6 +765,7 @@ async function executarImportacaoTudo() {
       if (info.cliente) { p.docs._apelido = info.cliente; if (!p.cliente) p.cliente = info.cliente; }
       if (info.produto && !p.produto) p.produto = info.produto;
       if (info.destino && !p.pod) p.pod = info.destino;
+      if (info.ids.length === 1 || info.ids[0] === id) p.docs._nomePasta = info.nome;
       if (info.cancelado && p.status !== 'Cancelado') { p.status = 'Cancelado'; logAction('editar', 'PROCESSOS', p.id, 'Cancelado (pasta 99 Cancelados)'); }
     }));
     if (novos.length) {
@@ -960,6 +961,7 @@ setTimeout(async function esperarDados() {
     // (a planilha de custos do Ademir é só para conferência: não é aplicada no ERP)
     try { mudou += await despesasForaDosProcessos(); } catch (e) { console.warn('fora dos processos', e); }
     try { mudou += ajustesDaConferencia(); } catch (e) { console.warn('ajustes', e); }
+    try { mudou += await nomesDasPastas(); } catch (e) { console.warn('nomes das pastas', e); }
     try { mudou += await corrigirCambioDossie(); } catch (e) { console.warn('dossiê', e); }
     mudou += corrigirFaturasDigitadas();
     mudou += moverPagamentosMarcados();
@@ -1671,7 +1673,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '51';
+const VERSAO_TESTE = '52';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -1848,6 +1850,12 @@ function ajustesDaConferencia() {
     if (p4.docs._custoDocs && p4.docs._custoDocs.custoServTerceiros) recalcularCustos(p4, 'custoServTerceiros'); else { p4.custoServTerceiros = 1200; p4.custoServTerceiros_status = 'Pago'; }
     logAction('editar', 'PROCESSOS', 'FS260104', 'Assessoria: R$ 1.200 pago (R$ 1.200 por processo)');
   }
+  // produto já pago (resposta de 11/10): FS260096 (NF 38 WL, recibo em dinheiro) e FS260118 (NF 07 e 08 da Cooperativa)
+  ['FS260096', 'FS260118'].forEach(id => { const p = P(id); if (!p || feito(p, 'produtoPago')) return;
+    p.docs._statusManual = Object.assign({}, p.docs._statusManual, { custoProduto: 'Pago' });
+    if (p.docs._custoDocs && p.docs._custoDocs.custoProduto) recalcularCustos(p, 'custoProduto'); else p.custoProduto_status = 'Pago';
+    logAction('editar', 'PROCESSOS', id, 'Produto: pago (informado por você)');
+  });
   // 6. FS260107 e FS260118 não foram para o armazém
   ['FS260107', 'FS260118'].forEach(id => { const p = P(id); if (!p || feito(p, 'semArmazem')) return;
     p.docs._armazem = false; p.docs._previstoOff = Object.assign({}, p.docs._previstoOff, { custoArmazem: true });
@@ -1858,3 +1866,29 @@ function ajustesDaConferencia() {
 }
 // 7. decisões sobre arquivos da Caixa de Entrada (nome do arquivo → processo)
 const DECISOES_ENTRADA = [[/Recibo\s+Minera[cç][aã]o\s+WL/i, 'FS260096']];
+
+// Nome do processo como o nome da pasta: "FS260113 - 276143168 - Thomas - Ematóide - Qingdao"
+function restoNomeProcesso(p) {
+  const n = (p.docs && p.docs._nomePasta) || '';
+  if (n && FS_DE(n.split(/\s+[-–—]\s+/)[0]) === p.id) { const resto = n.split(/\s+[-–—]\s+/).slice(1).join(' - '); if (resto) return '- ' + resto; }
+  if (n && FS_DE(n) && n.split(/\s+[-–—]\s+/).length > 2) return '- ' + n.split(/\s+[-–—]\s+/).slice(1).join(' - ');
+  const prod = typeof grupoProduto === 'function' ? grupoProduto(p) : (p.produto || '');
+  const dest = String(p.pod || '').split(',')[0].trim();
+  const cli = (p.docs && p.docs._apelido) || String(p.cliente || '').split(/\s+/).slice(0, 2).join(' ');
+  return ['', p.booking, cli, prod, dest].filter((x, i) => i === 0 || x).join(' - ').replace(/^ - /, '- ');
+}
+function nomeProcesso(p) { return p.id + ' ' + restoNomeProcesso(p); }
+// nomes das pastas no Drive (Processos Unificados): guarda o nome de cada processo
+async function nomesDasPastas() {
+  const fs = await driveListAll("mimeType='application/vnd.google-apps.folder' and name contains 'FS26' and trashed=false", 'id,name');
+  const melhor = {};
+  fs.forEach(f => {
+    const nome = String(f.name || '').trim(); if (!/^FS\s?\d{6}S?\s+-\s+/.test(nome)) return;   // o padrão usa hífen; as pastas do ERP usam travessão
+    const id = processoAtual(FS_DE(nome)); const partes = nome.split(/\s+-\s+/).length;
+    const pontos = partes * 2 + (/\d{6,}|[A-Z]{4}\d{6,}/.test(nome.split(/\s+-\s+/)[1] || '') ? 3 : 0) - (/\+/.test(nome.split(/\s+-\s+/)[0]) ? 4 : 0);
+    if (!melhor[id] || pontos > melhor[id].pontos) melhor[id] = { nome, pontos };
+  });
+  let n = 0;
+  (S.processos || []).forEach(p => { const m = melhor[p.id]; if (m && p.docs && p.docs._nomePasta !== m.nome) { p.docs._nomePasta = m.nome; n++; } });
+  return n;
+}
