@@ -84,9 +84,9 @@ const CATEGORIAS2 = [
   'Contabilidade', 'Aluguel / Coworking', 'Combustível', 'Cartório', 'Seguros', 'Software',
   'Reembolso ao sócio', 'Viagem', 'Registro e licenças', 'Equipamentos', 'Materiais e embalagens', 'Alimentação', 'Acordos e parcelamentos', 'Outras despesas',
   'Rendimentos financeiros', 'Outras receitas', 'Câmbio',
-  'Retirada de sócio', 'Aporte de sócio', 'Transferência entre contas',
+  'Retirada de sócio', 'Aporte de sócio', 'Empréstimo ao sócio', 'Devolução de empréstimo do sócio', 'Transferência entre contas',
 ];
-const CATEG_TRANSFER = ['Retirada de sócio', 'Aporte de sócio', 'Transferência entre contas'];
+const CATEG_TRANSFER = ['Retirada de sócio', 'Aporte de sócio', 'Empréstimo ao sócio', 'Devolução de empréstimo do sócio', 'Transferência entre contas'];
 
 function projetos2() {
   const set = new Set(['Quartzo Oliveira dos Brejinhos', 'Espodumênio']);
@@ -330,7 +330,15 @@ async function escolherCentro(sel, chave) {
 }
 
 function novoLancamentoDeLinha(l, categoria, centro, extraDocs) {
-  const transfer = CATEG_TRANSFER.includes(categoria);
+  // reembolso ao sócio: quita as despesas já lançadas como "pagas pelo sócio" (a despesa não entra duas vezes)
+  let quitados = [];
+  if (categoria === 'Reembolso ao sócio' && l.valor < 0 && typeof reembolsosAbertos === 'function') {
+    let soma = 0; const alvo = Math.abs(l.valor);
+    reembolsosAbertos().slice().sort((a, b) => (brToIso(a.data) || '').localeCompare(brToIso(b.data) || '')).forEach(a => { if (soma + a.valor <= alvo + 0.01) { soma = Math.round((soma + a.valor) * 100) / 100; quitados.push(a); } });
+    quitados.forEach(a => { a.status = 'Pago'; a.docs._banco = l.chave; a.observacao = (a.observacao || '') + ' · reembolsado em ' + isoToBr(l.data); });
+    if (quitados.length && Math.abs(soma - alvo) >= 0.01) showToast(`Reembolso quitou ${quitados.length} despesa(s) (R$ ${fmt(soma)}); sobraram R$ ${fmt(alvo - soma)} sem despesa ligada — confira`);
+  }
+  const transfer = CATEG_TRANSFER.includes(categoria) || quitados.length > 0;
   const tipo = transfer ? 'Transferência' : l.valor >= 0 ? 'Receita' : 'Despesa';
   let vinculo = 'avulso', vinculoId = '';
   if (centro.startsWith('P:')) { vinculo = 'processo'; vinculoId = centro.slice(2); }
