@@ -4940,7 +4940,7 @@ async function criarPastaProcesso(processo) {
     const rootId = await getRootFolderId();
     // Folder name: FS260096 — Cliente
     const clienteShort = (processo.cliente||'').split(' ').slice(0,3).join(' ');
-    const folderName = (typeof nomePastaPadrao === 'function') ? nomePastaPadrao(processo) : `${processo.id}${clienteShort ? ' — ' + clienteShort : ''}`;
+    const folderName = `${processo.id}${clienteShort ? ' — ' + clienteShort : ''}`;
     const folderId = await getOrCreateFolder(folderName, rootId);
     const folderUrl = `https://drive.google.com/drive/folders/${folderId}`;
 
@@ -5593,7 +5593,7 @@ if (!checkSession()) {
 <script src="entrada.js?v=dfd135acf2"></script>
 <script src="ofx.js?v=7289280781"></script>
 <script src="financeiro2.js?v=30e590845f"></script>
-<script src="acervo.js?v=fac7e698bf"></script>
-<script src="telas.js?v=8b95ccf54e"></script>
+<script src="acervo.js?v=72d98c61da"></script>
+<script src="telas.js?v=d7c35a1b1f"></script>
 </body>
 </html>

@@ -585,6 +585,7 @@ const semAcento = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').
 const FS_DE = s => ((semAcento(s).match(/FS\s?\d{6}/) || [''])[0]).replace(/\s/g, '');
 function tipoDaPasta(nome) {
   const u = semAcento(nome);
+  if (/CANCELAD/.test(u) && !/^FS\s?\d{6}/.test(u)) return 'cancelados';
   if (/^FS\s?\d{6}/.test(u)) return 'processo';
   if (/^COMPROVANTE/.test(u)) return 'comprovantes';
   if (/EXTRATO/.test(u)) return 'extrato';
@@ -593,13 +594,21 @@ function tipoDaPasta(nome) {
 }
 // Nome de pasta no padrão "FS2601xx - Booking - Cliente - Produto - Destino" (partes podem faltar)
 function lerNomePastaProcesso(nome) {
-  const partes = String(nome || '').split(/\s+[-–—]\s+/).map(x => x.trim());
-  const id = FS_DE(partes[0] || ''); if (!id) return null;
-  const r = { id };
-  const resto = partes.slice(1).filter(Boolean);
-  if (resto[0] && /^[A-Z0-9]{6,20}$/i.test(resto[0]) && /\d/.test(resto[0])) r.booking = resto.shift().toUpperCase();
-  if (resto.length >= 3) { r.cliente = resto[0]; r.produto = resto[1]; r.destino = resto.slice(2).join(' - '); }
-  else if (resto.length === 2) { r.cliente = resto[0]; r.produto = resto[1]; }
+  const partes = String(nome || '').split(/\s+[-–—]\s+/).map(x => x.trim()).filter(Boolean);
+  const cab = partes[0] || ''; const id = FS_DE(cab); if (!id) return null;
+  const ids = [id];
+  // "FS260109 + 109S" → FS260109 e FS260109S
+  (cab.toUpperCase().match(/\+\s*(?:FS\s?)?\d{2,6}S?/g) || []).forEach(t => {
+    const tok = t.replace(/[^0-9S]/g, ''), dig = tok.replace(/S$/, '');
+    ids.push('FS' + id.slice(2, 8 - dig.length) + dig + (tok.endsWith('S') ? 'S' : ''));
+  });
+  const r = { id, ids: [...new Set(ids)], cancelado: /CANCELAD/i.test(nome) };
+  const resto = partes.slice(1).filter(x => !/^(booking\s+pendente|pendente|cancelad[oa])$/i.test(x));
+  const bk = resto[0] ? resto[0].split(/\s*\+\s*/) : null;
+  if (bk && bk.every(x => /^[A-Z0-9]{6,20}$/i.test(x) && /\d/.test(x))) { r.bookings = bk.map(x => x.toUpperCase()); r.booking = r.bookings[0]; resto.shift(); }
+  if (resto.length >= 3) { r.cliente = resto[0]; r.produto = resto.slice(1, -1).join(' - '); r.destino = resto[resto.length - 1]; }
+  else if (resto.length === 2) { r.cliente = resto[0]; r.destino = resto[1]; }
+  else if (resto.length === 1) r.cliente = resto[0];
   return r;
 }
 function nomePastaPadrao(p) {
@@ -607,8 +616,8 @@ function nomePastaPadrao(p) {
   const destino = String(p.pod || p.destino || '').split(',')[0].trim();
   return [p.id, p.booking || '', curto(p.cliente), String(p.produto || '').trim(), destino].map(x => String(x).replace(/[\/\\]/g, ' ')).join(' - ').replace(/(\s-\s)+$/, '');
 }
-const ROTULO_PASTA = { processo: 'Processo', comprovantes: 'Despesas do mês', cambio: 'Câmbio / DU-E', extrato: 'Extrato do banco', soltos: 'Arquivos soltos', '': 'Não reconhecida' };
-const ORDEM_PASTA = { processo: 0, cambio: 1, comprovantes: 2, extrato: 3, soltos: 4, '': 5 };
+const ROTULO_PASTA = { cancelados: 'Processos cancelados', processo: 'Processo', comprovantes: 'Despesas do mês', cambio: 'Câmbio / DU-E', extrato: 'Extrato do banco', soltos: 'Arquivos soltos', '': 'Não reconhecida' };
+const ORDEM_PASTA = { cancelados: 0.5, processo: 0, cambio: 1, comprovantes: 2, extrato: 3, soltos: 4, '': 5 };
 
 async function importarTudo(linkDado) {
   const E = S.entrada;
@@ -651,10 +660,11 @@ async function executarImportacaoTudo() {
     const entradaId = await getTesteFolder(ENTRADA_FOLDER);
     // ── 1. percorre as pastas marcadas ──
     const arquivos = [], ofx = [];
-    const fila = [];
+    const fila = [], pastasFS = [];
+    const anotarFS = (nome, cancelado) => { const info = lerNomePastaProcesso(nome); if (info) { if (cancelado) info.cancelado = true; pastasFS.push(info); } };
     sel.forEach(p => {
       if (p.tipo === 'soltos') p.arquivos.filter(f => !ACERVO_IGNORAR_ARQ.test(f.name)).forEach(f => arquivos.push({ ...f, contexto: FS_DE(f.name) || '' }));
-      else fila.push({ id: p.id, contexto: p.tipo === 'processo' ? FS_DE(p.nome) : p.tipo === 'comprovantes' ? 'ADM' : '', extrato: p.tipo === 'extrato', nome: p.nome });
+      else { if (p.tipo === 'processo') anotarFS(p.nome, false); fila.push({ id: p.id, contexto: p.tipo === 'processo' ? FS_DE(p.nome) : p.tipo === 'comprovantes' ? 'ADM' : '', extrato: p.tipo === 'extrato', nome: p.nome, cancelado: p.tipo === 'cancelados' }); }
     });
     while (fila.length) {
       const pasta = fila.shift();
@@ -663,8 +673,9 @@ async function executarImportacaoTudo() {
       for (const f of filhos) {
         if (f.mimeType === 'application/vnd.google-apps.folder') {
           const t = tipoDaPasta(f.name), fs = FS_DE(f.name);
+          if (fs) anotarFS(f.name, pasta.cancelado);
           // subpasta de câmbio dentro de um processo: o processo vem do contrato, não da pasta
-          fila.push({ id: f.id, nome: pasta.nome + ' / ' + f.name.trim(), extrato: pasta.extrato || t === 'extrato', contexto: fs || (t === 'cambio' ? '' : t === 'comprovantes' ? 'ADM' : pasta.contexto) });
+          fila.push({ id: f.id, nome: pasta.nome + ' / ' + f.name.trim(), cancelado: pasta.cancelado, extrato: pasta.extrato || t === 'extrato', contexto: fs || (t === 'cambio' ? '' : t === 'comprovantes' ? 'ADM' : pasta.contexto) });
         } else if (/\.ofx$/i.test(f.name) || f.mimeType === 'application/x-ofx') {
           ofx.push(f);
         } else if (pasta.extrato) {
@@ -706,7 +717,7 @@ async function executarImportacaoTudo() {
     clearInterval(progresso0);
     if (E.erro) throw new Error(E.erro);
     // ── 4. cria os processos das pastas FS ──
-    const ids = [...new Set(sel.filter(p => p.tipo === 'processo').map(p => FS_DE(p.nome)).filter(Boolean))];
+    const ids = [...new Set(pastasFS.flatMap(x => x.ids))];
     // processos citados pelas invoices/contratos soltos também
     E.itens.forEach(it => { const id = podeCriarProcesso(it); if (id && !ids.includes(id)) ids.push(id); });
     const novos = [];
@@ -723,15 +734,17 @@ async function executarImportacaoTudo() {
       }
       novos.push(p); rel.processosNovos.push(id);
     }
-    // o nome da pasta ("FS260113 - 276143168 - Cliente - Produto - Destino") completa o que faltar
-    sel.filter(x => x.tipo === 'processo').forEach(x => {
-      const info = lerNomePastaProcesso(x.nome); if (!info) return;
-      const p = (S.processos || []).find(q => q.id === info.id); if (!p) return;
-      if (info.booking && !p.booking) p.booking = info.booking;
-      if (info.cliente && !p.cliente) { p.cliente = info.cliente; if (typeof garantirCliente === 'function') garantirCliente(p); }
+    // o nome da pasta ("FS260113 - 276143168 - Thomas - Lítio - Xiamen") completa o que faltar; "99 Cancelados" → status Cancelado
+    pastasFS.forEach(info => info.ids.forEach((id, k) => {
+      const p = (S.processos || []).find(q => q.id === id); if (!p) return;
+      const bk = (info.bookings || [])[k] || (info.ids.length === 1 ? info.booking : '');
+      if (bk && !p.booking) p.booking = bk;
+      p.docs = p.docs || {};
+      if (info.cliente) { p.docs._apelido = info.cliente; if (!p.cliente) p.cliente = info.cliente; }
       if (info.produto && !p.produto) p.produto = info.produto;
       if (info.destino && !p.pod) p.pod = info.destino;
-    });
+      if (info.cancelado && p.status !== 'Cancelado') { p.status = 'Cancelado'; logAction('editar', 'PROCESSOS', p.id, 'Cancelado (pasta 99 Cancelados)'); }
+    }));
     if (novos.length) {
       await saveToSheets();
       for (const p of novos) { etapa('Criando a pasta do processo ' + p.id + ' no Drive...'); try { await criarPastaProcesso(p); } catch (e) { console.warn('pasta', p.id, e.message); } }
