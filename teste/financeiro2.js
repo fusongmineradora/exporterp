@@ -71,7 +71,7 @@ async function salvarBanco() {
 
 // Regras no formato do leitor OFX
 function regrasOFX() {
-  return (S.banco.regras || []).filter(r => r.tipo !== 'fixo' && r.tipo !== 'catAdm').map(r => r.tipo === 'doc'
+  return (S.banco.regras || []).filter(r => !['fixo', 'catAdm', 'cambioProc'].includes(r.tipo)).map(r => r.tipo === 'doc'
     ? { doc: r.valor, categoria: r.categoria, centro: r.centro }
     : { texto: r.valor, categoria: r.categoria, centro: r.centro });
 }

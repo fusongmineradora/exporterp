@@ -131,7 +131,7 @@ const ENTRADA_TIPOS = [
   ['due', 'DU-E'], ['nfe', 'NF-E Entrada'], ['nfeSaida', 'NF-E Saída'], ['cte', 'CT-e (frete)'],
   ['mdfe', 'MDF-e'], ['nfse', 'NFS-e (serviço)'], ['recibo', 'Recibo / RPA'], ['comprovantes', 'Comprovantes Câmbio'], ['certOrigem', 'Cert. Origem'],
   ['seguro', 'Seguro de Carga'], ['pesagem', 'Pesagem'], ['pagamento', 'Comprovante de Pagamento'],
-  ['faturaFrete', 'Fatura de frete (agente)'], ['outros', 'Outros Documentos'],
+  ['faturaFrete', 'Fatura de frete (agente)'], ['planilhaCambio', 'Planilha de câmbio (banco)'], ['outros', 'Outros Documentos'],
 ];
 const tipoLabel = k => (ENTRADA_TIPOS.find(t => t[0] === k) || [k, k])[1];
 
@@ -526,6 +526,21 @@ async function lerEntrada() {
     const vistos = {};
     itens.forEach(it => { if (!it.md5) return; if (vistos[it.md5] && !it.duplicado) it.duplicado = { processo: 'Entrada', nome: vistos[it.md5], motivo: 'arquivo idêntico na Entrada' }; else vistos[it.md5] = it.nome; });
     E.itens = itens; E.lido = true;
+    const planilhas = itens.filter(it => it.tipo === 'planilhaCambio');
+    if (planilhas.length && typeof aplicarMapaCambio === 'function') {
+      E.progresso = 'Aplicando a planilha de câmbio do banco...'; render();
+      if (typeof carregarBanco === 'function') await carregarBanco();
+      for (const it of planilhas) {
+        await guardarMapaCambio(it.info.mapa);
+        const n = aplicarMapaCambio(it.info.mapa);
+        try { const dest = await getTesteFolder('🏦 Câmbio'); await driveAPI('PATCH', '/files/' + it.fileId, {}, 'addParents=' + dest + '&removeParents=' + folderId + '&fields=id'); } catch (e) {}
+        logAction('importar', 'REGRAS', it.fileId, 'Planilha de câmbio do banco: ' + it.info.mapa.length + ' contratos (' + n + ' corrigidos)');
+        showToast(`✅ Planilha de câmbio do banco: ${it.info.mapa.length} contratos lidos, ${n} processo(s) corrigidos`);
+      }
+      E.itens = itens.filter(it => it.tipo !== 'planilhaCambio');
+      E.itens.forEach(it => { try { identificarItem(it); } catch (e) {} });
+      try { await saveToSheets(); } catch (e) {}
+    }
   } catch (e) {
     E.erro = e.message || String(e);
   }
@@ -549,6 +564,14 @@ async function analisarArquivo(f) {
       }
     }
   } catch (e) { item.erro = e.message || String(e); }
+  // Planilha (xlsx/csv): pode ser a planilha de câmbio enviada ao banco (Nº Bacen → Nº processo)
+  if (/\.(xlsx|xls|csv)$/i.test(nome) || /spreadsheet|excel|text\/csv/i.test(f.mimeType || '')) {
+    try {
+      const csv = /\.csv$/i.test(nome) ? new TextDecoder('utf-8').decode(await driveDownload(f.id)) : (typeof planilhaParaCsv === 'function' ? await planilhaParaCsv(f.id, nome) : '');
+      const mapa = typeof lerPlanilhaCambio === 'function' ? lerPlanilhaCambio(csv) : null;
+      if (mapa) { item.texto = csv; item.tipo = 'planilhaCambio'; item.confianca = 'alta'; item.motivo = 'planilha de câmbio do banco'; item.info = { mapa }; item._base = { tipo: item.tipo, confianca: 'alta', motivo: item.motivo }; item.processo = '__CAMBIO'; return item; }
+    } catch (e) { item.erro = e.message || String(e); }
+  }
   // Print/foto ou PDF escaneado: o Google Drive lê o texto (OCR)
   const isImg = /^image\//i.test(f.mimeType || '') || /\.(png|jpe?g|webp|heic)$/i.test(nome);
   if (!item.tipo && (isImg || (isPdf && String(item.texto || '').replace(/\s/g, '').length < 40)) && Number(f.size || 0) < 10e6 && typeof ocrDrive === 'function') {
@@ -572,6 +595,13 @@ function identificarItem(item) {
   const nome = item.nome || '';
   if (item._base) { item.tipo = item._base.tipo; item.confianca = item._base.confianca; item.motivo = item._base.motivo; }
   ['processo', 'pastaErrada', 'corrigido', 'aviso', 'processosExtras', 'divisao', 'admAuto'].forEach(k => delete item[k]);
+  if (item.tipo === 'planilhaCambio') { item.processo = '__CAMBIO'; return item; }
+  // contrato de câmbio sem "FATURA": a planilha do banco diz de qual processo é
+  if (item.info && item.info.cambio && !(item.info.cambio.faturas || []).some(x => !x.pelaPasta) && typeof mapaCambioGuardado === 'function') {
+    const m = mapaCambioGuardado().find(x => x.ref === String(item.info.cambio.referencia || ''));
+    const ids = m ? m.processos.filter(id => (S.processos || []).some(p => p.id === id)) : [];
+    if (ids.length) { const usd = Math.round((Number(item.info.cambio.valorMoeda) || 0) / ids.length * 100) / 100; item.info.cambio.faturas = ids.map(id => ({ processo: id, usd, pelaPlanilha: true })); }
+  }
   // Prefixo colocado pelo acervo: "FS260105+FS260107 - nome original"
   const mPasta = nome.match(/^((?:FS\d{6}S?)(?:\+FS\d{6}S?)*) - /i);
   item.pastaProcessos = mPasta ? mPasta[1].toUpperCase().split('+') : [];
@@ -629,7 +659,7 @@ function identificarItem(item) {
   if (!item.tipo && item.pastaProcessos.length && item.processo && item.processo !== '__ADM') { item.tipo = 'outros'; item.confianca = 'media'; item.motivo = 'arquivo da pasta do processo'; }
   if (item.processo === '__ADM' && !item.tipo) { item.tipo = 'pagamento'; item.confianca = 'media'; item.motivo = 'pasta de comprovantes do mês'; }
   // Contrato antigo sem "FATURA: FS…": o processo vem da pasta; o dólar é dividido igualmente entre as pastas onde ele estava
-  if (item.info.cambio && !(item.info.cambio.faturas || []).length && item.processo && item.processo !== '__ADM') {
+  if (item.info.cambio && (item.info.cambio.faturas || []).every(x => x.pelaPasta) && item.processo && item.processo !== '__ADM') {
     const ids = [...new Set([item.processo, ...(item.pastaProcessos || [])])].filter(id => (S.processos || []).some(p => p.id === id));
     if (ids.length) {
       const usd = Math.round((Number(item.info.cambio.valorMoeda) || 0) / ids.length * 100) / 100;
