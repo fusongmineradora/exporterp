@@ -591,6 +591,22 @@ function tipoDaPasta(nome) {
   if (/CAMBIO|CONTRATO|\bDUE\b|DU-E/.test(u)) return 'cambio';
   return '';
 }
+// Nome de pasta no padrão "FS2601xx - Booking - Cliente - Produto - Destino" (partes podem faltar)
+function lerNomePastaProcesso(nome) {
+  const partes = String(nome || '').split(/\s+[-–—]\s+/).map(x => x.trim());
+  const id = FS_DE(partes[0] || ''); if (!id) return null;
+  const r = { id };
+  const resto = partes.slice(1).filter(Boolean);
+  if (resto[0] && /^[A-Z0-9]{6,20}$/i.test(resto[0]) && /\d/.test(resto[0])) r.booking = resto.shift().toUpperCase();
+  if (resto.length >= 3) { r.cliente = resto[0]; r.produto = resto[1]; r.destino = resto.slice(2).join(' - '); }
+  else if (resto.length === 2) { r.cliente = resto[0]; r.produto = resto[1]; }
+  return r;
+}
+function nomePastaPadrao(p) {
+  const curto = t => String(t || '').replace(/\s*(Co\.?,?\s*Ltd\.?|Trading|LTDA|Limited)\b.*$/i, '').trim().split(/\s+/).slice(0, 3).join(' ');
+  const destino = String(p.pod || p.destino || '').split(',')[0].trim();
+  return [p.id, p.booking || '', curto(p.cliente), String(p.produto || '').trim(), destino].map(x => String(x).replace(/[\/\\]/g, ' ')).join(' - ').replace(/(\s-\s)+$/, '');
+}
 const ROTULO_PASTA = { processo: 'Processo', comprovantes: 'Despesas do mês', cambio: 'Câmbio / DU-E', extrato: 'Extrato do banco', soltos: 'Arquivos soltos', '': 'Não reconhecida' };
 const ORDEM_PASTA = { processo: 0, cambio: 1, comprovantes: 2, extrato: 3, soltos: 4, '': 5 };
 
@@ -707,6 +723,15 @@ async function executarImportacaoTudo() {
       }
       novos.push(p); rel.processosNovos.push(id);
     }
+    // o nome da pasta ("FS260113 - 276143168 - Cliente - Produto - Destino") completa o que faltar
+    sel.filter(x => x.tipo === 'processo').forEach(x => {
+      const info = lerNomePastaProcesso(x.nome); if (!info) return;
+      const p = (S.processos || []).find(q => q.id === info.id); if (!p) return;
+      if (info.booking && !p.booking) p.booking = info.booking;
+      if (info.cliente && !p.cliente) { p.cliente = info.cliente; if (typeof garantirCliente === 'function') garantirCliente(p); }
+      if (info.produto && !p.produto) p.produto = info.produto;
+      if (info.destino && !p.pod) p.pod = info.destino;
+    });
     if (novos.length) {
       await saveToSheets();
       for (const p of novos) { etapa('Criando a pasta do processo ' + p.id + ' no Drive...'); try { await criarPastaProcesso(p); } catch (e) { console.warn('pasta', p.id, e.message); } }
