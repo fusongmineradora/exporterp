@@ -1121,7 +1121,7 @@ function renderDashboard(){
   <div class="kpi-grid">
     <div class="kpi" onclick="nav('processos')">
       <div class="kpi-label">Processos Ativos</div>
-      <div class="kpi-val" style="color:var(--accent)">${ps.length}</div>
+      <div class="kpi-val" style="color:var(--accent)">${ps.filter(p=>p.status!=='Cancelado').length}</div>
       <div class="kpi-sub"><span>📦 Total</span><span style="color:var(--muted2);font-size:9px">VER →</span></div>
     </div>
     <div class="kpi" onclick="S.filter='Embarcado';nav('processos')">
@@ -1837,7 +1837,7 @@ function renderRastreamento(){
 // ═══════════════════════════════════════════════════════════
 function renderCambio(){
   const tab = S.cambioTab||'lista';
-  const ps  = S.processos;
+  const ps  = S.processos.filter(p=>p.status!=='Cancelado');
 
   const tabsHtml = `<div class="tabs">
     <button class="tab ${tab==='lista'?'active':''}" onclick="S.cambioTab='lista';render()">📋 Operações</button>
@@ -1926,7 +1926,7 @@ function renderCambio(){
       return `
       <div class="card">
         <div class="card-title">
-          <div class="card-title-left">💱 ${escHtml(p.id)} — <span style="font-weight:400;color:var(--muted2)">${escHtml(nomeCliente)}</span></div>
+          <div class="card-title-left">💱 ${escHtml(p.id)} <span style="font-weight:400;color:var(--muted2)">${escHtml(typeof restoNomeProcesso==='function'?restoNomeProcesso(p):'— '+nomeCliente)}</span></div>
           <div style="display:flex;gap:8px;align-items:center">
             <span class="badge ${statusClass}">${escHtml(statusNorm)}</span>
             <button class="btn btn-secondary btn-xs" onclick="gerarExtratoCambio('${escHtml(p.id)}')">📑 PDF</button>
@@ -5590,10 +5590,10 @@ if (!checkSession()) {
   applyTheme();
 }
 </script>
-<script src="entrada.js?v=b21d8f1665"></script>
+<script src="entrada.js?v=d0a72cc058"></script>
 <script src="ofx.js?v=7289280781"></script>
-<script src="financeiro2.js?v=a5f0a243d6"></script>
-<script src="acervo.js?v=cb5914cbce"></script>
-<script src="telas.js?v=6f14027528"></script>
+<script src="financeiro2.js?v=73b54def38"></script>
+<script src="acervo.js?v=9cd43c887a"></script>
+<script src="telas.js?v=85bbdb2427"></script>
 </body>
 </html>

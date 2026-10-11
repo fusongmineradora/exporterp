@@ -53,7 +53,8 @@ const TAXA_INTERMEDIARIO_USD = 60;
 function estadoCusto(p, campo) {
   const reg = (p.docs && p.docs._custoDocs && p.docs._custoDocs[campo]) || { fiscais: [], pagos: [] };
   const valor = Number(p[campo]) || 0;
-  const pago = Math.min(valor, Number(p.docs && p.docs._costPago && p.docs._costPago[campo]) || 0);
+  const temReg = !!(p.docs && p.docs._custoDocs && p.docs._custoDocs[campo]);
+  const pago = temReg || !(p.docs && p.docs._previsto && p.docs._previsto[campo]) ? Math.min(valor, Number(p.docs && p.docs._costPago && p.docs._costPago[campo]) || 0) : 0;
   const banco = !!(p.docs && p.docs._costBanco && p.docs._costBanco[campo]);
   const status = p[campo + '_status'] || (valor ? 'Em Aberto' : '');
   const lanc = (p.docs && p.docs['_lanc_' + campo]) || {};
@@ -70,13 +71,15 @@ function estadoCusto(p, campo) {
 function pendenciasProcesso(p) {
   if (p.status === 'Cancelado') return [];
   const f = faseProcesso(p), out = [];
-  CHECKLIST.forEach(c => { if (f >= c.fase && !temDoc(p, ...c.tipos)) out.push({ tipo: 'doc', texto: (f >= 3 && c.fase <= 3 ? 'embarcado sem ' : 'sem ') + c.nome }); });
-  CUSTOS_OBRIGATORIOS.forEach(c => { if (f >= c.fase && !(Number(p[c.campo]) > 0)) out.push({ tipo: 'custo', texto: 'sem custo de ' + PROCESS_COST_FIELDS[c.campo].toLowerCase() + (c.campo === 'custoMaritimo' ? ' (CFR)' : '') }); });
+  // processo "S" (FS260109S): invoice, contrato, notas, DU-E, câmbio, produto e frete rodoviário ficam no principal
+  const ehS = /^FS\d{6}S$/.test(p.id) && (S.processos || []).some(q => q.id === p.id.slice(0, -1));
+  CHECKLIST.forEach(c => { if (ehS && !c.tipos.includes('bl')) return; if (f >= c.fase && !temDoc(p, ...c.tipos)) out.push({ tipo: 'doc', texto: (f >= 3 && c.fase <= 3 ? 'embarcado sem ' : 'sem ') + c.nome }); });
+  CUSTOS_OBRIGATORIOS.forEach(c => { if (ehS && c.campo !== 'custoMaritimo') return; if (f >= c.fase && !(Number(p[c.campo]) > 0)) out.push({ tipo: 'custo', texto: 'sem custo de ' + PROCESS_COST_FIELDS[c.campo].toLowerCase() + (c.campo === 'custoMaritimo' ? ' (CFR)' : '') }); });
   Object.keys(PROCESS_COST_FIELDS).forEach(c => {
     const e = estadoCusto(p, c);
     // marítimo e armazém: a fatura costuma chegar depois — com comprovante e saída no extrato, conta como pago e não cobra a nota
     const faturaDepois = CUSTO_SO_COMPROVANTE.includes(c);   // não precisam de nota/fatura
-    if (e.valor > 0 && e.status === 'Pago' && !e.nota && !e.soRecibo && !faturaDepois && c !== 'custoImpostos') out.push({ tipo: 'nota', texto: PROCESS_COST_FIELDS[c] + ' pago sem nota/fatura' });
+    if (e.valor > 0 && e.status === 'Pago' && !e.nota && !e.soRecibo && !faturaDepois && c !== 'custoImpostos' && !(c === 'custoFrete' && out.some(x => /CT-e/.test(x.texto)))) out.push({ tipo: 'nota', texto: PROCESS_COST_FIELDS[c] + ' pago sem nota/fatura' });
     if (e.valor > 0 && e.status === 'Pago' && !e.comp) out.push({ tipo: 'comprovante', texto: PROCESS_COST_FIELDS[c] + ' sem comprovante' });
   });
   Object.entries((p.docs && p.docs._costAdiant) || {}).forEach(([c, v]) => out.push({ tipo: 'nota', texto: `${PROCESS_COST_FIELDS[c]}: adiantamento de ${brl(v)} — aguardando a nota e o saldo` }));
