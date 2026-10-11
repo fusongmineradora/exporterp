@@ -836,8 +836,23 @@ function cadastrosPelosArquivos() {
 setTimeout(function esperarDados() {
   if (!S.processos || !S.processos.length || typeof saveToSheets !== 'function') { if (!window._cadastrosTentativas || window._cadastrosTentativas++ < 40) { window._cadastrosTentativas = window._cadastrosTentativas || 1; setTimeout(esperarDados, 3000); } return; }
   try {
-    // refaz os totais de custo com a regra atual (ex.: recibo em dinheiro soma com os PIX)
     let mudou = 0;
+    // contratos de câmbio antigos (sem "FATURA: FS…") anexados com USD 0: divide o contrato entre os processos onde ele está
+    const semFatura = {};
+    (S.processos || []).forEach(p => ((((p.docs || {})._files || {}).comprovantes) || []).forEach(f => {
+      const c = f.cambio; if (!c || !c.referencia || (c.faturas || []).some(x => x.usd > 0)) return;
+      const g = semFatura[c.referencia] = semFatura[c.referencia] || { c, itens: [] };
+      if (!g.itens.some(x => x.p === p)) g.itens.push({ p, f });
+    }));
+    Object.values(semFatura).forEach(({ c, itens }) => {
+      const usd = Math.round((Number(c.usdTotal) || 0) / itens.length * 100) / 100; if (!usd) return;
+      const faturas = itens.map(x => ({ processo: x.p.id, usd, pelaPasta: true }));
+      itens.forEach(({ p, f }) => {
+        f.cambio.faturas = faturas; f.cambio.usdFatura = usd;
+        if (aplicarCambioNoProcesso(p, { referencia: c.referencia, taxa: c.taxa, valorReais: c.reaisTotal, valorMoeda: c.usdTotal, data: c.data, contratoExtrato: c.contratoExtrato, faturas }, f.url)) mudou++;
+      });
+    });
+    // refaz os totais de custo com a regra atual (ex.: recibo em dinheiro soma com os PIX)
     (S.processos || []).forEach(p => Object.keys(((p.docs || {})._custoDocs) || {}).forEach(campo => {
       const antes = p[campo] + '|' + p[campo + '_status'];
       recalcularCustos(p, campo);
