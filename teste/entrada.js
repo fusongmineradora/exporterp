@@ -146,10 +146,22 @@ S.entrada = S.entrada || { itens: [], carregando: false, lido: false, erro: '', 
 async function getTesteFolder(name) {
   window._testeFolders = window._testeFolders || {};
   if (window._testeFolders[name]) return window._testeFolders[name];
-  const root = await getRootFolderId();
-  const id = await getOrCreateFolder(name, root);
-  window._testeFolders[name] = id;
-  return id;
+  // duas chamadas ao mesmo tempo criavam DUAS pastas "📥 Entrada" (uma recebia os arquivos e a outra era lida): guarda a promessa
+  window._testeFoldersP = window._testeFoldersP || {};
+  if (!window._testeFoldersP[name]) window._testeFoldersP[name] = (async () => {
+    const root = await getRootFolderId();
+    const id = await getOrCreateFolder(name, root);
+    window._testeFolders[name] = id;
+    return id;
+  })().catch(e => { delete window._testeFoldersP[name]; throw e; });
+  return window._testeFoldersP[name];
+}
+
+// mesma proteção para a pasta raiz do teste (duas chamadas juntas não criam duas raízes)
+if (typeof getRootFolderId === 'function' && !getRootFolderId._uma) {
+  const baseRoot = getRootFolderId; let pRoot = null;
+  getRootFolderId = function () { if (window._rootFolderId) return Promise.resolve(window._rootFolderId); if (!pRoot) pRoot = baseRoot().catch(e => { pRoot = null; throw e; }); return pRoot; };
+  getRootFolderId._uma = true;
 }
 
 async function driveDownload(fileId) {
@@ -301,6 +313,9 @@ function valorDanfe(texto) {
 // Documento comum (PDF ou nome do arquivo): ordem importa
 const REGRAS_TIPO = [
   ['nfe', /DANFE[\s\S]{0,300}NOTA\s+FISCAL\s+ELETR[OÔ]NICA|DOCUMENTO\s+AUXILIAR\s+DA\s+NOTA\s+FISCAL\s+ELETR[OÔ]NICA/],
+  // CT-e / MDF-e pelo texto (quando a chave de acesso vem ilegível): antes caíam em "seguro" pela apólice impressa no DACTE
+  ['cte', /\bDACTE\b|DOCUMENTO\s+AUXILIAR\s+DO\s+CONHECIMENTO\s+DE\s+TRANSPORTE/],
+  ['mdfe', /\bDAMDFE\b|MANIFESTO\s+ELETR[OÔ]NICO\s+DE\s+DOCUMENTOS/],
   ['faturaFrete', /FATURA\s+(?:DE\s+)?EXPORTA[CÇ][AÃ]O\s+MAR[IÍ]TIMA|FATURA\s+DE\s+FRETE|FREIGHT\s+INVOICE|DEBIT\s+NOTE|NUMER[AÁ]RIO/],
   ['nfse', /NOTA\s+FISCAL\s+(ELETR[OÔ]NICA\s+)?DE\s+SERVI[CÇ]OS?|\bNFS-?E\b|DANFSE/],
   ['recibo', /^\s*RECIBO\b|RECIBO\s+DE\s+PAGAMENTO|\bRPA\b|RECIBO\s+DE\s+PAGAMENTO\s+A\s+AUT[OÔ]NOMO/],
@@ -571,6 +586,8 @@ function procurarDuplicado(item) {
 async function lerEntrada() {
   const E = S.entrada;
   if (E.carregando) return;
+  // cada leitura tem um número: uma leitura antiga que termina depois (ex.: abriu a Entrada e logo importou tudo) não apaga a nova
+  const gen = window._lerEntradaGen = (window._lerEntradaGen || 0) + 1;
   E.carregando = true; E.erro = ''; E.progresso = 'Abrindo a pasta Entrada...'; render();
   try {
     await getAccessToken();
@@ -590,6 +607,7 @@ async function lerEntrada() {
     }
     const vistos = {};
     itens.forEach(it => { if (!it.md5) return; if (vistos[it.md5] && !it.duplicado) it.duplicado = { processo: 'Entrada', nome: vistos[it.md5], motivo: 'arquivo idêntico na Entrada' }; else vistos[it.md5] = it.nome; });
+    if (gen !== window._lerEntradaGen) return;   // uma leitura mais nova já está valendo
     E.itens = itens; E.lido = true;
     const planilhas = itens.filter(it => it.tipo === 'planilhaCambio');
     if (planilhas.length && typeof aplicarMapaCambio === 'function') {
@@ -607,9 +625,10 @@ async function lerEntrada() {
       try { await saveToSheets(); } catch (e) {}
     }
   } catch (e) {
-    E.erro = e.message || String(e);
+    if (gen === window._lerEntradaGen) E.erro = e.message || String(e);
   }
-  E.carregando = false; E.progresso = ''; render();
+  if (gen === window._lerEntradaGen) { E.carregando = false; E.progresso = ''; }
+  render();
 }
 
 async function analisarArquivo(f) {

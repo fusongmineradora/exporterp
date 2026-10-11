@@ -620,7 +620,7 @@ const calcTaxa = (reais, recebido) => {
   const r = parseFloat(reais)||0;
   const rec = parseFloat(recebido)||0;
   if (rec <= 0) return 0;
-  return r / rec;
+  return Math.round(r / rec * 10000) / 10000;
 };
 
 const badge = s=>{
@@ -1438,7 +1438,7 @@ function renderProcessoForm(p){
   const lastP = allNums.length > 0
     ? S.processos.find(x => parseInt(String(x.id||'').replace(/^FS/i,''),10) === lastNum) || {}
     : {};
-  const dc = (k) => isEdit ? (p?.[k]||0) : (lastP[k]||0);
+  const dc = (k) => isEdit ? (p?.[k]||0) : 0;
 
   const statuses=['Embarcado','No Porto','No Armazém','A Coletar'];
   const incoterms=['CFR','FOB','CIF','EXW','DAP','DDP'];
@@ -4724,7 +4724,7 @@ async function saveToSheets() {
 
     // FIX: limpa todo o conteúdo das abas ANTES de escrever
     // (evita linhas-fantasma quando o array tem MENOS itens que antes — ex: após excluir)
-    const clearRanges = data.map(({sheet}) => `${sheet}!A1:ZZ10000`);
+    const clearRanges = data.map(({sheet, items}) => `${sheet}!A${(items||[]).length + 2}:ZZ10000`);
     try {
       await sheetsAPI('POST', `/${SHEET_ID}/values:batchClear`, {
         ranges: clearRanges
@@ -5590,10 +5590,10 @@ if (!checkSession()) {
   applyTheme();
 }
 </script>
-<script src="entrada.js?v=407ae0a87d"></script>
-<script src="ofx.js?v=7289280781"></script>
-<script src="financeiro2.js?v=73b54def38"></script>
-<script src="acervo.js?v=260dfff997"></script>
-<script src="telas.js?v=2d3c6f48a0"></script>
+<script src="entrada.js?v=6d9a351204"></script>
+<script src="ofx.js?v=fb95a29ab3"></script>
+<script src="financeiro2.js?v=eee13e56f1"></script>
+<script src="acervo.js?v=b1c6d9b142"></script>
+<script src="telas.js?v=20c0618794"></script>
 </body>
 </html>

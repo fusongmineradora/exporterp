@@ -44,12 +44,12 @@ async function lerAba2(nome) {
 
 async function gravarAba2(nome, objs) {
   const h = TABS2[nome];
-  await sheetsAPI('POST', `/${SHEET_ID}/values:batchClear`, { ranges: [`${nome}!A2:Z`] });
-  if (!objs.length) return;
-  await sheetsAPI('POST', `/${SHEET_ID}/values:batchUpdate`, {
+  // escreve primeiro e depois limpa só as linhas que sobraram (se a escrita falhar, nada se perde)
+  if (objs.length) await sheetsAPI('POST', `/${SHEET_ID}/values:batchUpdate`, {
     valueInputOption: 'RAW',
     data: [{ range: `${nome}!A2`, values: objs.map(o => h.map(k => o[k] === undefined || o[k] === null ? '' : String(o[k]))) }],
   });
+  await sheetsAPI('POST', `/${SHEET_ID}/values:batchClear`, { ranges: [`${nome}!A${objs.length + 2}:Z`] });
 }
 
 async function carregarBanco(force) {
@@ -279,6 +279,12 @@ function sugestaoLinha(l) {
   if (l.valor < 0) {
     const datasL = x => { const ds = [brToIso2(x.data) || ''].filter(Boolean); (String(x.observacao || '').match(/20\d{2}-\d{2}-\d{2}/g) || []).forEach(d => ds.push(d)); return ds; };
     const jaPago = (S.lancamentos || []).filter(x => (x.tipo === 'Despesa' || x.tipo === 'Transferência') && x.status === 'Pago' && !(x.docs && x.docs._banco) && Math.abs((Number(x.valor) || 0) - v) < 0.01 && datasL(x).some(d => diasEntre(d, l.data) <= 7));
+    if (jaPago.length > 1) {   // mais de um com o mesmo valor: fica com o do mesmo favorecido
+      const nf = t => String(t || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const fav = nf(l.favorecido || l.memo);
+      const mesmo = jaPago.filter(x => { const w = nf(x.empresa).split(/\s+/).filter(p => p.length >= 4); return w.length && w.slice(0, 2).every(p => fav.includes(p)); });
+      if (mesmo.length) jaPago.splice(0, jaPago.length, ...mesmo);
+    }
     if (jaPago.length) {
       const e = buildAllEntries().find(x => !x._computed && String(x.id) === String(jaPago[0].id));
       if (e) return { acao: 'baixar', entry: e, unico: jaPago.length === 1, texto: `Já lançado pelo comprovante: "${jaPago[0].descricao}"` + (jaPago.length > 1 ? ` (+${jaPago.length - 1} com o mesmo valor — confira)` : '') };
@@ -337,9 +343,25 @@ function sugestaoLinha(l) {
       return { acao: 'baixar', entry: pagos[0], unico: pagos.length === 1, texto: `Ligar ao lançamento do comprovante "${pagos[0].descricao}"` + (pagos.length > 1 ? ` (+${pagos.length - 1} com o mesmo valor — confira)` : '') };
     }
   }
+  // 1c) comprovante que já está dentro de um custo do processo (pagamento parcial ou total) e ainda sem a linha do banco
+  if (l.valor < 0) {
+    const ligadas = (S.banco.linhas || []).filter(x => x.status === 'conciliado' && x !== l);
+    const hits = [];
+    (S.processos || []).forEach(p => Object.entries((p.docs && p.docs._custoDocs) || {}).forEach(([campo, reg]) => (reg.pagos || []).forEach(d => {
+      if (d.tipo === 'banco' || d.tipo === 'socio' || Math.abs((Number(d.valor) || 0) - v) >= 0.01) return;
+      if (d.data && diasEntre(brToIso2(d.data) || l.data, l.data) > 4) return;
+      if (ligadas.some(x => Math.abs(Math.abs(x.valor) - v) < 0.01 && String(x.lancId || '').includes(p.id) && String(x.lancId || '').includes(campo))) return;
+      if (!hits.some(h => h.p === p && h.campo === campo)) hits.push({ p, campo, d });
+    })));
+    if (hits.length) {
+      const h = hits[0];
+      const e = buildAllEntries().find(x => x._computed && x._sourceProcessoId === h.p.id && x._sourceField === h.campo);
+      if (e) return { acao: 'baixar', entry: e, unico: hits.length === 1, texto: `Pagamento do ${h.p.id} — ${PROCESS_COST_FIELDS[h.campo] || h.campo} (comprovante de R$ ${fmt(v)})` + (hits.length > 1 ? ` (+${hits.length - 1} com o mesmo valor — confira)` : '') };
+    }
+  }
   // 2) comprovante anexado ao processo com o mesmo valor
   const comp = comprovantesPagamento().find(c => Math.abs(c.valor - v) < 0.01 && (!c.data || diasEntre(c.data, l.data) <= 3));
-  if (comp) return { acao: 'lancar', centro: comp.processo ? 'P:' + comp.processo : 'ADM', categoria: l.categoria || comp.categoria || '', texto: comp.processo ? `Comprovante do ${comp.processo} com o mesmo valor` : `Comprovante de despesa do mês: ${comp.nome}`, comp };
+  if (comp) return { acao: 'lancar', centro: comp.processo ? 'P:' + comp.processo : 'ADM', categoria: comp.processo ? (comp.categoria || l.categoria || '') : (l.categoria || comp.categoria || ''), texto: comp.processo ? `Comprovante do ${comp.processo} com o mesmo valor` : `Comprovante de despesa do mês: ${comp.nome}`, comp };
   // 3) regra aprendida / regra do banco
   if (l.categoria) return { acao: 'lancar', centro: l.centro || '', categoria: l.categoria, texto: 'Regra: ' + l.categoria };
   return null;
@@ -405,6 +427,8 @@ function darBaixa(entry, l) {
         p[entry._sourceStatusField] = 'Pago';
         p.docs._costData = p.docs._costData || {}; p.docs._costData[entry._sourceField] = data;
         p.docs._costBanco = p.docs._costBanco || {}; p.docs._costBanco[entry._sourceField] = l.chave;
+        // custo com notas/comprovantes: o status sai da conta (pagamento parcial continua "Em Aberto")
+        if (p.docs._custoDocs && p.docs._custoDocs[entry._sourceField] && typeof recalcularCustos === 'function') recalcularCustos(p, entry._sourceField);
       }
       return true;
     }
@@ -670,6 +694,8 @@ async function autoConciliar() {
   // regra do banco com categoria E centro definidos (tarifas, seguros, regras aprendidas para ADM)
   r.regras = 0;
   for (const l of B.linhas.filter(x => x.status === 'pendente' && !/^RENDIMENTOS/i.test(x.memo) && x.categoria && x.centro && !x.contrato)) {
+    // tem comprovante ou lançamento candidato (mesmo valor): fica para você decidir, a regra não cria outro lançamento
+    const sg = sugestaoLinha(l); if (sg && (sg.acao === 'baixar' || sg.acao === 'baixarGrupo' || sg.comp)) continue;
     const obj = novoLancamentoDeLinha(l, l.categoria, l.centro);
     l.status = 'conciliado'; l.lancId = obj.id; r.regras++;
   }
