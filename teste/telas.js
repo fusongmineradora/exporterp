@@ -193,7 +193,7 @@ function renderInicio() {
       <div><div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:26px">Início</div><div style="font-size:13px;color:var(--muted2)">${new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</div></div>
       <div style="font-size:13px;font-weight:600;color:var(--accent);background:var(--bg4);padding:6px 12px;border-radius:999px">${ativos.filter(p => !processoFechado(p)).length} processos em andamento</div>
     </div>
-    ${blocoPagar}${blocoFalta}${blocoCargas}${blocoResultado}
+    ${blocoPagar}${blocoFalta}${blocoCargas}${blocoFixos()}${blocoResultado}
   </div>`;
 }
 
@@ -348,3 +348,76 @@ function renderRastreio2() {
 
 // Abre no Início
 if (S.page === 'dashboard') S.page = 'inicio';
+
+// ── Despesas fixas: só as que você marcar (na conciliação ou à mão) ──
+// REGRAS tipo 'fixo': valor = chave (CNPJ/CPF ou nome), categoria = nome, centro = JSON {valor, dia, periodo, mes}
+const nomeChave = s => String(s || '').toUpperCase().normalize('NFD').replace(/[^A-Z]/g, '').slice(0, 10);
+const MESES_NOME = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+function despesasFixas() {
+  const B = S.banco; if (!B || !B.carregado) return null;
+  const hoje = hojeISO(), mes = hoje.slice(0, 7), ano = hoje.slice(0, 4), mesNum = +hoje.slice(5, 7);
+  const ultimoExtrato = B.linhas.reduce((m, l) => l.data > m ? l.data : m, '');
+  return (B.regras || []).filter(r => r.tipo === 'fixo').map(r => {
+    let x = {}; try { x = JSON.parse(r.centro || '{}'); } catch (e) {}
+    const periodo = x.periodo === 'anual' ? 'anual' : 'mensal', dia = Number(x.dia) || 1, mesAnual = Number(x.mes) || 1;
+    const casa = l => l.valor < 0 && (/^\d{11,14}$/.test(r.valor) ? l.documento === r.valor : nomeChave(l.favorecido || l.memo) === nomeChave(r.categoria) || nomeChave(l.favorecido || l.memo) === r.valor.replace(/^manual:/, ''));
+    const doPeriodo = B.linhas.filter(l => casa(l) && (periodo === 'mensal' ? l.data.slice(0, 7) === mes : l.data.slice(0, 4) === ano));
+    const pago = doPeriodo[doPeriodo.length - 1];
+    const vence = periodo === 'mensal' ? `${mes}-${String(Math.min(dia, 28)).padStart(2, '0')}` : `${ano}-${String(mesAnual).padStart(2, '0')}-${String(Math.min(dia, 28)).padStart(2, '0')}`;
+    const atrasado = !pago && ultimoExtrato > vence && diasEntre(vence, ultimoExtrato) >= 4 && (periodo === 'mensal' || diasEntre(vence, hoje) <= 45);
+    const relevante = periodo === 'mensal' || mesNum === mesAnual || !!pago || atrasado;
+    return { id: r.id, chave: r.valor, nome: r.categoria, valor: Number(x.valor) || 0, dia, periodo, mesAnual, pago, atrasado, relevante, ultimoExtrato };
+  }).sort((a, b) => a.dia - b.dia);
+}
+async function gravarFixo(chave, nome, valor, dia, periodo, mes) {
+  S.banco.regras = (S.banco.regras || []).filter(r => !(r.tipo === 'fixo' && r.valor === chave));
+  S.banco.regras.push({ id: genId(), tipo: 'fixo', valor: chave, categoria: nome, centro: JSON.stringify({ valor, dia, periodo, mes }), criadoEm: new Date().toISOString() });
+  await gravarAba2('REGRAS', S.banco.regras);
+}
+// chamada pela conciliação quando você marca "despesa fixa"
+async function marcarComoFixa(l) {
+  const chave = l.documento || nomeChave(l.favorecido || l.memo);
+  try { await gravarFixo(chave, (l.favorecido || l.memo || '').trim(), Math.abs(l.valor), +l.data.slice(8, 10), 'mensal', +l.data.slice(5, 7)); showToast('✅ Marcada como despesa fixa mensal (ajuste no Início se for anual)'); } catch (e) { showToast('⚠️ ' + e.message); }
+}
+async function salvarFixo(chave) {
+  const g = id => (document.getElementById(id) || {}).value || '';
+  const nome = g('fx-nome').trim(), valor = numBR(g('fx-valor')) || 0, dia = Math.max(1, Math.min(31, parseInt(g('fx-dia'), 10) || 1));
+  const periodo = g('fx-per') === 'anual' ? 'anual' : 'mensal', mes = Math.max(1, Math.min(12, parseInt(g('fx-mes'), 10) || 1));
+  if (!nome) { showToast('Informe o nome'); return; }
+  try { await gravarFixo(chave || ('manual:' + nomeChave(nome)), nome, valor, dia, periodo, mes); showToast('✅ Despesa fixa salva'); } catch (e) { showToast('⚠️ ' + e.message); }
+  S._editFixo = null; render();
+}
+async function removerFixo(chave) {
+  if (!await uiConfirm('Tirar esta despesa da lista de despesas fixas?', 'Remover despesa fixa', 'Remover', 'Cancelar')) return;
+  S.banco.regras = (S.banco.regras || []).filter(r => !(r.tipo === 'fixo' && r.valor === chave));
+  try { await gravarAba2('REGRAS', S.banco.regras); } catch (e) { showToast('⚠️ ' + e.message); }
+  S._editFixo = null; render();
+}
+function formFixo(x) {
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;padding:10px;background:var(--bg3);border-radius:10px">
+    <div class="ig" style="margin:0"><label class="lbl" for="fx-nome">Nome</label><input id="fx-nome" type="text" value="${escHtml(x ? x.nome : '')}" placeholder="Ex.: Contador"></div>
+    <div class="ig" style="margin:0"><label class="lbl" for="fx-valor">Valor (R$)</label><input id="fx-valor" type="text" inputmode="decimal" value="${x && x.valor ? m2(x.valor) : ''}" placeholder="0,00"></div>
+    <div class="ig" style="margin:0"><label class="lbl" for="fx-per">Repete</label><select id="fx-per"><option value="mensal"${!x || x.periodo === 'mensal' ? ' selected' : ''}>Todo mês</option><option value="anual"${x && x.periodo === 'anual' ? ' selected' : ''}>Uma vez por ano</option></select></div>
+    <div class="ig" style="margin:0"><label class="lbl" for="fx-dia">Dia</label><input id="fx-dia" type="number" min="1" max="31" value="${x ? x.dia : ''}" placeholder="10"></div>
+    <div class="ig" style="margin:0"><label class="lbl" for="fx-mes">Mês (se anual)</label><select id="fx-mes">${MESES_NOME.map((m, i) => `<option value="${i + 1}"${x && x.mesAnual === i + 1 ? ' selected' : ''}>${m}</option>`).join('')}</select></div>
+    <div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap"><button type="button" class="btn btn-primary btn-sm" style="min-height:40px" onclick="salvarFixo('${x ? escHtml(x.chave) : ''}')">Salvar</button><button type="button" class="btn btn-secondary btn-sm" style="min-height:40px" onclick="S._editFixo=null;render()">Cancelar</button>${x ? `<button type="button" class="btn btn-secondary btn-sm" style="min-height:40px" onclick="removerFixo('${escHtml(x.chave)}')">Remover</button>` : ''}</div>
+  </div>`;
+}
+function blocoFixos() {
+  const fx = despesasFixas();
+  const novo = S._editFixo === '__novo' ? formFixo(null) : `<button type="button" class="btn btn-secondary btn-sm" style="min-height:40px" onclick="S._editFixo='__novo';render()">+ Adicionar despesa fixa</button>`;
+  if (fx === null) return card(`${titulo2('Despesas fixas')}<div style="font-size:13.5px;color:var(--muted2)">Carregando…</div>`);
+  if (!fx.length) return card(`${titulo2('Despesas fixas')}<div style="font-size:13.5px;color:var(--muted2)">Nenhuma ainda. Ao lançar um pagamento na Conciliação, marque "despesa fixa", ou adicione aqui.</div>${novo}`);
+  const doMes = fx.filter(x => x.relevante), outras = fx.filter(x => !x.relevante);
+  const total = doMes.reduce((a, x) => a + x.valor, 0);
+  const linha = x => `
+      <div style="display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);align-items:center">
+        <div style="min-width:0"><div style="font-size:14px;font-weight:600">${escHtml(x.nome)}</div>
+          <div style="font-size:12.5px;color:var(--muted2)">${brl(x.valor)} · ${x.periodo === 'anual' ? 'anual, ' + x.dia + '/' + MESES_NOME[x.mesAnual - 1] : 'todo dia ' + x.dia}</div>
+          <div style="font-size:12px;font-weight:600;color:${x.pago ? 'var(--green)' : x.atrasado ? 'var(--orange)' : 'var(--muted2)'}">${x.pago ? 'pago em ' + isoToBr(x.pago.data) + ' · ' + brl(-x.pago.valor) : x.atrasado ? 'não apareceu no extrato' : x.relevante ? 'esperado até o dia ' + x.dia : 'próximo em ' + MESES_NOME[x.mesAnual - 1]}</div></div>
+        <button type="button" class="btn btn-secondary btn-xs" style="min-height:36px" onclick="S._editFixo='${escHtml(x.chave)}';render()">Editar</button>
+      </div>${S._editFixo === x.chave ? formFixo(x) : ''}`;
+  return card(`${titulo2('Despesas fixas', `<span style="font-family:'JetBrains Mono',monospace;font-size:15px">${brl(total)} neste mês</span>`)}
+    <div style="display:flex;flex-direction:column">${doMes.map(linha).join('')}${outras.length ? `<div style="font-size:12px;color:var(--muted2);padding-top:10px">Anuais em outros meses</div>${outras.map(linha).join('')}` : ''}</div>
+    ${novo}`);
+}
