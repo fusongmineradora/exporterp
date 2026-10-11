@@ -536,7 +536,7 @@ async function lerEntrada() {
     E.folderUrl = 'https://drive.google.com/drive/folders/' + folderId;
     const q = `'${folderId}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'`;
     const todos = await driveListAll(q, 'id,name,mimeType,size,md5Checksum,createdTime,webViewLink');
-    const files = todos.filter(f => !/\.(ofx|html?|js|css)$/i.test(f.name || ''));
+    const files = todos.filter(f => !/\.(ofx|html?|js|css)$/i.test(f.name || '') && !(/\.txt$/i.test(f.name || '') && Number(f.size || 0) < 300));
     E.ofxNaEntrada = todos.filter(f => /\.ofx$/i.test(f.name || '')).length;
     const itens = [];
     for (let i = 0; i < files.length; i++) {
@@ -821,6 +821,7 @@ async function confirmarEntrada(i, silencioso) {
   if (item.processo === '__ADM') return confirmarAdm(i, silencioso);
   const p = S.processos.find(x => x.id === item.processo);
   if (!p) { if (!silencioso) showToast('Escolha o processo'); return false; }
+  if (typeof somaDivisaoOk === 'function' && !somaDivisaoOk(item)) { if (!silencioso) showToast('A soma dos valores por processo precisa bater com o valor pago'); return false; }
   item.salvando = true; render();
   try {
     let folderId = p.docs && p.docs._folderId;
@@ -1075,6 +1076,7 @@ function renderEntrada() {
         <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-dat-${i}">Data do pagamento</label>
           <input id="ent-dat-${i}" type="date" value="${escHtml(it.info.data || '')}" onchange="setInfoEntrada(${i},'data',this.value)"/></div>
       </div>` : ''}
+      ${(it.tipo === 'pagamento' || it.tipo === 'recibo') && it.processo && it.processo !== '__ADM' && typeof blocoDivisao === 'function' ? blocoDivisao(it, i) : ''}
       ${it.processo && ['nfse', 'nfe', 'recibo', 'faturaFrete', 'cte', 'boleto', 'pagamento', 'outros'].includes(it.tipo) ? `
       <div class="ig" style="margin-top:10px;margin-bottom:0"><label class="lbl" for="ent-pp-${i}">Pago com</label>
         <select id="ent-pp-${i}" onchange="setPagoPor(${i},this.value)"><option value="empresa"${it.pagoPor !== 'socio' ? ' selected' : ''}>Conta da empresa</option><option value="socio"${it.pagoPor === 'socio' ? ' selected' : ''}>Cartão / conta pessoal do sócio (reembolsar)</option></select></div>` : ''}
@@ -1094,6 +1096,7 @@ function renderEntrada() {
           <a class="btn btn-secondary btn-xs" href="${sanitizeUrl(it.url)}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">Abrir ↗</a>
           ${it.duplicado ? `<button class="btn btn-secondary btn-xs" onclick="moverDuplicado(${i})">Mover para Duplicados</button>` : ''}
           ${typeof podeCriarProcesso === 'function' && podeCriarProcesso(it) ? `<button class="btn btn-secondary btn-xs" style="border-color:var(--green);color:var(--green)" onclick="criarProcessoDoDoc(${i})">➕ Criar processo ${escHtml(podeCriarProcesso(it))}</button>` : ''}
+          <button class="btn btn-secondary btn-xs" onclick="ignorarEntrada(${i})" title="Não é documento: tira da Entrada (nada é apagado)">Ignorar</button>
           <button class="btn btn-primary btn-xs" ${it.salvando ? 'disabled' : ''} onclick="confirmarEntrada(${i})">${it.salvando ? 'Anexando...' : 'Anexar ao processo'}</button>
         </span>
       </div>
