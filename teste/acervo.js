@@ -390,7 +390,7 @@ function recalcularCustos(p, campo) {
   p.docs._costAdiant = p.docs._costAdiant || {};
   if (adiant > 0 && !fiscal) p.docs._costAdiant[campo] = Math.round(adiant * 100) / 100; else delete p.docs._costAdiant[campo];
   const alvo = manual != null ? manual : total;
-  p[campo + '_status'] = p.docs._statusManual && p.docs._statusManual[campo] ? p.docs._statusManual[campo] : adiant > 0 && !fiscal && manual == null ? 'Em Aberto' : (peloBanco && manual == null) || (pago > 0 && pago + 0.01 >= alvo) ? 'Pago' : 'Em Aberto';
+  p[campo + '_status'] = p.docs._statusManual && p.docs._statusManual[campo] ? p.docs._statusManual[campo] : adiant > 0 && !fiscal && manual == null ? 'Em Aberto' : (peloBanco && manual == null && (!pago || pago + 0.01 >= alvo * 0.98)) || (pago > 0 && pago + 0.01 >= alvo) ? 'Pago' : 'Em Aberto';
   const datas = (reg.pagos || []).map(d => d.data).filter(Boolean).sort();
   if (datas.length) { p.docs._costData = p.docs._costData || {}; p.docs._costData[campo] = datas[datas.length - 1]; }
   const comp = (reg.pagos || []).find(d => d.url);
@@ -422,7 +422,7 @@ function aplicarCambioNoProcesso(p, c, url) {
   const usd = cs.reduce((a, x) => a + x.usd, 0), reais = cs.reduce((a, x) => a + x.reais, 0);
   p.cambioRecebido = Math.round(usd * 100) / 100;
   p.cambioReais = Math.round(reais * 100) / 100;
-  p.cambioTaxa = usd ? reais / usd : 0;
+  p.cambioTaxa = usd ? Math.round(reais / usd * 10000) / 10000 : 0;
   const datas = cs.map(x => x.data).filter(Boolean).sort((a, b) => brToIso(a).localeCompare(brToIso(b)));
   if (datas.length) { p.cambioFechamento = datas[0]; p.cambioRecebimento = datas[datas.length - 1]; }
   p.cambioBanco = p.cambioBanco || 'Itaú';
@@ -933,8 +933,12 @@ setTimeout(async function esperarDados() {
   if (!S.processos || !S.processos.length || typeof saveToSheets !== 'function') { if (!window._cadastrosTentativas || window._cadastrosTentativas++ < 40) { window._cadastrosTentativas = window._cadastrosTentativas || 1; setTimeout(esperarDados, 3000); } return; }
   try {
     let mudou = 0;
+    const comoNaPlanilha = (aba, itens) => { const h = (typeof SHEET_SCHEMA !== 'undefined' && SHEET_SCHEMA[aba]) || null; return (itens || []).map(o => h ? h.map(k => { const v = o[k]; return v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v); }).join('\u0001') : JSON.stringify(o)).join('\n'); };
+    const foto = () => [['PROCESSOS', S.processos], ['EXTRATO_CAIXA', S.lancamentos], ['CLIENTES', S.clientes], ['FORNECEDORES', S.fornecedores], ['CUSTOS_FIXOS', S.custosMensais]].map(([a, i]) => comoNaPlanilha(a, i)).join('\n\n');
+    const fotoBanco = () => JSON.stringify(((S.banco && S.banco.linhas) || []).map(l => [l.chave, l.status, l.lancId, l.categoria, l.centro, l.obs]));
+    let f0 = null, b0 = null;
     // planilha do banco (contrato → processo) manda sobre a pasta
-    try { if (typeof carregarBanco === 'function' && !(S.banco && S.banco.carregado)) await carregarBanco(); mudou += aplicarMapaCambio(mapaCambioGuardado()); } catch (e) { console.warn('mapa câmbio', e); }
+    try { if (typeof carregarBanco === 'function' && !(S.banco && S.banco.carregado)) await carregarBanco(); f0 = foto(); b0 = fotoBanco(); mudou += aplicarMapaCambio(mapaCambioGuardado()); } catch (e) { console.warn('mapa câmbio', e); }
     // contratos de câmbio antigos (sem "FATURA: FS…") anexados com USD 0: divide o contrato entre os processos onde ele está
     const semFatura = {};
     (S.processos || []).forEach(p => ((((p.docs || {})._files || {}).comprovantes) || []).forEach(f => {
@@ -976,7 +980,11 @@ setTimeout(async function esperarDados() {
     // processo renumerado (FS260105 → FS260107) e custos previstos
     mudou += juntarProcessosRenumerados();
     (S.processos || []).forEach(p => { mudou += aplicarPrevistos(p); });
-    if (cadastrosPelosArquivos() > 0 || mudou) saveToSheets().catch(() => {});
+    try { mudou += lancamentosRepetidos(); mudou += vinculosDoBanco(); } catch (e) { console.warn('vínculos do banco', e); }
+    const novosCad = cadastrosPelosArquivos();
+    // só grava se algo mudou de verdade (evita regravar a planilha inteira a cada vez que abre)
+    if (novosCad > 0 || (f0 == null ? mudou : foto() !== f0)) saveToSheets().catch(() => {});
+    if (b0 != null && fotoBanco() !== b0 && typeof salvarBanco === 'function') salvarBanco().catch(() => {});
   } catch (e) { console.warn('cadastros', e); }
 }, 4000);
 
@@ -1165,6 +1173,11 @@ function lancarReembolsoSocio(item, p, upd) {
   S.lancamentos = S.lancamentos || [];
   const url = upd && upd.webViewLink;
   if (S.lancamentos.some(x => x.docs && x.docs.reembolsoSocio && (x.docs.comprovante === url || (item.md5 && x.docs.md5 === item.md5)))) return null;
+  // PDF e XML da mesma nota (mesmo nome, outra extensão): é o mesmo reembolso
+  const tronco = n => semAcento(String(n || '').replace(/\.[a-z0-9]{2,4}$/i, '')).replace(/[^A-Z0-9]/g, '');
+  const meu = tronco(upd ? upd.name : item.nome), dBr = item.info.data ? isoToBr(item.info.data) : '';
+  const irmao = meu && S.lancamentos.find(x => x.docs && x.docs.reembolsoSocio && Math.abs((Number(x.valor) || 0) - valor) < 0.01 && x.data === dBr && tronco((String(x.observacao || '').split(' · ')[1] || '')) === meu);
+  if (irmao) { if (url && url !== irmao.docs.comprovante) irmao.docs.outroArquivo = url; return null; }
   const quem = (item.info && item.info.emitNome) || item.nome.replace(/^ADM\s*-\s*/i, '').replace(/\.[a-z0-9]+$/i, '');
   const obj = {
     id: genId(), tipo: 'Despesa', status: 'Em Aberto', descricao: 'Reembolso ao sócio — ' + quem,
@@ -1194,7 +1207,7 @@ function lancarDespesaDaNota(item, upd) {
   const valor = Number(item.info && item.info.valor) || 0; if (!valor) return null;
   const quem = (item.info && item.info.emitNome) || item.nome.replace(/^ADM\s*-\s*/i, '').replace(/\.[a-z0-9]+$/i, '');
   const ja = lancamentoParecido(valor, item.info.data, quem);
-  if (ja) { ja.docs = ja.docs || {}; if (!ja.docs.nota && upd) ja.docs.nota = upd.webViewLink; return ja; }
+  if (ja) { ja.docs = ja.docs || {}; if (!ja.docs.nota && upd) ja.docs.nota = upd.webViewLink; else if (upd && ja.docs.nota !== upd.webViewLink) ja.docs.outroArquivo = upd.webViewLink; return ja; }
   const obj = {
     id: genId(), tipo: 'Despesa', status: 'Pago', descricao: (item.categoria || 'Despesas administrativas') + ' — ' + quem,
     valor, data: item.info.data ? isoToBr(item.info.data) : '', empresa: quem, categoria: item.categoria || 'Outras despesas',
@@ -1679,7 +1692,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '56';
+const VERSAO_TESTE = '57';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -1964,6 +1977,54 @@ function lancamentosViramCusto() {
   });
   if (n) S.lancamentos = ficar;
   return n;
+}
+// Linha do extrato ligada a um lançamento que não existe mais (virou custo do processo, foi juntado…):
+// liga ao custo certo pelo _costBanco, ou ao lançamento que tem a mesma linha; se não achar, volta para "pendente".
+function vinculosDoBanco() {
+  const B = (S.banco && S.banco.linhas) || []; if (!B.length) return 0;
+  const lids = new Set((S.lancamentos || []).map(l => l.id));
+  const porBanco = {}; (S.lancamentos || []).forEach(l => { if (l.docs && typeof l.docs._banco === 'string') porBanco[l.docs._banco] = l; });
+  const custoPorBanco = {}; (S.processos || []).forEach(p => Object.entries((p.docs && p.docs._costBanco) || {}).forEach(([c, k]) => { if (typeof k === 'string') (custoPorBanco[k] = custoPorBanco[k] || []).push(p.id + '/' + c); }));
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  let n = 0;
+  B.forEach(l => {
+    if (l.status !== 'conciliado' || !l.lancId) return;
+    const id = String(l.lancId);
+    // custo do processo que mudou de campo (ex.: imposto da COOP saiu do Produto para Impostos)
+    const mc = id.match(/^custo:(FS\d{6}S?)\/(\w+)$/);
+    if (mc && custoPorBanco[l.chave] && custoPorBanco[l.chave].length === 1 && custoPorBanco[l.chave][0] !== mc[1] + '/' + mc[2] && custoPorBanco[l.chave][0].startsWith(mc[1] + '/')) { l.lancId = 'custo:' + custoPorBanco[l.chave][0]; n++; return; }
+    const ids = id.replace(/^reembolso:/, '').split(',');
+    if (!ids.every(x => uuid.test(x)) || ids.some(x => lids.has(x))) return;
+    if (porBanco[l.chave]) { l.lancId = porBanco[l.chave].id; n++; return; }
+    if (custoPorBanco[l.chave] && custoPorBanco[l.chave].length === 1) { l.lancId = 'custo:' + custoPorBanco[l.chave][0]; n++; return; }
+    l.obs = ('Estava ligado a ' + (l.categoria || '') + (l.centro ? ' · ' + l.centro : '') + ', que não existe mais — confira').trim();
+    l.status = 'pendente'; l.lancId = ''; n++;
+  });
+  return n;
+}
+// Lançamentos repetidos: (1) dois lançamentos da mesma linha do extrato; (2) PDF e XML da mesma nota (mesmo nome) lançados duas vezes
+function lancamentosRepetidos() {
+  const L = S.lancamentos || []; const B = (S.banco && S.banco.linhas) || [];
+  const ligados = new Set(); B.forEach(l => String(l.lancId || '').replace(/^reembolso:/, '').split(',').forEach(x => x && ligados.add(x)));
+  const tirar = new Set();
+  const grupos = {}; L.forEach(l => { if (l.docs && typeof l.docs._banco === 'string' && l.docs._banco) (grupos[l.docs._banco] = grupos[l.docs._banco] || []).push(l); });
+  Object.values(grupos).filter(g => g.length > 1).forEach(g => {
+    const fica = g.find(l => ligados.has(l.id)) || g[0];
+    g.filter(l => l !== fica && !ligados.has(l.id) && Math.abs((Number(l.valor) || 0) - (Number(fica.valor) || 0)) < 0.01 && l.vinculoId === fica.vinculoId).forEach(l => tirar.add(l));
+  });
+  const nomeArq = l => { const m = String(l.observacao || '').match(/(?:· |Nota: |Comprovante: )([^·]+?)\.(pdf|xml|png|jpe?g)\s*(?:·|$)/i); return m ? semAcento(m[1]).replace(/[^A-Z0-9]/g, '') : ''; };
+  const vistos = {};
+  L.forEach(l => {
+    if (tirar.has(l) || ligados.has(l.id) || (l.docs && l.docs._banco)) return;
+    const n = nomeArq(l); if (!n) return;
+    const k = [n, Math.abs(Number(l.valor) || 0).toFixed(2), l.data, l.vinculoId || '', l.status].join('|');
+    const a = vistos[k]; if (!a) { vistos[k] = l; return; }
+    a.docs = a.docs || {}; const url = (l.docs || {}).comprovante || (l.docs || {}).nota;
+    if (url && url !== a.docs.comprovante && url !== a.docs.nota) a.docs.outroArquivo = url;
+    tirar.add(l);
+  });
+  if (tirar.size) { S.lancamentos = L.filter(l => !tirar.has(l)); tirar.forEach(l => logAction('excluir', 'EXTRATO_CAIXA', l.id, 'Lançamento repetido: ' + (l.descricao || '') + ' R$ ' + l.valor)); }
+  return tirar.size;
 }
 // câmbio: taxa com 4 casas
 function arredondarTaxas() { let n = 0; (S.processos || []).forEach(p => { const t = Number(p.cambioTaxa); if (t && String(p.cambioTaxa).length > 6) { p.cambioTaxa = Math.round(t * 10000) / 10000; n++; } }); return n; }

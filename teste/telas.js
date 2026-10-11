@@ -473,6 +473,47 @@ function listaArquivos(p) {
   if (S.page === 'dashboard') S.page = 'inicio';
 })();
 
+// Formulário do processo: número padronizado (FS + 6 dígitos, S opcional); não deixa criar por cima de um processo
+// que já existe nem trocar o número na edição (isso criava um processo vazio duplicado)
+document.addEventListener('click', ev => {
+  const b = ev.target && ev.target.closest && ev.target.closest('#btn-save-proc'); if (!b) return;
+  const el = document.getElementById('f_id'); if (!el) return;
+  const bruto = String(el.value || '').trim();
+  const m = semAcento(bruto).replace(/[\s._-]/g, '').match(/^(?:FS)?(\d{6})(S?)$/);
+  const id = m ? 'FS' + m[1] + m[2] : bruto.toUpperCase();
+  const parar = msg => { ev.preventDefault(); ev.stopImmediatePropagation(); uiAlert(msg); };
+  if (!id) return;
+  if (!m) return parar('Número do processo inválido: "' + bruto + '".\nUse o formato FS + 6 dígitos (ex.: FS260120) ou com S no fim (FS260109S).');
+  el.value = id;
+  const existe = (S.processos || []).some(p => p.id === id);
+  if (S.sub && S.editMode && id !== S.sub.id) { el.value = S.sub.id; return parar('O número do processo não muda por aqui (criaria um processo novo vazio).\nSe o número mudou, renomeie a pasta no Drive e me avise — o sistema junta os dois, como fez com o FS260105 → FS260107.'); }
+  if (!S.sub && existe) return parar('O processo ' + id + ' já existe. Abra o processo na lista para editar.');
+}, true);
+
+// Pasta do processo novo no Drive: mesmo padrão das suas pastas (FS - booking - cliente - produto - destino) e as subpastas de sempre
+criarPastaProcesso = async function (processo) {
+  try {
+    showSyncIndicator('Criando pasta no Drive...');
+    const rootId = await getRootFolderId();
+    const curto = t => String(t || '').replace(/\b(CO\.?|LTD\.?|LIMITED|TRADING|INTERNATIONAL|IMPORT|EXPORT|LOGISTICS|COMPANY|LTDA)\b\.?,?/gi, '').replace(/[,.]+/g, ' ').replace(/\s+/g, ' ').trim().split(' ').slice(0, 2).join(' ');
+    const destino = String(processo.pod || '').split(',')[0].replace(/\s*port\b/i, '').trim();
+    const nome = [processo.id, processo.booking, curto(processo.cliente), processo.produto, destino].map(x => String(x || '').trim()).filter(Boolean).join(' - ').replace(/[\/\\:*?"<>|]/g, ' ').slice(0, 120);
+    // se já existe uma pasta que começa com o número, usa ela
+    const token = await getAccessToken();
+    const q = `mimeType='application/vnd.google-apps.folder' and '${rootId}' in parents and name contains '${processo.id}' and trashed=false`;
+    const r = await fetch('https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(q) + '&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true', { headers: { Authorization: 'Bearer ' + token } }).then(x => x.json()).catch(() => ({}));
+    const ja = ((r && r.files) || []).find(f => new RegExp('^' + processo.id + '(?!\\d|S)').test(f.name));
+    const folderId = ja ? ja.id : await getOrCreateFolder(nome, rootId);
+    if (!ja) for (const sub of ['01 Comercial', '02 Fiscal', '03 Transporte', '04 Embarque', '05 Financeiro', '06 Fotos']) { try { await getOrCreateFolder(sub, folderId); } catch (e) {} }
+    const p = (S.processos || []).find(x => x.id === processo.id);
+    if (p) { p.docs = p.docs || {}; p.docs._folderId = folderId; p.docs._folderUrl = 'https://drive.google.com/drive/folders/' + folderId; p.docs._testeOk = true; p.docs._nomePasta = ja ? ja.name : nome; }
+    hideSyncIndicator(); scheduleAutoSave();
+    return { folderId, folderUrl: 'https://drive.google.com/drive/folders/' + folderId };
+  } catch (e) {
+    hideSyncIndicator(); showToast('⚠️ Erro Drive: ' + String(e.message || e).substring(0, 50)); return null;
+  }
+};
+
 // Editar dados do processo (formulário antigo): custo ou status mudado à mão passa a valer sobre os documentos
 document.addEventListener('click', ev => {
   const b = ev.target && ev.target.closest && ev.target.closest('#btn-save-proc'); if (!b || !S.sub) return;
