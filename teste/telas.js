@@ -319,6 +319,7 @@ function linkArmador(p) {
   if (/CMA/.test(arm)) return 'https://www.cma-cgm.com/ebusiness/tracking/search?SearchBy=Container&Reference=' + encodeURIComponent(c);
   if (/HAPAG/.test(arm)) return 'https://www.hapag-lloyd.com/en/online-business/track/track-by-container-solution.html?container=' + encodeURIComponent(c);
   if (/EVERGREEN/.test(arm)) return 'https://ct.shipmentlink.com/servlet/TDB1_CargoTracking.do';
+  if (/YANG\s*MING|YML/.test(arm)) return 'https://www.yangming.com/en/esolution/cargo_tracking';
   return '';
 }
 function renderRastreio2() {
