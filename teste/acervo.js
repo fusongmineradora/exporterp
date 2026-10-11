@@ -590,7 +590,7 @@ function somarContainers(p, novos) {
 // 5. Importa o OFX e faz a conciliação automática · mostra o que falta em cada processo
 // ═══════════════════════════════════════════════════════════════
 const semAcento = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
-const FS_DE = s => ((semAcento(s).match(/FS\s?\d{6}/) || [''])[0]).replace(/\s/g, '');
+const FS_DE = s => ((semAcento(s).match(/FS\s?\d{6}(?:S(?![A-Z0-9]))?/) || [''])[0]).replace(/\s/g, '');   // inclui o "S" (FS260109S)
 function tipoDaPasta(nome) {
   const u = semAcento(nome);
   if (/^99\s*-?\s*ARQUIVO|ORIGINAIS/.test(u)) return '';   // "99 Arquivo - Originais Câmbio": o ERP não lê (valem as cópias FS na 05 Financeiro)
@@ -943,6 +943,8 @@ setTimeout(async function esperarDados() {
       recalcularCustos(p, campo);
       if (p[campo] + '|' + p[campo + '_status'] !== antes) mudou++;
     }));
+    // arquivos da pasta FS2601xxS que foram para o principal (importação de 11/10): voltam para o S
+    try { mudou += await devolverArquivosDoS(); } catch (e) { console.warn('arquivos S', e); }
     // processo renumerado (FS260105 → FS260107) e custos previstos
     mudou += juntarProcessosRenumerados();
     (S.processos || []).forEach(p => { mudou += aplicarPrevistos(p); });
@@ -1359,4 +1361,48 @@ async function editarPadroesPrevistos() {
   (S.processos || []).forEach(p => aplicarPrevistos(p));
   try { if (typeof ensureTabs2 === 'function') await ensureTabs2(); await gravarAba2('REGRAS', S.banco.regras); await saveToSheets(); showToast('✅ Padrões dos previstos salvos'); } catch (e) { showToast('⚠️ ' + e.message); }
   render();
+}
+
+// Correção: na importação, documentos da pasta FS260109S que citam "FS260109" foram anexados ao FS260109.
+// Volta cada um para o processo S (registro, custo, pasta no Drive; BL: booking e containers).
+async function devolverArquivosDoS() {
+  let n = 0;
+  for (const pS of (S.processos || []).filter(p => /^FS\d{6}S$/.test(p.id))) {
+    const pB = S.processos.find(p => p.id === pS.id.slice(0, -1)); if (!pB || !pB.docs || !pB.docs._files) continue;
+    for (const [tipo, arr] of Object.entries(pB.docs._files)) {
+      const mover = (arr || []).filter(f => f.pastaOriginal === pS.id);
+      for (const f of mover) {
+        pB.docs._files[tipo] = pB.docs._files[tipo].filter(x => x !== f);
+        if (!pB.docs._files[tipo].length) { delete pB.docs._files[tipo]; delete pB.docs[tipo]; } else if (pB.docs[tipo] === f.url) pB.docs[tipo] = pB.docs._files[tipo][0].url;
+        pS.docs = pS.docs || {}; pS.docs._files = pS.docs._files || {};
+        (pS.docs._files[tipo] = pS.docs._files[tipo] || []).push(Object.assign({}, f, { pastaOriginal: undefined, devolvido: true }));
+        if (!pS.docs[tipo]) pS.docs[tipo] = f.url;
+        // custos ligados a esse arquivo
+        Object.entries(pB.docs._custoDocs || {}).forEach(([campo, reg]) => {
+          const tira = k => { const fora = (reg[k] || []).filter(d => d.url === f.url); if (!fora.length) return; reg[k] = reg[k].filter(d => d.url !== f.url);
+            const rS = (pS.docs._custoDocs = pS.docs._custoDocs || {})[campo] = (pS.docs._custoDocs || {})[campo] || { fiscais: [], pagos: [] }; rS[k] = (rS[k] || []).concat(fora); };
+          tira('fiscais'); tira('pagos');
+          ['_costComp'].forEach(k => { if (pB.docs[k] && pB.docs[k][campo] === f.url) delete pB.docs[k][campo]; });
+          const lanc = pB.docs['_lanc_' + campo]; if (lanc) ['comprovante', 'nfe', 'fatura'].forEach(k => { if (lanc[k] === f.url) delete lanc[k]; });
+          if (!(reg.fiscais || []).length && !(reg.pagos || []).length) { delete pB.docs._custoDocs[campo]; pB[campo] = ''; pB[campo + '_status'] = ''; } else recalcularCustos(pB, campo);
+          if (pS.docs._custoDocs && pS.docs._custoDocs[campo]) recalcularCustos(pS, campo);
+        });
+        // BL: lê de novo para levar booking e containers para o S
+        if (tipo === 'bl' && f.id && typeof analisarArquivo === 'function') {
+          try {
+            const it = await analisarArquivo({ id: f.id, name: f.name, mimeType: /\.pdf$/i.test(f.name) ? 'application/pdf' : '' });
+            const conts = ((it.info || {}).containers || []).map(c => String(c).toUpperCase().replace(/[\s-]/g, ''));
+            if (conts.length) { pB.containers = (pB.containers || []).filter(c => !conts.includes(String(c).toUpperCase().replace(/[\s-]/g, ''))); pB.container = pB.containers[0] || ''; pB.qtdContainer = String(Math.max(1, pB.containers.filter(Boolean).length)); }
+            const b = (it.info || {}).booking; if (b && pB.booking === b) pB.booking = (pB.docs._bl && pB.docs._bl.booking !== b && pB.docs._bl.booking) || '';
+            aplicarDocNoProcesso(it, pS, { webViewLink: f.url, name: f.name });
+          } catch (e) { console.warn('BL S', e); }
+        }
+        // pasta no Drive (ambiente de testes)
+        try { if (f.id && pB.docs._folderId && pS.docs._folderId) await driveAPI('PATCH', '/files/' + f.id, {}, 'addParents=' + pS.docs._folderId + '&removeParents=' + pB.docs._folderId + '&fields=id'); } catch (e) {}
+        logAction('editar', 'PROCESSOS', pS.id, f.name + ': devolvido do ' + pB.id + ' para o ' + pS.id + ' (estava na pasta ' + pS.id + ')');
+        n++;
+      }
+    }
+  }
+  return n;
 }

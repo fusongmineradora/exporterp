@@ -691,7 +691,12 @@ function identificarItem(item) {
   // processo renumerado (ex.: FS260105 virou FS260107): o número antigo aponta para o novo
   item.candidatos = item.candidatos.reduce((acc, c) => { const id = processoAtual(c.id), j = acc.find(x => x.id === id); if (j) { j.score = Math.max(j.score, c.score); } else acc.push(Object.assign({}, c, { id })); return acc; }, []);
   const doDoc = item.candidatos[0] ? item.candidatos[0].id : '';
-  if (doDoc && pelaPasta.size && !pelaPasta.has(doDoc) && item.candidatos[0].score >= 100) {
+  // pasta do processo "S" (FS260109S) e documento que cita o principal (FS260109): é a mesma venda — vale a pasta
+  const irmaoS = doDoc && [...pelaPasta].find(id => id === doDoc + 'S');
+  if (irmaoS) {
+    item.processo = irmaoS;
+    item.candidatos = [{ id: irmaoS, score: 100, motivos: ['pasta ' + irmaoS + ' (o documento cita ' + doDoc + ', mesma venda)'] }].concat(item.candidatos.filter(c => c.id !== irmaoS));
+  } else if (doDoc && pelaPasta.size && !pelaPasta.has(doDoc) && item.candidatos[0].score >= 100) {
     // Documento na pasta errada. Se a prova vem de DENTRO do documento (chave de acesso, nota citada,
     // container, DU-E, fatura do câmbio, identificação do comprovante, número no texto), vai direto
     // para a pasta certa. Se a única pista é o número escrito no nome do arquivo, pede conferência.
