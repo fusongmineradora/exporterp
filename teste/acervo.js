@@ -1657,3 +1657,7 @@ function notasDuplicadasEmCustos() {
   });
   return n;
 }
+
+// versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
+const VERSAO_TESTE = '45';
+setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
