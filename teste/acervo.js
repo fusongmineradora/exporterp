@@ -360,7 +360,7 @@ function campoCustoSugerido(item) {
   const info = item.info || {};
   const quem = normTxt([item.nomeOriginal || item.nome, info.emitNome, info.pagamento && info.pagamento.recebedor, String(item.texto || '').slice(0, 800)].filter(Boolean).join(' '));
   const cat = categoriaPeloNome(normTxt([info.emitNome, info.pagamento && info.pagamento.recebedor].filter(Boolean).join(' ')))
-    || item.categoria || categoriaPeloNome(normTxt(item.nomeOriginal || item.nome)) || (item.tipo === 'nfe' ? '' : categoriaPeloNome(quem));   // NF-e de compra: o texto da nota (porto, frete…) não muda o custo
+    || item.categoria || categoriaPeloNome(normTxt(item.nomeOriginal || item.nome)) || (item.tipo === 'nfe' || item.tipo === 'nfse' ? '' : categoriaPeloNome(quem));   // NF-e de compra: o texto da nota (porto, frete…) não muda o custo
   if (CAMPO_POR_CATEG[cat]) return CAMPO_POR_CATEG[cat];
   if (item.tipo === 'nfe') return 'custoProduto';
   if (item.tipo === 'nfse') return 'custoServTerceiros';
@@ -380,7 +380,8 @@ function recalcularCustos(p, campo) {
   // recibo do valor total = quitação (já inclui os PIX); recibo menor que a nota = parte paga em dinheiro → soma com os PIX
   const quitaTudo = recibo > 0 && (!fiscal || recibo + 0.01 >= fiscal * 0.98);
   const pago = !recibo ? pix : quitaTudo ? Math.max(pix, recibo) : pix + reciboSoma;
-  const total = fiscal || pago;
+  // marítimo, armazém e serviços de terceiros: vale o que foi pago (a fatura/nota é opcional e às vezes é de outra coisa)
+  const total = ['custoMaritimo', 'custoArmazem', 'custoServTerceiros'].includes(campo) ? Math.max(fiscal, pago) : (fiscal || pago);
   const manual = p.docs._valorManual && p.docs._valorManual[campo] != null ? Number(p.docs._valorManual[campo]) : null;
   p[campo] = Math.round((manual != null ? manual : total) * 100) / 100;
   const peloBanco = p.docs._costBanco && p.docs._costBanco[campo];
@@ -708,6 +709,9 @@ async function executarImportacaoTudo() {
     ((S.banco && S.banco.docs) || []).forEach(d => d.md5 && ja.add(d.md5));
     try { const pc = await getTesteFolder('🏦 Câmbio'); (await driveListAll(`'${pc}' in parents and trashed=false`, 'md5Checksum')).forEach(f => f.md5Checksum && ja.add(f.md5Checksum)); } catch (e) {}
     const porMd5 = {};
+    // "FS260100 - Assessoria - R$ 600,00 (parte do PIX de R$ 5.400,00 …)": o valor de cada pasta para o mesmo comprovante
+    window._partesPorMd5 = window._partesPorMd5 || {};
+    arquivos.forEach(f => { const ctx = f.contexto; if (!f.md5Checksum || !/^FS\d{6}S?$/.test(ctx || '')) return; const v = /parte do PIX|rateio/i.test(f.name) ? lerNomeArquivo(f.name).valor : 0; if (v > 0) (window._partesPorMd5[f.md5Checksum] = window._partesPorMd5[f.md5Checksum] || {})[processoAtual(ctx)] = v; });
     // cópia guardada num dossiê (ex.: "07 Dossiê RFB" do FS260113 com os contratos de outros processos) não liga o arquivo ao processo do dossiê
     arquivos.filter(f => !f.dossie).forEach(f => { if (f.md5Checksum) (porMd5[f.md5Checksum] = porMd5[f.md5Checksum] || new Set()).add(f.contexto); });
     arquivos.filter(f => f.dossie).forEach(f => { if (f.md5Checksum && !porMd5[f.md5Checksum]) porMd5[f.md5Checksum] = new Set([f.contexto]); });
@@ -950,7 +954,9 @@ setTimeout(async function esperarDados() {
       if (p[campo] + '|' + p[campo + '_status'] !== antes) mudou++;
     }));
     // arquivos da pasta FS2601xxS que foram para o principal (importação de 11/10): voltam para o S
+    try { mudou += await criarProcessoSFaltando(); } catch (e) { console.warn('processo S', e); }
     try { mudou += await devolverArquivosDoS(); } catch (e) { console.warn('arquivos S', e); }
+    try { mudou += await corrigirPartesPeloNome(); } catch (e) { console.warn('partes', e); }
     try { mudou += await corrigirCambioDossie(); } catch (e) { console.warn('dossiê', e); }
     mudou += corrigirFaturasDigitadas();
     mudou += moverPagamentosMarcados();
@@ -1307,7 +1313,7 @@ function regrasPrevisto() {
   });
 }
 function qtdContainers(p) { return Math.max(1, (p.containers || []).filter(Boolean).length, parseInt(p.qtdContainer, 10) || 0); }
-function temCertificadoOrigem(p) { const d = p.docs || {}; return Number(p.custoCertificado) > 0 || Object.keys(d._files || {}).some(k => /certific/i.test(k) && (d._files[k] || []).length) || !!(d._custoDocs && d._custoDocs.custoCertificado); }
+function temCertificadoOrigem(p) { const d = p.docs || {}; if (d._semCertificado) return false; if (d._semCertificado === undefined) return true; return Number(p.custoCertificado) > 0 || Object.keys(d._files || {}).some(k => /certific/i.test(k) && (d._files[k] || []).length) || !!(d._custoDocs && d._custoDocs.custoCertificado); }
 function vaiProArmazem(p) { const d = p.docs || {}; if (d._armazem != null) return !!d._armazem; return !!(p.logArmazem || /ARMAZ/i.test(p.logModalidade || '')); }
 function textoPrevisto(r, p) {
   const q = qtdContainers(p);
@@ -1662,7 +1668,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '46';
+const VERSAO_TESTE = '47';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -1696,4 +1702,79 @@ async function alterarValorCusto(id, campo) {
   logAction('editar', 'PROCESSOS', id, `${PROCESS_COST_FIELDS[campo]}: valor ${p.docs._valorManual[campo] != null ? 'alterado para R$ ' + p.docs._valorManual[campo] : 'volta aos documentos'}`);
   try { await saveToSheets(); showToast('✅ Valor salvo'); } catch (e) { showToast('⚠️ ' + e.message); }
   render();
+}
+
+// Comprovante dividido entre pastas com o valor de cada uma no nome ("R$ 600,00 (parte do PIX de R$ 5.400,00 …)"):
+// acerta os processos e os valores pelo nome de cada cópia no Drive de origem (correção da importação de 11/10)
+async function corrigirPartesPeloNome() {
+  const fs = await driveListAll("(name contains 'parte do PIX' or name contains 'rateio') and trashed=false", 'id,name,md5Checksum');
+  const mapa = {};
+  fs.forEach(f => { if (!f.md5Checksum || /^FS\d{6}S?\+/.test(f.name)) return; const id = processoAtual(FS_DE(f.name)); const v = lerNomeArquivo(f.name).valor; if (id && v > 0) (mapa[f.md5Checksum] = mapa[f.md5Checksum] || {})[id] = v; });
+  window._partesPorMd5 = Object.assign(window._partesPorMd5 || {}, mapa);
+  let n = 0;
+  Object.entries(mapa).forEach(([md5, partes]) => {
+    const comRec = (S.processos || []).filter(p => (((p.docs || {})._files || {}).pagamento || []).some(f => f.md5 === md5));
+    if (!comRec.length) return;
+    const modeloP = comRec[0], modelo = modeloP.docs._files.pagamento.find(f => f.md5 === md5);
+    const campo = modelo.campoCusto || Object.keys(modeloP.docs._custoDocs || {}).find(c => (modeloP.docs._custoDocs[c].pagos || []).some(d => d.url === modelo.url));
+    if (!campo) return;
+    const pagoModelo = (modeloP.docs._custoDocs[campo].pagos || []).find(d => d.url === modelo.url) || {};
+    const banco = (modeloP.docs._costBanco || {})[campo];
+    let mudou = false;
+    // tira de quem não está no nome
+    comRec.filter(p => partes[p.id] == null).forEach(p => {
+      p.docs._files.pagamento = p.docs._files.pagamento.filter(f => f.md5 !== md5);
+      const reg = (p.docs._custoDocs || {})[campo];
+      if (reg) { reg.pagos = (reg.pagos || []).filter(d => d.url !== modelo.url); if (!(reg.fiscais || []).length && !(reg.pagos || []).length) { delete p.docs._custoDocs[campo]; p[campo] = ''; p[campo + '_status'] = ''; if (p.docs._costBanco) delete p.docs._costBanco[campo]; } else recalcularCustos(p, campo); }
+      logAction('editar', 'PROCESSOS', p.id, `${modelo.name}: não é deste processo (o nome do arquivo divide entre ${Object.keys(partes).join(', ')})`); mudou = true;
+    });
+    // põe / acerta o valor de cada processo citado
+    Object.entries(partes).forEach(([id, v]) => {
+      const p = (S.processos || []).find(x => x.id === id); if (!p) return;
+      p.docs = p.docs || {}; p.docs._files = p.docs._files || {};
+      if (!(p.docs._files.pagamento || []).some(f => f.md5 === md5)) { (p.docs._files.pagamento = p.docs._files.pagamento || []).push(Object.assign({}, modelo, { atalho: true, valor: v })); if (!p.docs.pagamento) p.docs.pagamento = modelo.url; }
+      p.docs._custoDocs = p.docs._custoDocs || {};
+      const reg = p.docs._custoDocs[campo] = p.docs._custoDocs[campo] || { fiscais: [], pagos: [] };
+      const d = (reg.pagos || []).find(x => x.url === modelo.url);
+      if (d && Math.abs((Number(d.valor) || 0) - v) < 0.01) return;
+      if (d) d.valor = v; else reg.pagos = (reg.pagos || []).concat([Object.assign({}, pagoModelo, { k: modelo.url, url: modelo.url, valor: v })]);
+      if (banco) { p.docs._costBanco = p.docs._costBanco || {}; if (!p.docs._costBanco[campo]) p.docs._costBanco[campo] = banco; }
+      recalcularCustos(p, campo);
+      logAction('editar', 'PROCESSOS', id, `${PROCESS_COST_FIELDS[campo]}: R$ ${v} (parte do comprovante, pelo nome do arquivo)`); mudou = true;
+    });
+    if (mudou) n++;
+  });
+  return n;
+}
+
+// FS260109S não foi criado na importação (a pasta do "S" era lida como FS260109): cria e leva o que é dele
+async function criarProcessoSFaltando() {
+  let n = 0;
+  for (const pB of (S.processos || []).filter(p => /^FS\d{6}$/.test(p.id))) {
+    const idS = pB.id + 'S';
+    const doS = Object.values(((pB.docs || {})._files) || {}).flat().filter(f => new RegExp('^(?:FS\\d{6}S?\\+)*' + idS + '\\b').test(f.nomeOriginal || '') || new RegExp('(^|\\+)' + idS + '( |\\+)').test(f.nomeOriginal || ''));
+    if (!doS.length || (S.processos || []).some(p => p.id === idS)) continue;
+    const pS = JSON.parse(JSON.stringify(pB));
+    pS.id = idS; pS.docs = { _apelido: (pB.docs || {})._apelido, _criadoDe: { arquivo: 'pasta ' + idS + ' (correção da importação)' } };
+    Object.keys(PROCESS_COST_FIELDS).forEach(c => { pS[c] = ''; pS[c + '_status'] = ''; });
+    ['cambioInvoice', 'cambioTaxa', 'cambioReais', 'cambioRecebido'].forEach(k => pS[k] = 0); pS.cambioStatus = 'Em Aberto'; pS.cambioFechamento = ''; pS.cambioRecebimento = '';
+    pS.dueNumero = ''; pS.dueChave = ''; pS.invoiceNum = 'Invoice - ' + pB.id; pS.contratoNum = 'Contrato - ' + pB.id;
+    const bl = doS.find(f => /BL\s*(\d{6,})/i.test(f.nomeOriginal || '')); pS.booking = bl ? (bl.nomeOriginal.match(/BL\s*(\d{6,})/i) || [])[1] : '';
+    pS.containers = []; pS.container = ''; pS.qtdContainer = '1';
+    S.processos.push(pS);
+    doS.forEach(f => { f.pastaOriginal = idS; });   // devolverArquivosDoS leva arquivos, custos, BL (booking e container)
+    // armazém pago num PIX só para os dois containers: metade para cada
+    const regAz = pB.docs._custoDocs && pB.docs._custoDocs.custoArmazem;
+    if (regAz && (regAz.pagos || []).length === 1 && !doS.some(f => (regAz.pagos[0].url === f.url))) {
+      const d = regAz.pagos[0], metade = Math.round(Number(d.valor) / 2 * 100) / 100;
+      d.valor = metade; recalcularCustos(pB, 'custoArmazem');
+      pS.docs._custoDocs = pS.docs._custoDocs || {}; pS.docs._custoDocs.custoArmazem = { fiscais: [], pagos: [Object.assign({}, d, { valor: metade })] };
+      if ((pB.docs._costBanco || {}).custoArmazem) pS.docs._costBanco = Object.assign({}, pS.docs._costBanco, { custoArmazem: pB.docs._costBanco.custoArmazem });
+      recalcularCustos(pS, 'custoArmazem');
+    }
+    logAction('criar', 'PROCESSOS', idS, 'pasta ' + idS + ' (não tinha sido criado na importação)');
+    try { await criarPastaProcesso(pS); } catch (e) {}
+    n++;
+  }
+  return n;
 }
