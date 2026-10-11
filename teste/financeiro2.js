@@ -301,7 +301,7 @@ function sugestaoLinha(l) {
 function lerControles(chave) {
   const g = id => { const el = document.getElementById(id); return el ? el.value : ''; };
   const k = chave.replace(/[^a-zA-Z0-9]/g, '').slice(-24);
-  return { categoria: g('bc-cat-' + k), centro: g('bc-cen-' + k), regra: (document.getElementById('bc-reg-' + k) || {}).checked };
+  return { categoria: g('bc-cat-' + k), centro: g('bc-cen-' + k), regra: (document.getElementById('bc-reg-' + k) || {}).checked, fixa: (document.getElementById('bc-fix-' + k) || {}).checked };
 }
 
 async function escolherCentro(sel, chave) {
@@ -411,6 +411,7 @@ async function conciliarLinha(chave, modo, silencioso) {
       const obj = novoLancamentoDeLinha(l, categoria, centro, extra);
       l.status = 'conciliado'; l.lancId = obj.id; l.categoria = categoria; l.centro = centro;
       if (c.regra) await aprenderRegra(l, categoria, centro);
+      if (c.fixa && typeof marcarComoFixa === 'function') await marcarComoFixa(l);
     }
     if (silencioso) return true;
     await persistir2();
@@ -601,7 +602,10 @@ function renderConciliacao() {
           <select id="bc-cen-${k}" aria-label="Centro de custo" onchange="escolherCentro(this,'${escHtml(l.chave)}')">${centroOpts((sug && sug.centro) || l.centro)}</select>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
+          <span style="display:flex;flex-direction:column;gap:4px">
           <label style="font-size:11px;color:var(--muted2);display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="bc-reg-${k}" style="width:auto">Sempre classificar ${l.documento ? 'este CNPJ/CPF' : 'este favorecido'} assim</label>
+          ${l.valor < 0 ? `<label style="font-size:11px;color:var(--muted2);display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="bc-fix-${k}" style="width:auto">Despesa fixa (repete todo mês)</label>` : ''}
+          </span>
           <span style="display:flex;gap:6px">
             <button class="btn btn-secondary btn-xs" onclick="ignorarLinha('${escHtml(l.chave)}')">Ignorar</button>
             ${sug && sug.acao === 'baixar' ? `<button class="btn btn-success btn-xs" onclick="conciliarLinha('${escHtml(l.chave)}','baixar')">Dar baixa</button>` : ''}
