@@ -373,7 +373,7 @@ function lerCambio(texto) {
 // Comprovante de PIX/transferência/boleto do Itaú
 function lerPagamento(texto) {
   const T = String(texto || '');
-  if (!/comprovante\s+de\s+(transfer[eê]ncia|pagamento|pix)|comprovante\s+pix|pix\s+(enviado|realizado)|transfer[eê]ncia\s+(realizada|efetuada)|pagamento\s+(realizado|efetuado)|via\s+SISPAG|valor\s+da\s+transfer[eê]ncia|tipo\s+de\s+transfer[eê]ncia|autentica[cç][aã]o\s+do\s+comprovante|ID\s+da\s+transa[cç][aã]o\s*:?\s*E\d{8}/i.test(T)) return null;
+  if (!/comprovante\s+de\s+(transfer[eê]ncia|pagamento|pix)|comprovante\s+pix|pix\s+(enviado|realizado)|transfer[eê]ncia\s+(realizada|efetuada)|pagamento\s+(realizado|efetuado)|via\s+SISPAG|valor\s+da\s+transfer[eê]ncia|tipo\s+de\s+transfer[eê]ncia|autentica[cç][aã]o\s+do\s+comprovante|ID\s+da\s+transa[cç][aã]o\s*:?\s*E\d{8}|autentica[cç][aã]o\s+no\s+comprovante|dados\s+do\s+benefici[aá]rio[\s\S]{0,400}valor\s+do\s+pagamento/i.test(T)) return null;
   const g = re => { const m = T.match(re); return m ? m[1].trim() : ''; };
   return {
     valor: numBR(g(/\bvalor(?:\s+do\s+pagamento|\s+da\s+transfer[eê]ncia)?\s*:?\s*R\$\s*([\d.,]+)/i)),
@@ -388,6 +388,19 @@ function lerPagamento(texto) {
 // Comprovante lido por OCR (print/foto): rótulos podem vir separados do valor
 function completarPagamento(pag, texto) {
   const T = String(texto || '');
+  // comprovante de boleto do Itaú (PDF): "dados do beneficiário / nome / ...", "data do pagamento", "valor do pagamento (=) R$"
+  if (/dados\s+do\s+benefici[aá]rio/i.test(T)) {
+    if (!pag.valor) { const m = T.match(/valor\s+do\s+pagamento\s*\n?\s*(?:\(=\)\s*)?R\$\s*([\d.]+,\d{2})/i); if (m) pag.valor = numBR(m[1]); }
+    if (!pag.recebedor) { const m = T.match(/dados\s+do\s+benefici[aá]rio\s*\n?\s*(?:nome|raz[aã]o social)\s*\n?\s*([^\n]{3,80})/i); if (m) pag.recebedor = m[1].trim(); }
+    if (!pag.documento) { const m = T.match(/benefici[aá]rio[\s\S]{0,120}?cpf\s*\/\s*cnpj\s*:?\s*([\d.\/-]{11,18})/i); if (m) pag.documento = m[1]; }
+    if (!pag.data) {
+      const M = { jan: '01', fev: '02', mar: '03', abr: '04', mai: '05', jun: '06', jul: '07', ago: '08', set: '09', out: '10', nov: '11', dez: '12' };
+      const m = T.match(/data\s+do\s+pagamento\s*\n?\s*(\d{1,2})\s+(?:de\s+)?(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[a-zç]*\.?\s+(?:de\s+)?(\d{4})/i) ;
+      const d = T.match(/data\s+do\s+pagamento\s*\n?\s*(\d{2}\/\d{2}\/\d{4})/i);
+      if (d) pag.data = d[1]; else if (m) pag.data = m[1].padStart(2, '0') + '/' + M[m[2].toLowerCase()] + '/' + m[3];
+    }
+    pag.tipoPagamento = pag.tipoPagamento || 'boleto';
+  }
   if (!pag.valor) { const m = T.match(/R\$\s*([\d.]+,\d{2})/); if (m) { pag.valor = numBR(m[1]); pag.valorIncerto = true; } }
   if (!pag.data) { const m = T.match(/\b(\d{2}\/\d{2}\/\d{4})\b/); if (m) pag.data = m[1]; }
   if (!pag.data) {   // "10 jun. 2026, 16:26:10, via SISPAG"
@@ -632,6 +645,7 @@ function identificarItem(item) {
     const parte = (Number(item.info.valor) || 0) / ids.length;
     item.aviso = (item.aviso ? item.aviso + ' ' : '') + `Pagamento de ${ids.join(' + ')}: dividido igualmente (R$ ${parte.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} cada).`;
   }
+  if (item.processo === '__ADM' && !item.categoriaManual && typeof categoriaAdm === 'function') { const c = categoriaAdm(item); if (c) item.categoria = c; }
   item.duplicado = procurarDuplicado(item);
   return item;
 }
@@ -991,6 +1005,9 @@ function renderEntrada() {
         <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-dat-${i}">Data</label>
           <input id="ent-dat-${i}" type="date" value="${escHtml(it.info.data || '')}" onchange="setInfoEntrada(${i},'data',this.value)"/></div>
       </div>` : ''}
+      ${it.processo === '__ADM' && typeof categOpts === 'function' ? `
+      <div class="ig" style="margin-top:10px;margin-bottom:0"><label class="lbl" for="ent-cat-${i}">Categoria da despesa${it.categoria ? '' : ' <span style="color:var(--yellow)">· escolha</span>'}</label>
+        <select id="ent-cat-${i}" onchange="setCategoriaAdm(${i},this.value)">${categOpts(it.categoria || '')}</select></div>` : ''}
       ${(it.tipo === 'pagamento' || it.tipo === 'recibo') && it.processo === '__ADM' ? `
       <div class="g2" style="margin-top:10px">
         <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-val-${i}">Valor (R$)${!Number(it.info.valor) ? ' <span style="color:var(--red)">· não lido</span>' : ''}</label>
