@@ -193,7 +193,7 @@ function renderInicio() {
       <div><div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:26px">Início</div><div style="font-size:13px;color:var(--muted2)">${new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</div></div>
       <div style="font-size:13px;font-weight:600;color:var(--accent);background:var(--bg4);padding:6px 12px;border-radius:999px">${ativos.filter(p => !processoFechado(p)).length} processos em andamento</div>
     </div>
-    ${blocoPagar}${blocoFalta}${blocoCargas}${blocoFixos()}${blocoResultado}
+    ${blocoPagar}${blocoFalta}${blocoCargas}${blocoResultado}
   </div>`;
 }
 
