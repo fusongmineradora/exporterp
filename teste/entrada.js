@@ -747,6 +747,9 @@ function identificarItem(item) {
   }
   { const certo = typeof processoDoPagamento === 'function' ? processoDoPagamento(item.info.pagamento && item.info.pagamento.idTransacao) : '';
     if (certo && (S.processos || []).some(p => p.id === certo)) { item.processo = certo; delete item.pastaErrada; delete item.corrigido; item.processosExtras = []; } }
+  // decisão sua sobre este arquivo (ex.: Recibo Mineração WL é do FS260096)
+  { const d = typeof DECISOES_ENTRADA !== 'undefined' && DECISOES_ENTRADA.find(([re]) => re.test(item.nome || ''));
+    if (d && (S.processos || []).some(p => p.id === d[1])) { item.processo = d[1]; item.processosExtras = []; delete item.pastaErrada; delete item.corrigido; item.aviso = ''; item.confianca = 'alta'; item.motivo = (item.motivo ? item.motivo + ' · ' : '') + 'decisão sua: ' + d[1]; } }
   // despesa que nunca é de processo (Embraport: taxa atípica do porto) → comprovantes do mês
   if (typeof FORA_DOS_PROCESSOS !== 'undefined' && FORA_DOS_PROCESSOS.some(re => re.test(String((item.info.emitNome || '') + ' ' + ((item.info.pagamento || {}).recebedor || ''))))) { item.processo = '__ADM'; item.categoria = 'Porto / Taxas'; item.processosExtras = []; delete item.pastaErrada; delete item.corrigido; }
   // Comprovante de pagamento sem nenhuma pista de processo → sugere "despesa do mês" (confira)
