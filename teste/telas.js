@@ -20,6 +20,7 @@ function temDoc(p, ...tipos) { return tipos.some(t => arquivos(p, t).length > 0)
 
 // Fase atual: vem das datas (as mesmas que o ERP usa para o status)
 function faseProcesso(p) {
+  if (p.status === 'Cancelado') return -1;
   const hoje = new Date();
   const passou = s => { const d = brParaDate(s); return d && d <= hoje; };
   const eta = p.docs && p.docs._viagem && p.docs._viagem.eta;
@@ -62,6 +63,7 @@ function estadoCusto(p, campo) {
 }
 
 function pendenciasProcesso(p) {
+  if (p.status === 'Cancelado') return [];
   const f = faseProcesso(p), out = [];
   CHECKLIST.forEach(c => { if (f >= c.fase && !temDoc(p, ...c.tipos)) out.push({ tipo: 'doc', texto: (f >= 3 && c.fase <= 3 ? 'embarcado sem ' : 'sem ') + c.nome }); });
   CUSTOS_OBRIGATORIOS.forEach(c => { if (f >= c.fase && !(Number(p[c.campo]) > 0)) out.push({ tipo: 'custo', texto: 'sem custo de ' + PROCESS_COST_FIELDS[c.campo].toLowerCase() + (c.campo === 'custoMaritimo' ? ' (CFR)' : '') }); });
