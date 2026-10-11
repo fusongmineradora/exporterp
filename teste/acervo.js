@@ -685,7 +685,7 @@ async function executarImportacaoTudo() {
           const t = tipoDaPasta(f.name), fs = FS_DE(f.name);
           if (fs) anotarFS(f.name, pasta.cancelado);
           // subpasta de câmbio dentro de um processo: o processo vem do contrato, não da pasta
-          fila.push({ id: f.id, nome: pasta.nome + ' / ' + f.name.trim(), cancelado: pasta.cancelado, extrato: pasta.extrato || t === 'extrato', contexto: fs || (t === 'cambio' ? '' : t === 'comprovantes' ? 'ADM' : pasta.contexto) });
+          fila.push({ id: f.id, nome: pasta.nome + ' / ' + f.name.trim(), cancelado: pasta.cancelado, extrato: pasta.extrato || t === 'extrato', dossie: pasta.dossie || /DOSSI/.test(semAcento(f.name)), contexto: fs || (t === 'cambio' ? '' : t === 'comprovantes' ? 'ADM' : pasta.contexto) });
         } else if (/\.ofx$/i.test(f.name) || f.mimeType === 'application/x-ofx') {
           ofx.push(f);
         } else if (pasta.extrato && /\.(xlsx|xls|csv)$/i.test(f.name)) {
@@ -693,7 +693,7 @@ async function executarImportacaoTudo() {
         } else if (pasta.extrato) {
           // extratos mensais em PDF: ficam só guardados no Drive (o OFX já traz os movimentos)
         } else if (!/^application\/vnd\.google-apps/.test(f.mimeType) && !ACERVO_IGNORAR_ARQ.test(f.name)) {
-          arquivos.push({ ...f, contexto: pasta.contexto, pasta: pasta.nome });
+          arquivos.push({ ...f, contexto: pasta.contexto, pasta: pasta.nome, dossie: !!pasta.dossie });
         }
       }
     }
@@ -704,7 +704,9 @@ async function executarImportacaoTudo() {
     ((S.banco && S.banco.docs) || []).forEach(d => d.md5 && ja.add(d.md5));
     try { const pc = await getTesteFolder('🏦 Câmbio'); (await driveListAll(`'${pc}' in parents and trashed=false`, 'md5Checksum')).forEach(f => f.md5Checksum && ja.add(f.md5Checksum)); } catch (e) {}
     const porMd5 = {};
-    arquivos.forEach(f => { if (f.md5Checksum) (porMd5[f.md5Checksum] = porMd5[f.md5Checksum] || new Set()).add(f.contexto); });
+    // cópia guardada num dossiê (ex.: "07 Dossiê RFB" do FS260113 com os contratos de outros processos) não liga o arquivo ao processo do dossiê
+    arquivos.filter(f => !f.dossie).forEach(f => { if (f.md5Checksum) (porMd5[f.md5Checksum] = porMd5[f.md5Checksum] || new Set()).add(f.contexto); });
+    arquivos.filter(f => f.dossie).forEach(f => { if (f.md5Checksum && !porMd5[f.md5Checksum]) porMd5[f.md5Checksum] = new Set([f.contexto]); });
     const copiadoMd5 = new Set();
     for (let i = 0; i < arquivos.length; i++) {
       const f = arquivos[i];
@@ -945,6 +947,7 @@ setTimeout(async function esperarDados() {
     }));
     // arquivos da pasta FS2601xxS que foram para o principal (importação de 11/10): voltam para o S
     try { mudou += await devolverArquivosDoS(); } catch (e) { console.warn('arquivos S', e); }
+    try { mudou += await corrigirCambioDossie(); } catch (e) { console.warn('dossiê', e); }
     mudou += corrigirFaturasDigitadas();
     // processo renumerado (FS260105 → FS260107) e custos previstos
     mudou += juntarProcessosRenumerados();
@@ -1440,5 +1443,67 @@ function corrigirFaturasDigitadas() {
   }));
   // todas as cópias do mesmo contrato com as faturas corrigidas
   (S.processos || []).forEach(p => ((((p.docs || {})._files || {}).comprovantes) || []).forEach(f => { const m = f.cambio && modelos[f.cambio.referencia]; if (m && f.cambio !== m.c) f.cambio.faturas = m.c.faturas; }));
+  return n;
+}
+
+// Correção da importação de 11/10: contratos de câmbio antigos (sem "FATURA") copiados no dossiê de outro processo
+// (FS260113 / "07 Dossiê RFB") foram divididos também com esse processo. Tira o processo do dossiê, refaz o dólar
+// por processo e refaz a conciliação desses contratos com o extrato (o valor em reais volta a ser o do banco).
+async function corrigirCambioDossie() {
+  const contratos = {};
+  (S.processos || []).forEach(p => ((((p.docs || {})._files || {}).comprovantes) || []).forEach(f => {
+    const c = f.cambio; if (!c || !c.referencia || !(c.faturas || []).length || !(c.faturas || []).every(x => x.pelaPasta) || c.faturas.length < 2) return;
+    (contratos[c.referencia] = contratos[c.referencia] || { c, md5: f.md5, url: f.url, recs: [] }).recs.push({ p, f });
+  }));
+  if (!Object.keys(contratos).length) return 0;
+  // md5 dos arquivos guardados em pastas "Dossiê" de cada processo (no Drive de origem)
+  const pastas = await driveListAll("name contains 'Dossi' and mimeType='application/vnd.google-apps.folder' and trashed=false", 'id,name,parents');
+  const doDossie = {};   // md5 → Set(processo)
+  for (const d of pastas) {
+    let proc = '';
+    try { let pai = (d.parents || [])[0]; for (let i = 0; i < 3 && pai && !proc; i++) { const m = await driveAPI('GET', '/files/' + pai, null, 'fields=id,name,parents'); proc = FS_DE(m.name || ''); pai = (m.parents || [])[0]; } } catch (e) {}
+    if (!proc) continue;
+    const fila = [d.id];
+    while (fila.length) {
+      const id = fila.shift();
+      for (const f of await driveListAll(`'${id}' in parents and trashed=false`, 'id,mimeType,md5Checksum')) {
+        if (f.mimeType === 'application/vnd.google-apps.folder') fila.push(f.id);
+        else if (f.md5Checksum) (doDossie[f.md5Checksum] = doDossie[f.md5Checksum] || new Set()).add(proc);
+      }
+    }
+  }
+  let n = 0;
+  for (const [ref, k] of Object.entries(contratos)) {
+    const fora = (k.c.faturas || []).map(x => x.processo).filter(id => k.md5 && doDossie[k.md5] && doDossie[k.md5].has(id));
+    const ficam = (k.c.faturas || []).map(x => x.processo).filter(id => !fora.includes(id));
+    if (!fora.length || !ficam.length) continue;
+    const usd = Math.round((Number(k.c.usdTotal) || 0) / ficam.length * 100) / 100;
+    const faturas = ficam.map(id => ({ processo: id, usd, pelaPasta: true }));
+    const ct = k.c.contratoExtrato;
+    // processos do dossiê: sai o contrato e o câmbio dele
+    fora.forEach(id => { const p = S.processos.find(x => x.id === id); if (!p) return;
+      p.docs._files.comprovantes = (p.docs._files.comprovantes || []).filter(f => !(f.cambio && f.cambio.referencia === ref));
+      if (!p.docs._files.comprovantes.length) { delete p.docs._files.comprovantes; delete p.docs.comprovantes; }
+      if (p.docs._cambioDocs) { Object.keys(p.docs._cambioDocs).forEach(x => { if (x === ref || String(p.docs._cambioDocs[x].contrato) === String(ct)) delete p.docs._cambioDocs[x]; }); }
+      recalcularCambio(p);
+      logAction('editar', 'PROCESSOS', id, `Câmbio ${ref} retirado: era só uma cópia no dossiê deste processo`);
+    });
+    // desfaz a conciliação desse contrato (será refeita com a divisão certa)
+    S.lancamentos = (S.lancamentos || []).filter(l => !(['Câmbio', 'Tarifa de câmbio'].includes(l.categoria) && ((l.docs && l.docs._cambio && String(l.docs._cambio.contrato) === String(ct)) || String(l.descricao || '').includes('contrato ' + ct) || String(l.descricao || '').includes('câmbio ' + ct))));
+    ((S.banco && S.banco.linhas) || []).forEach(l => { if (l.lancId === 'cambio:' + ct) { l.status = 'pendente'; delete l.lancId; delete l.categoria; delete l.centro; } });
+    // processos que ficam: dólar dividido entre eles (o real volta a vir do extrato ao conciliar)
+    ficam.forEach(id => { const p = S.processos.find(x => x.id === id); if (!p) return;
+      ((p.docs._files || {}).comprovantes || []).forEach(f => { if (f.cambio && f.cambio.referencia === ref) { f.cambio.faturas = faturas; f.cambio.usdFatura = usd; } });
+      if (p.docs._cambioDocs && p.docs._cambioDocs[ref]) delete p.docs._cambioDocs[ref].banco;
+      aplicarCambioNoProcesso(p, { referencia: ref, taxa: k.c.taxa, valorReais: k.c.reaisTotal, valorMoeda: k.c.usdTotal, data: k.c.data, contratoExtrato: ct, faturas }, k.url);
+      logAction('editar', 'PROCESSOS', id, `Câmbio ${ref}: dividido entre ${ficam.join(' + ')} (USD ${usd} cada)`);
+    });
+    n++;
+  }
+  if (n) {
+    try { if (typeof salvarBanco === 'function') await salvarBanco(); } catch (e) {}
+    try { if (typeof autoConciliar === 'function') await autoConciliar(); } catch (e) { console.warn('reconciliar', e); }
+    try { if (typeof salvarBanco === 'function') await salvarBanco(); } catch (e) {}
+  }
   return n;
 }
