@@ -684,9 +684,11 @@ function renderConciliacao() {
       <label class="btn btn-primary btn-sm" for="ofx-file" style="cursor:pointer">📥 Importar extrato OFX</label>
       <button class="btn btn-secondary btn-sm" onclick="importarOFXDrive()">☁️ OFX da pasta Entrada</button>
       <button class="btn btn-secondary btn-sm" style="border-color:var(--green);color:var(--green)" onclick="conciliarAutomatico()">⚡ Conciliar automático</button>
+      <button class="btn btn-secondary btn-sm" onclick="abrirRelCambio()">🏦 Relatório de câmbio (DU-E)</button>
     </div>
     <input type="file" id="ofx-file" hidden onchange="importarOFX(this.files[0]);this.value=''">
   </div>
+  ${S._relCambio ? blocoRelCambio() : ''}
   ${B.carregando ? `<div class="card" style="padding:14px;color:var(--muted);font-size:13px">⏳ Carregando extrato...</div>` : ''}
   ${B.erro ? `<div class="card" style="padding:14px;color:var(--red);font-size:13px">⚠️ ${escHtml(B.erro)}</div>` : ''}
   ${!window._sheetsToken ? `<div class="card" style="padding:14px;color:var(--muted);font-size:13px">Conecte ao Google Drive para usar a conciliação.</div>` : ''}
@@ -836,4 +838,92 @@ async function conciliarAutomatico() {
     B.msg = { tipo: 'ok', texto: `Conciliação automática: ${r.cambio} câmbio(s), ${r.baixas} pagamento(s) ligados a comprovantes/custos, ${r.regras} tarifa(s)/regra(s), ${r.rendimentos} mês(es) de rendimento. ${r.pendentes} linha(s) continuam pendentes.` };
   } catch (e) { B.msg = { tipo: 'erro', texto: 'Erro na conciliação automática: ' + (e.message || e) }; }
   hideSyncIndicator(); render();
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// Relatório de câmbio para o banco (pendências documentais do Itaú):
+// cada contrato com os processos que ele paga, a DU-E e a chave de acesso de cada um.
+// Tudo vem do contrato de câmbio e da DU-E anexados — nada é digitado.
+// ═══════════════════════════════════════════════════════════════
+function contratosParaBanco() {
+  const m = {};
+  (S.processos || []).forEach(p => (((p.docs || {})._files || {}).comprovantes || []).forEach(f => {
+    const c = f.cambio; if (!c || !c.referencia) return;
+    const r = m[c.referencia] = m[c.referencia] || { referencia: c.referencia, data: c.data || '', liquidacao: c.liquidacao || '', embarque: c.embarque || '', modalidade: c.modalidade || '', usd: Number(c.usdTotal) || 0, faturas: (c.faturas || []).map(x => x.processo), arquivo: f };
+    ['liquidacao', 'embarque', 'modalidade'].forEach(k => { if (!r[k] && c[k]) r[k] = c[k]; });
+    if (!r.faturas.length && !r.faturas.includes(p.id)) r.faturas.push(p.id);
+  }));
+  return Object.values(m).map(r => {
+    const procs = r.faturas.map(id => (S.processos || []).find(p => p.id === id) || { id });
+    const faltaDue = procs.filter(p => !p.dueNumero).map(p => p.id);
+    return { ...r, modalidade: r.modalidade || 'PAEX', liquidacao: r.liquidacao || r.data, procs, faltaDue,
+      processos: r.faturas.join(' + '), dues: procs.map(p => p.dueNumero || '—').join(' / '), chaves: procs.map(p => p.dueChave || '—').join(' / ') };
+  }).sort((a, b) => (brToIso(b.data) || '').localeCompare(brToIso(a.data) || ''));
+}
+// contratos anexados antes desta versão: relê o PDF para pegar liquidação e previsão de embarque
+async function completarContratosAntigos() {
+  let mudou = 0;
+  for (const r of contratosParaBanco().filter(x => !x.embarque && x.arquivo && x.arquivo.id)) {
+    try {
+      const c = lerCambio(await pdfTexto(await driveDownload(r.arquivo.id)));
+      if (!c) continue;
+      (S.processos || []).forEach(p => (((p.docs || {})._files || {}).comprovantes || []).forEach(f => {
+        if (f.cambio && f.cambio.referencia === r.referencia) { f.cambio.liquidacao = c.liquidacao; f.cambio.embarque = c.embarque; f.cambio.modalidade = c.modalidade; mudou++; }
+      }));
+    } catch (e) { console.warn('reler contrato', r.referencia, e.message); }
+  }
+  if (mudou) { try { await saveToSheets(); } catch (e) {} }
+  return mudou;
+}
+async function abrirRelCambio() {
+  S._relCambio = { sel: null, carregando: true }; render();
+  await completarContratosAntigos();
+  const lista = contratosParaBanco();
+  S._relCambio = { sel: Object.fromEntries(lista.map(r => [r.referencia, true])), carregando: false };
+  render();
+}
+const COLS_BANCO = ['Modalidade', 'Número Bacen', 'Dt. Contrato', 'Dt. Liquidação', 'Dt. Prev. Embarque', 'Moeda', 'Valor do Contrato', 'Saldo do Contrato', 'Nº processo', 'Número da DI / RE / DUE', 'Chave de Acesso (DUE)', 'Valor a Aplicar', 'Nº último Protocolo DI (para Importação)', 'CNPJ de registro DI (Importação)'];
+const linhaBanco = r => [r.modalidade, r.referencia, r.data, r.liquidacao, r.embarque || '', '220', fmt(r.usd), fmt(r.usd), r.processos, r.dues, r.chaves, fmt(r.usd), 'Não se aplica', 'Não se aplica'];
+function selecionadosBanco() { const R = S._relCambio || {}; return contratosParaBanco().filter(r => R.sel && R.sel[r.referencia]); }
+async function copiarRelCambio() {
+  const rows = selecionadosBanco(); if (!rows.length) { showToast('Marque pelo menos um contrato'); return; }
+  const td = 'style="border:1px solid #999;padding:3px 6px;font:11px Arial;white-space:nowrap"';
+  const html = `<table style="border-collapse:collapse"><tr>${COLS_BANCO.map(c => `<th ${td.replace('font:11px', 'font:bold 11px')} bgcolor="#cfe2f3">${c}</th>`).join('')}</tr>${rows.map(r => `<tr>${linhaBanco(r).map(v => `<td ${td}>${escHtml(v)}</td>`).join('')}</tr>`).join('')}</table>`;
+  const tsv = [COLS_BANCO].concat(rows.map(linhaBanco)).map(l => l.join('\t')).join('\n');
+  try {
+    if (window.ClipboardItem) await navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob([tsv], { type: 'text/plain' }) })]);
+    else await navigator.clipboard.writeText(tsv);
+    showToast('✅ Tabela copiada — cole na resposta do e-mail do banco');
+  } catch (e) { showToast('⚠️ Não consegui copiar: ' + e.message); }
+}
+function baixarRelCambio() {
+  const rows = selecionadosBanco(); if (!rows.length) { showToast('Marque pelo menos um contrato'); return; }
+  const esc = v => '"' + String(v).replace(/"/g, '""') + '"';
+  const csv = '﻿' + [COLS_BANCO].concat(rows.map(linhaBanco)).map(l => l.map(esc).join(';')).join('\r\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = 'Pendencias cambio Itau ' + new Date().toISOString().slice(0, 10) + '.csv'; document.body.appendChild(a); a.click(); a.remove();
+}
+function blocoRelCambio() {
+  const R = S._relCambio;
+  if (R.carregando) return `<div class="card" style="padding:16px;font-size:13px;color:var(--muted)">⏳ Montando o relatório de câmbio…</div>`;
+  const lista = contratosParaBanco();
+  const n = lista.filter(r => R.sel[r.referencia]).length;
+  return `<div class="card" style="padding:16px;margin-bottom:14px;border-left:3px solid var(--accent)">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">
+      <div><div style="font-weight:700;font-size:15px">🏦 Relatório de câmbio para o banco</div>
+      <div style="font-size:12px;color:var(--muted2)">Contratos de câmbio com o processo, a DU-E e a chave de acesso de cada exportação. Marque os que o banco pediu.</div></div>
+      <button class="btn btn-secondary btn-xs" onclick="S._relCambio=null;render()">Fechar</button></div>
+    ${lista.length ? `<div style="overflow-x:auto;margin-top:10px"><table style="border-collapse:collapse;font-size:12px;min-width:640px;width:100%">
+      <tr style="text-align:left;color:var(--muted2)"><th style="padding:6px"></th><th style="padding:6px">Contrato</th><th style="padding:6px">Data</th><th style="padding:6px">Prev. emb.</th><th style="padding:6px">USD</th><th style="padding:6px">Processos</th><th style="padding:6px">DU-E</th><th style="padding:6px">Chave</th></tr>
+      ${lista.map(r => `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:6px"><input type="checkbox" style="width:auto" ${R.sel[r.referencia] ? 'checked' : ''} onchange="S._relCambio.sel['${r.referencia}']=this.checked;render()"></td>
+        <td style="padding:6px;font-family:'JetBrains Mono',monospace">${escHtml(r.referencia)}</td><td style="padding:6px">${escHtml(r.data)}</td><td style="padding:6px">${escHtml(r.embarque || '—')}</td><td class="num" style="padding:6px">${fmt(r.usd)}</td>
+        <td style="padding:6px">${r.procs.map(p => `<b>${escHtml(p.id)}</b>`).join(' + ')}</td>
+        <td style="padding:6px;font-family:'JetBrains Mono',monospace;${r.faltaDue.length ? 'color:var(--yellow)' : ''}">${escHtml(r.dues)}</td><td style="padding:6px;font-family:'JetBrains Mono',monospace">${escHtml(r.chaves)}</td></tr>
+        ${r.faltaDue.length ? `<tr><td style="padding:6px"></td><td colspan="7" style="font-size:11.5px;color:var(--yellow);padding:0 6px 6px">Falta a DU-E de ${escHtml(r.faltaDue.join(', '))} — anexe o extrato da DU-E na Caixa de Entrada</td></tr>` : ''}`).join('')}
+    </table></div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" style="min-height:42px" onclick="copiarRelCambio()" ${n ? '' : 'disabled'}>📋 Copiar tabela (${n}) para o e-mail</button><button class="btn btn-secondary btn-sm" style="min-height:42px" onclick="baixarRelCambio()" ${n ? '' : 'disabled'}>⬇️ Baixar planilha</button></div>`
+    : '<div style="font-size:13px;color:var(--muted2);margin-top:10px">Nenhum contrato de câmbio anexado ainda.</div>'}
+  </div>`;
 }
