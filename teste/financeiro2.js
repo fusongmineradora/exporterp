@@ -702,7 +702,8 @@ function renderConciliacao() {
   ${B.filtro === 'pendente' && lista.length ? `<div class="sec-divider"><div class="sec-divider-line"></div><div class="sec-divider-label">Pagamentos e outros</div><div class="sec-divider-line"></div></div>` : ''}
   ${lista.map(cardLinha).join('')}
   ${total > lista.length ? `<div style="text-align:center;margin:12px 0"><button class="btn btn-secondary btn-sm" onclick="S.banco.limite+=40;render()">Mostrar mais (${total - lista.length})</button></div>` : ''}
-  ${B.carregado && !B.linhas.length ? `<div class="card" style="text-align:center;padding:30px;color:var(--muted)">Nenhum extrato importado ainda. Baixe o OFX no app do Itaú e toque em "Importar extrato OFX".</div>` : ''}`;
+  ${B.carregado && !B.linhas.length ? `<div class="card" style="text-align:center;padding:30px;color:var(--muted)">Nenhum extrato importado ainda. Baixe o OFX no app do Itaú e toque em "Importar extrato OFX".</div>` : ''}
+  ${typeof blocoFixos === 'function' && B.carregado ? `<div style="margin-top:18px">${blocoFixos()}</div>` : ''}`;
 }
 
 // ── Clientes & Resultado ────────────────────────────────────
