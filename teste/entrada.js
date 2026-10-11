@@ -431,7 +431,7 @@ function anoProcessos() {
 }
 function processoAtual(id) { const a = (typeof aliasesProcesso === 'function' ? aliasesProcesso() : {})[id]; return a || id; }
 function lerAbreviados(txt) {
-  const T = String(txt || '').toUpperCase().replace(/FS(\d{6})((?:\d{2}){1,3})(?!\d)/g, (m, a, b) => 'FS' + a + ' ' + b.match(/\d{2}/g).join(' ') + ' ');
+  const T = String(txt || '').toUpperCase().replace(/(\d)\s*E\s*(?=\d{2,3}S?(?![\dA-DF-RT-Z]))/g, '$1 ').replace(/FS(\d{6})((?:\d{2}){1,3})(?!\d)/g, (m, a, b) => 'FS' + a + ' ' + b.match(/\d{2}/g).join(' ') + ' ');
   const out = [], pesos = {}, ano = anoProcessos();
   const re = /FS\s?(\d{3,6})(S?)((?:[\s,;+\/]*\d{2,3}S?(?:\s*X\s*\d{1,2})?(?=[\s.,;+\/\-_)]|$)|\s*X\s*\d{1,2}(?=[\s.,;+\/\-_)]|$))*)/g; let m;
   const add = (id, peso) => { id = processoAtual(id); if (!out.includes(id)) out.push(id); if (peso > 1) pesos[id] = peso; };
@@ -777,6 +777,12 @@ function identificarItem(item) {
   if (!ids.length) ids = ((item.info.pagamento && item.info.pagamento.processos) || []).map(processoAtual).filter(existe);
   if (ids.length < 2) { const abN = lerAbreviados(nomeSemPasta), peloNome = abN.processos.filter(existe); if (peloNome.length > 1) { ids = peloNome; ab = abN; } }
   if (item._divPeso) { delete item.divisaoValores; delete item._divPeso; }
+  // cada pasta tem a sua cópia com "R$ parte (parte do PIX de R$ total)": vale o valor de cada pasta
+  const partes = item.md5 && window._partesPorMd5 && window._partesPorMd5[item.md5];
+  if (partes && Object.keys(partes).filter(existe).length > 1 && (item.tipo === 'pagamento' || item.tipo === 'recibo')) {
+    ids = Object.keys(partes).filter(existe); ab = { processos: ids, pesos: {} };
+    item.divisaoValores = Object.fromEntries(ids.map(id => [id, partes[id]])); item._divPeso = true;
+  }
   // comprovante / recibo salvo nas pastas de mais de um processo: pagou os dois → divide
   if (ids.length < 2 && (item.tipo === 'pagamento' || item.tipo === 'recibo') && (item.pastaProcessos || []).length > 1) ids = item.pastaProcessos.filter(id => (S.processos || []).some(p => p.id === id));
   if (ids.length > 1 && (item.tipo === 'pagamento' || item.tipo === 'recibo')) {
@@ -788,7 +794,9 @@ function identificarItem(item) {
     if ((item.pastaProcessos || []).length && item.pastaProcessos.every(id => ids.includes(id))) { delete item.pastaErrada; delete item.corrigido; item.aviso = String(item.aviso || '').replace(/Conflito:[^.]*\.[^.]*\./, '').trim(); if (item._base && item._base.confianca === 'alta') item.confianca = 'alta'; }
     const f2 = v => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const pesos = ids.map(id => (ab.pesos && ab.pesos[id]) || 1), somaP = pesos.reduce((a, x) => a + x, 0), total = Number(item.info.valor) || 0;
-    if (pesos.some(x => x > 1) && !item.divisaoValores) {
+    if (item._divPeso && item.divisaoValores && ids.every(id => item.divisaoValores[id] != null) && !pesos.some(x => x > 1)) {
+      item.aviso = (item.aviso ? item.aviso + ' ' : '') + `Pagamento de ${ids.join(' + ')}: valor de cada pasta pelo nome do arquivo (${ids.map(id => id + ' R$ ' + f2(item.divisaoValores[id])).join(' · ')}).`;
+    } else if (pesos.some(x => x > 1) && !item.divisaoValores) {
       // "FS 113x2 114": divide por container (2 partes para o 113, 1 para o 114); o último leva os centavos que sobram
       const vals = pesos.map(w => Math.round(total * w / somaP * 100) / 100);
       vals[vals.length - 1] = Math.round((total - vals.slice(0, -1).reduce((a, x) => a + x, 0)) * 100) / 100;
