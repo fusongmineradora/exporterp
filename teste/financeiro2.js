@@ -539,6 +539,7 @@ async function conciliarCambio(k, silencioso) {
   const pend = B.linhas.filter(l => l.status === 'pendente');
   const gr = gruposCambio(pend).find(x => x.k === k);
   if (!gr) return;
+  if (typeof corrigirFaturasDigitadas === 'function' && corrigirFaturasDigitadas()) { try { await saveToSheets(); } catch (e) {} }
   const ct = contratosCambio()[gr.contrato];
   // contrato que paga faturas de processos ainda não criados: não reparte (o valor iria todo para os que existem)
   const faltam = ct && ct.todas ? ct.todas.filter(id => !(S.processos || []).some(p => p.id === id)) : [];
