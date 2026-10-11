@@ -593,7 +593,7 @@ function tipoDaPasta(nome) {
   const u = semAcento(nome);
   if (/CANCELAD/.test(u) && !/^FS\s?\d{6}/.test(u)) return 'cancelados';
   if (/^FS\s?\d{6}/.test(u)) return 'processo';
-  if (/^COMPROVANTE/.test(u)) return 'comprovantes';
+  if (/^COMPROVANTE|DESPESAS GERAIS|^20\d{2}(-\d{2})?\b|EMPRESTIMOS? (?:DO |AO )?SOCIO/.test(u)) return 'comprovantes';   // organização nova: Despesas Gerais / 2026 / 2026-08 Agosto, Empréstimos sócio
   if (/EXTRATO/.test(u)) return 'extrato';
   if (/CAMBIO|CONTRATO|\bDUE\b|DU-E/.test(u)) return 'cambio';
   return '';
