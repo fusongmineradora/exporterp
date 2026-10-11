@@ -102,7 +102,12 @@
   // Casa se o texto da regra aparece inteiro, ou se a descrição termina
   // no meio dele (corte), com pelo menos 5 letras em comum.
   function textoCasa(memo, texto) {
-    if (memo.includes(texto)) return true;
+    if (!texto) return false;
+    // texto curto (ex.: "DA" = débito automático de imposto): só vale como a descrição inteira ou a primeira palavra
+    // (antes "DA" casava com qualquer "LTDA" e mandava pagamento de fornecedor para Impostos federais)
+    if (texto.length < 5) return memo === texto || memo.startsWith(texto + ' ');
+    const esc = texto.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp('(^|[^A-Z0-9])' + esc + '([^A-Z0-9]|$)').test(memo)) return true;
     for (let k = texto.length - 1; k >= 5; k--) {
       if (memo.endsWith(texto.slice(0, k))) return true;
     }
