@@ -1313,7 +1313,7 @@ function renderProcessos(){
 
 function renderProcessoDetalhe(p){
   const _pt=procTotals(p); const custo=_pt.custo; const lucro=_pt.lucro; const _extraManual=custo-tc(p);
-  const docItems=[['invoice','📄 Invoice'],['contrato','📃 Contrato'],['packingList','📦 Packing List'],['bl','🚢 BL - Bill of Lading'],['due','🏛️ DU-E'],['nfe','🧾 NF-E Entrada'],['nfeSaida','🧾 NF-E Saída'],['comprovantes','🖨️ Comprovantes Câmbio'],['certOrigem','🌐 Cert. Origem'],['seguro','🛡️ Seguro de Carga'],['pesagem','⚖️ Pesagem'],['cte','🚛 CT-e (frete)'],['mdfe','🗺️ MDF-e'],['nfse','🧾 NFS-e (serviço)'],['recibo','✍️ Recibo / RPA'],['pagamento','💳 Comprovantes de Pagamento'],['outros','📁 Outros Documentos']];
+  const docItems=[['invoice','📄 Invoice'],['contrato','📃 Contrato'],['packingList','📦 Packing List'],['bl','🚢 BL - Bill of Lading'],['due','🏛️ DU-E'],['nfe','🧾 NF-E Entrada'],['nfeSaida','🧾 NF-E Saída'],['comprovantes','🖨️ Comprovantes Câmbio'],['certOrigem','🌐 Cert. Origem'],['seguro','🛡️ Seguro de Carga'],['pesagem','⚖️ Pesagem'],['cte','🚛 CT-e (frete)'],['mdfe','🗺️ MDF-e'],['nfse','🧾 NFS-e (serviço)'],['recibo','✍️ Recibo / RPA'],['faturaFrete','🚢 Fatura de frete (agente)'],['pagamento','💳 Comprovantes de Pagamento'],['outros','📁 Outros Documentos']];
   return `
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap">
     <button class="btn btn-secondary btn-sm" onclick="goBack()"><span style="font-size:15px">←</span> Voltar</button>
@@ -5588,9 +5588,9 @@ if (!checkSession()) {
   applyTheme();
 }
 </script>
-<script src="entrada.js?v=9303f09e8a"></script>
+<script src="entrada.js?v=52dab92f0f"></script>
 <script src="ofx.js?v=7289280781"></script>
 <script src="financeiro2.js?v=d237660570"></script>
-<script src="acervo.js?v=4c629ea942"></script>
+<script src="acervo.js?v=9de6448c4b"></script>
 </body>
 </html>
