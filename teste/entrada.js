@@ -1051,7 +1051,7 @@ function renderEntrada() {
           <select id="ent-cus-${i}" onchange="setEntrada(${i},'campoCusto',this.value)">${opcoesCampoCusto(it.campoCusto || '')}</select></div>
         <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-val-${i}">Valor (R$)${!Number(it.info.valor) ? ' <span style="color:var(--red)">· não lido</span>' : ''}</label>
           <input id="ent-val-${i}" type="text" inputmode="decimal" value="${Number(it.info.valor) ? fmt(it.info.valor) : ''}" placeholder="0,00" onchange="setInfoEntrada(${i},'valor',this.value)"/></div>
-        <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-dat-${i}">Data</label>
+        <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-dat-${i}">Data do pagamento</label>
           <input id="ent-dat-${i}" type="date" value="${escHtml(it.info.data || '')}" onchange="setInfoEntrada(${i},'data',this.value)"/></div>
       </div>` : ''}
       ${it.processo && ['nfse', 'nfe', 'recibo', 'faturaFrete', 'cte', 'boleto', 'pagamento', 'outros'].includes(it.tipo) ? `
@@ -1060,11 +1060,11 @@ function renderEntrada() {
       ${it.processo === '__ADM' && typeof categOpts === 'function' ? `
       <div class="ig" style="margin-top:10px;margin-bottom:0"><label class="lbl" for="ent-cat-${i}">Categoria da despesa${it.categoria ? '' : ' <span style="color:var(--yellow)">· escolha</span>'}</label>
         <select id="ent-cat-${i}" onchange="setCategoriaAdm(${i},this.value)">${categOpts(it.categoria || '')}</select></div>` : ''}
-      ${(it.tipo === 'pagamento' || it.tipo === 'recibo') && it.processo === '__ADM' ? `
+      ${['pagamento', 'recibo', 'nfse', 'nfe', 'boleto', 'outros'].includes(it.tipo) && it.processo === '__ADM' ? `
       <div class="g2" style="margin-top:10px">
         <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-val-${i}">Valor (R$)${!Number(it.info.valor) ? ' <span style="color:var(--red)">· não lido</span>' : ''}</label>
           <input id="ent-val-${i}" type="text" inputmode="decimal" value="${Number(it.info.valor) ? fmt(it.info.valor) : ''}" placeholder="0,00" onchange="setInfoEntrada(${i},'valor',this.value)"/></div>
-        <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-dat-${i}">Data</label>
+        <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-dat-${i}">${it.tipo === 'boleto' ? 'Data do documento' + (it.info.vencimento ? ' · vence ' + escHtml(it.info.vencimento) : '') : 'Data do pagamento'}</label>
           <input id="ent-dat-${i}" type="date" value="${escHtml(it.info.data || '')}" onchange="setInfoEntrada(${i},'data',this.value)"/></div>
       </div>` : ''}
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
