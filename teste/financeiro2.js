@@ -71,7 +71,7 @@ async function salvarBanco() {
 
 // Regras no formato do leitor OFX
 function regrasOFX() {
-  return (S.banco.regras || []).map(r => r.tipo === 'doc'
+  return (S.banco.regras || []).filter(r => r.tipo !== 'fixo' && r.tipo !== 'catAdm').map(r => r.tipo === 'doc'
     ? { doc: r.valor, categoria: r.categoria, centro: r.centro }
     : { texto: r.valor, categoria: r.categoria, centro: r.centro });
 }
@@ -81,7 +81,8 @@ const CATEGORIAS2 = [
   ...Object.values(PROCESS_COST_FIELDS),
   'Tarifa de câmbio', 'Assessoria', 'Imposto COOP', 'Laboratório',
   'Tarifas bancárias', 'IOF', 'Impostos federais', 'Taxas e impostos municipais', 'Taxas de órgãos',
-  'Contabilidade', 'Aluguel / Coworking', 'Combustível', 'Cartório', 'Seguros', 'Software', 'Outras despesas',
+  'Contabilidade', 'Aluguel / Coworking', 'Combustível', 'Cartório', 'Seguros', 'Software',
+  'Viagem', 'Registro e licenças', 'Equipamentos', 'Materiais e embalagens', 'Alimentação', 'Acordos e parcelamentos', 'Outras despesas',
   'Rendimentos financeiros', 'Outras receitas', 'Câmbio',
   'Retirada de sócio', 'Aporte de sócio', 'Transferência entre contas',
 ];

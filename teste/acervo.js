@@ -825,3 +825,52 @@ setTimeout(function esperarDados() {
   if (!S.processos || !S.processos.length || typeof saveToSheets !== 'function') { if (!window._cadastrosTentativas || window._cadastrosTentativas++ < 40) { window._cadastrosTentativas = window._cadastrosTentativas || 1; setTimeout(esperarDados, 3000); } return; }
   try { if (cadastrosPelosArquivos() > 0) saveToSheets().catch(() => {}); } catch (e) { console.warn('cadastros', e); }
 }, 4000);
+
+// ═══════════════════════════════════════════════════════════════
+// Categoria das despesas do mês (ADM): pelo nome do arquivo, quem recebeu e o texto;
+// quando você escolhe a categoria, o sistema aprende para o mesmo fornecedor.
+// ═══════════════════════════════════════════════════════════════
+const CATEG_ADM_REGRAS = [
+  [/HOTEL|POUSADA|HOSPEDAG|PASSAGE|LATAM|\bGOL\b|AZUL LINHAS|AEREO|AEREA|UBER|RODOVIARIA|BUSER|CLICKBUS|VIAGEM/, 'Viagem'],
+  [/\bPOSTO\b|COMBUST|GASOLINA|DIESEL|ETANOL|IPIRANGA|PETROBRAS/, 'Combustível'],
+  [/CARTORIO|PROTESTO|TABELI|RECONHECIMENTO DE FIRMA/, 'Cartório'],
+  [/\bART\b|\bCREA\b|CONFEA|\bANM\b|LICENCA AMBIENTAL|ALVARA|IBAMA|INEMA|REGISTRO|LICENCIAMENTO/, 'Registro e licenças'],
+  [/FERRAMENT|EQUIPAMENT|MAQUINA|NOTEBOOK|COMPUTADOR|CELULAR/, 'Equipamentos'],
+  [/LABORAT|ANALISE|\bSGS\b|GEOSOL/, 'Laboratório'],
+  [/CONTAB|CONTADOR/, 'Contabilidade'],
+  [/TAGPLUS|SOFTWARE|LICENCA DE USO|\bSISTEMA\b/, 'Software'],
+  [/COWORKING|ALUGUEL|ONIQUA/, 'Aluguel / Coworking'],
+  [/BIG ?BAG|EMBALAG|PALLET|PALETE|\bLONA\b/, 'Materiais e embalagens'],
+  [/ACORDO|PARCELAMENTO|DIVIDA|\bCOTA\b/, 'Acordos e parcelamentos'],
+  [/RESTAURANTE|LANCHONETE|ALIMENTAC|IFOOD/, 'Alimentação'],
+  [/\bDARF\b|\bDAS\b|SIMPLES NACIONAL|\bINSS\b/, 'Impostos federais'],
+  [/SEGURO/, 'Seguros'],
+  [/TARIFA|PACOTE DE SERVICOS/, 'Tarifas bancárias'],
+];
+const chaveCategAdm = item => {
+  const quem = (item.info && (item.info.emitNome || (item.info.pagamento && item.info.pagamento.recebedor))) || '';
+  const base = quem || String(item.nomeOriginal || item.nome || '').replace(/^ADM\s*-\s*/i, '').replace(/\.[a-z0-9]{2,5}$/i, '').replace(/[\d\/:.-]+/g, ' ');
+  return semAcento(base).replace(/[^A-Z]/g, '').slice(0, 14);
+};
+function categoriaAdm(item) {
+  const k = chaveCategAdm(item);
+  const r = k && ((S.banco && S.banco.regras) || []).find(x => x.tipo === 'catAdm' && x.valor === k);
+  if (r) return r.categoria;
+  const nome = semAcento(String(item.nomeOriginal || item.nome || '').replace(/^ADM\s*-\s*/i, ''));
+  const quem = semAcento((item.info && (item.info.emitNome || (item.info.pagamento && item.info.pagamento.recebedor))) || '');
+  const texto = semAcento(String(item.texto || '').slice(0, 800));
+  for (const fonte of [nome, quem, texto]) { const hit = CATEG_ADM_REGRAS.find(([re]) => re.test(fonte)); if (hit) return hit[1]; }
+  return '';
+}
+async function setCategoriaAdm(i, v) {
+  const it = S.entrada.itens[i]; if (!it) return;
+  it.categoria = v; it.categoriaManual = true;
+  const k = chaveCategAdm(it);
+  if (k && v && S.banco) {
+    S.banco.regras = (S.banco.regras || []).filter(x => !(x.tipo === 'catAdm' && x.valor === k));
+    S.banco.regras.push({ id: genId(), tipo: 'catAdm', valor: k, categoria: v, centro: 'ADM', criadoEm: new Date().toISOString() });
+    (S.entrada.itens || []).forEach(x => { if (x !== it && x.processo === '__ADM' && !x.categoriaManual && chaveCategAdm(x) === k) x.categoria = v; });
+    try { if (typeof ensureTabs2 === 'function') await ensureTabs2(); await gravarAba2('REGRAS', S.banco.regras); } catch (e) { console.warn('regra categoria', e); }
+  }
+  render();
+}
