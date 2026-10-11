@@ -122,8 +122,20 @@ async function importarOFX(file) {
   let buf;
   try { buf = await file.arrayBuffer(); }
   catch (e) { B.msg = { tipo: 'erro', texto: 'Não foi possível abrir o arquivo no aparelho: ' + (e.message || e) + '. Tente pela pasta 📥 Entrada do Drive.' }; render(); return; }
-  await importarOFXBytes(new Uint8Array(buf), file.name);
+  if (await importarOFXBytes(new Uint8Array(buf), file.name)) await conciliarDepoisDoOFX();
   render();
+}
+
+// Depois de importar o extrato: concilia sozinho o que tem prova (o resto fica pendente para você)
+async function conciliarDepoisDoOFX() {
+  const B = S.banco;
+  if (!B.linhas.some(l => l.status === 'pendente')) return;
+  const antes = B.msg && B.msg.texto ? B.msg.texto : '';
+  B.msg = { tipo: 'ok', texto: antes + ' Conciliando...', lote: B.msg && B.msg.lote }; render();
+  try {
+    const r = await autoConciliar();
+    B.msg = { tipo: 'ok', lote: B.msg.lote, texto: `${antes} Conciliado sozinho: ${r.cambio} câmbio(s), ${r.baixas} pagamento(s), ${r.regras} tarifa(s)/regra(s), ${r.rendimentos} rendimento(s). ${r.pendentes} linha(s) para você conferir.` };
+  } catch (e) { B.msg = { tipo: 'erro', texto: antes + ' Erro na conciliação automática: ' + (e.message || e) }; }
 }
 
 // OFX salvo na pasta 📥 Entrada do Drive (prático no celular: Compartilhar → Drive)
@@ -147,6 +159,7 @@ async function importarOFXDrive() {
       else erro = true;
     }
     B.msg = { tipo: erro ? 'erro' : 'ok', texto: msgs.join(' | '), lote: files.length === 1 && !erro ? B.msg.lote : undefined };
+    if (msgs.length > (erro ? 1 : 0)) await conciliarDepoisDoOFX();
   } catch (e) {
     B.msg = { tipo: 'erro', texto: 'Não foi possível importar do Drive: ' + (e.message || e) };
   }
