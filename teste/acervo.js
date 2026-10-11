@@ -878,8 +878,10 @@ function blocoImportarTudo() {
 const TIPO_FORN_POR_CAMPO = { custoFrete: 'Transportadora', custoMaritimo: 'Agente de Carga', custoDespachante: 'Despachante', custoArmazem: 'Armazém', custoProduto: 'Fornecedor', custoServTerceiros: 'Serviço de Terceiros', custoPorto: 'Serviço de Terceiros', custoCertificado: 'Serviço de Terceiros' };
 const fmtCnpj = d => d.length === 14 ? d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5') : d.length === 11 ? d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : d;
 function garantirFornecedor(d) {
-  let nome = String(d.nome || '').replace(/\s+/g, ' ').trim();
-  const cnpj = String(d.cnpj || '').replace(/\D/g, '');
+  let nome = limparNomeCadastro(d.nome);
+  let cnpj = String(d.cnpj || '').replace(/\D/g, '');
+  if (cnpj && !cnpjValido(cnpj)) cnpj = '';
+  if (/^(chave|pix|transferencia)$/i.test(nome) || /KLISMANN/i.test(nome)) return null;   // palavra do print / o próprio sócio
   if (!nome || nome.length < 3 || !/[A-Za-zÀ-ú]{3}/.test(nome)) return null;
   if (cnpj === FU_SONG_CNPJ || /FU\s?SONG/i.test(nome) || /^(ITAU|BANCO|PIX|TRANSFER)/i.test(nome)) return null;
   if (nome === nome.toUpperCase()) nome = titulo(nome);
@@ -962,6 +964,7 @@ setTimeout(async function esperarDados() {
     try { mudou += await despesasForaDosProcessos(); } catch (e) { console.warn('fora dos processos', e); }
     try { mudou += ajustesDaConferencia(); } catch (e) { console.warn('ajustes', e); }
     try { mudou += await nomesDasPastas(); } catch (e) { console.warn('nomes das pastas', e); }
+    try { mudou += limparCadastros() + despesasDuplicadas() + lancamentosViramCusto() + arredondarTaxas(); } catch (e) { console.warn('auditoria', e); }
     try { mudou += await corrigirCambioDossie(); } catch (e) { console.warn('dossiê', e); }
     mudou += corrigirFaturasDigitadas();
     mudou += moverPagamentosMarcados();
@@ -982,6 +985,9 @@ setTimeout(async function esperarDados() {
 // quando você escolhe a categoria, o sistema aprende para o mesmo fornecedor.
 // ═══════════════════════════════════════════════════════════════
 const CATEG_ADM_REGRAS = [
+  [/EMPRESTIMO/, 'Empréstimo ao sócio'],
+  [/ESCAVADEIRA|CARREGADEIRA|RETROESCAV|HORA MAQUINA|LOCACAO DE (MAQUINA|EQUIPAMENTO)/, 'Equipamentos'],
+  [/RENOVACAO AMBIENTAL|TAXA AMBIENTAL|LICENCA AMBIENTAL/, 'Registro e licenças'],
   [/HOTEL|POUSADA|HOSPEDAG|PASSAGE|LATAM|\bGOL\b|AZUL LINHAS|AEREO|AEREA|UBER|RODOVIARIA|BUSER|CLICKBUS|VIAGEM/, 'Viagem'],
   [/\bPOSTO\b|COMBUST|GASOLINA|DIESEL|ETANOL|IPIRANGA|PETROBRAS/, 'Combustível'],
   [/CARTORIO|PROTESTO|TABELI|RECONHECIMENTO DE FIRMA/, 'Cartório'],
@@ -1071,7 +1077,7 @@ function recalcularCambio(p) {
   const cs = Object.values((p.docs && p.docs._cambioDocs) || {});
   if (!cs.length) { p.cambioRecebido = ''; p.cambioReais = ''; p.cambioTaxa = ''; p.cambioFechamento = ''; p.cambioRecebimento = ''; p.cambioStatus = 'Em Aberto'; return; }
   const usd = cs.reduce((a, x) => a + x.usd, 0), reais = cs.reduce((a, x) => a + x.reais, 0);
-  p.cambioRecebido = Math.round(usd * 100) / 100; p.cambioReais = Math.round(reais * 100) / 100; p.cambioTaxa = usd ? reais / usd : 0;
+  p.cambioRecebido = Math.round(usd * 100) / 100; p.cambioReais = Math.round(reais * 100) / 100; p.cambioTaxa = usd ? Math.round(reais / usd * 10000) / 10000 : 0;
 }
 // a linha do extrato (OFX) foi ligada a este processo: o valor recebido em reais passa a ser o do banco
 function cambioPeloBanco(p, contrato, reais, dataIso) {
@@ -1673,7 +1679,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '53';
+const VERSAO_TESTE = '55';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -1892,3 +1898,72 @@ async function nomesDasPastas() {
   (S.processos || []).forEach(p => { const m = melhor[p.id]; if (m && p.docs && p.docs._nomePasta !== m.nome) { p.docs._nomePasta = m.nome; n++; } });
   return n;
 }
+
+function limparNomeCadastro(t) { return String(t || '').replace(/\s+(Munic[ií]pio|Sigla UF|C[oó]digo IBGE)\b.*$/i, '').replace(/^\d{2}\.\d{3}\.\d{3}\s+/, '').replace(/\s+/g, ' ').trim(); }
+function cnpjValido(c) {
+  c = String(c || '').replace(/\D/g, ''); if (c.length !== 14 || /^(\d)\1+$/.test(c)) return c.length === 11;   // CPF passa
+  const dv = n => { let s = 0, p = n - 7; for (let i = 0; i < n; i++) { s += Number(c[i]) * p--; if (p < 2) p = 9; } const r = s % 11; return r < 2 ? 0 : 11 - r; };
+  return dv(12) === Number(c[12]) && dv(13) === Number(c[13]);
+}
+// Auditoria 11/10: limpa o cadastro (nomes com lixo do PDF, CNPJ inválido, duplicados pelo CNPJ, "chave", o sócio)
+function limparCadastros() {
+  let n = 0; const fs = S.fornecedores || []; const ficar = [];
+  fs.forEach(f => {
+    const nome = limparNomeCadastro(f.nome); if (nome !== f.nome) { f.nome = nome; n++; }
+    if (f.cnpj && !cnpjValido(f.cnpj)) { f.cnpj = ''; n++; }
+    if (/^(chave|pix)$/i.test(f.nome) || /KLISMANN/i.test(f.nome)) { n++; return; }
+    const c = String(f.cnpj || '').replace(/\D/g, '');
+    const igual = ficar.find(x => (c && String(x.cnpj || '').replace(/\D/g, '') === c) || normNome(x.nome) === normNome(f.nome));
+    if (igual) { ['ie', 'cep', 'end', 'email', 'banco', 'agencia', 'conta', 'pix'].forEach(k => { if (!igual[k] && f[k]) igual[k] = f[k]; }); n++; return; }
+    ficar.push(f);
+  });
+  if (n) { S.fornecedores = ficar; logAction('editar', 'FORNECEDORES', '-', `Cadastro limpo: ${fs.length - ficar.length} duplicado(s) ou inválido(s) removido(s)`); }
+  return n;
+}
+// Auditoria 11/10: despesa da empresa lançada duas vezes (pelo comprovante e pela linha do extrato) — junta numa só
+function despesasDuplicadas() {
+  const datas = l => { const ds = [brToIso(l.data || '')].filter(Boolean); (String(l.observacao || '').match(/20\d{2}-\d{2}-\d{2}/g) || []).forEach(d => ds.push(d)); return ds; };
+  const perto = (a, b) => datas(a).some(x => datas(b).some(y => Math.abs((new Date(x) - new Date(y)) / 864e5) <= 7));
+  const comBanco = (S.lancamentos || []).filter(l => l.tipo === 'Despesa' && l.docs && l.docs._banco && l.vinculo !== 'processo');
+  const fora = new Set();
+  (S.lancamentos || []).filter(l => l.tipo === 'Despesa' && l.vinculo !== 'processo' && !(l.docs && l.docs._banco) && /^(Comprovante|Nota):/.test(l.observacao || '')).forEach(b => {
+    const cands = comBanco.filter(a => !fora.has(a) && Math.abs((Number(a.valor) || 0) - (Number(b.valor) || 0)) < 0.01 && perto(a, b) && !(a.docs.comprovante && a.docs.comprovante !== b.docs.comprovante));
+    if (cands.length !== 1) return;
+    const a = cands[0]; a.docs.comprovante = a.docs.comprovante || (b.docs || {}).comprovante || (b.docs || {}).nota;
+    if (a.categoria !== b.categoria && /^Comprovante/.test(b.observacao || '')) a.categoria = b.categoria;
+    a.observacao = (a.observacao || '') + ' · ' + b.observacao; fora.add(b); fora.add(a);
+    logAction('editar', 'EXTRATO_CAIXA', a.id, `Despesa repetida juntada: ${b.descricao} R$ ${b.valor} (comprovante) = linha do extrato`);
+  });
+  const tirar = [...fora].filter(l => !(l.docs && l.docs._banco));
+  if (tirar.length) S.lancamentos = S.lancamentos.filter(l => !tirar.includes(l));
+  // categoria pelo nome do comprovante (ex.: "Empréstimo sócio" não é despesa; "Escavadeira" não é seguro)
+  let n = tirar.length;
+  (S.lancamentos || []).forEach(l => {
+    if (l.vinculo === 'processo') return;
+    const m = String(l.observacao || '').match(/Comprovante: ([^·]+)/); if (!m) return;
+    const nome = semAcento(m[1]); const hit = CATEG_ADM_REGRAS.find(([re]) => re.test(nome));
+    if (!hit || hit[1] === l.categoria || !(l.categoria === 'Despesas administrativas' || l.categoria === 'Seguros' || hit[1] === 'Empréstimo ao sócio')) return;
+    l.categoria = hit[1]; l.descricao = hit[1] + ' — ' + (l.empresa || ''); if (hit[1] === 'Empréstimo ao sócio') l.tipo = 'Transferência';
+    n++;
+  });
+  return n;
+}
+// lançamento do extrato num custo do processo sem nota/comprovante (ex.: frete marítimo do FS260108): vira o custo do processo
+function lancamentosViramCusto() {
+  let n = 0; const ficar = [];
+  (S.lancamentos || []).forEach(l => {
+    const campo = l.tipo === 'Despesa' && l.vinculo === 'processo' && l.status === 'Pago' && l.docs && typeof l.docs._banco === 'string' ? CAMPO_POR_CATEG[l.categoria] : '';
+    const p = campo && (S.processos || []).find(x => x.id === l.vinculoId);
+    if (!p || (p.docs && p.docs._custoDocs && p.docs._custoDocs[campo])) { ficar.push(l); return; }
+    p.docs = p.docs || {}; p.docs._custoDocs = p.docs._custoDocs || {};
+    p.docs._custoDocs[campo] = { fiscais: [], pagos: [{ k: 'banco:' + l.docs._banco, tipo: 'banco', valor: Number(l.valor) || 0, data: l.data || '', nome: 'extrato: ' + (l.empresa || ''), de: l.empresa || '', url: l.docs.comprovante || '' }] };
+    p.docs._costBanco = Object.assign({}, p.docs._costBanco, { [campo]: l.docs._banco });
+    if (!p.docs._costEmpresa) p.docs._costEmpresa = {}; if (!p.docs._costEmpresa[campo] && l.empresa) p.docs._costEmpresa[campo] = titulo(l.empresa);
+    ((S.banco && S.banco.linhas) || []).forEach(b => { if (b.lancId === l.id) b.lancId = 'custo:' + p.id + '/' + campo; });
+    recalcularCustos(p, campo); n++;
+  });
+  if (n) S.lancamentos = ficar;
+  return n;
+}
+// câmbio: taxa com 4 casas
+function arredondarTaxas() { let n = 0; (S.processos || []).forEach(p => { const t = Number(p.cambioTaxa); if (t && String(p.cambioTaxa).length > 6) { p.cambioTaxa = Math.round(t * 10000) / 10000; n++; } }); return n; }
