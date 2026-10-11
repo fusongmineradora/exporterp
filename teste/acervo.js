@@ -958,6 +958,7 @@ setTimeout(async function esperarDados() {
     try { mudou += await devolverArquivosDoS(); } catch (e) { console.warn('arquivos S', e); }
     try { mudou += await corrigirPartesPeloNome(); } catch (e) { console.warn('partes', e); }
     // (a planilha de custos do Ademir é só para conferência: não é aplicada no ERP)
+    try { mudou += await despesasForaDosProcessos(); } catch (e) { console.warn('fora dos processos', e); }
     try { mudou += await corrigirCambioDossie(); } catch (e) { console.warn('dossiê', e); }
     mudou += corrigirFaturasDigitadas();
     mudou += moverPagamentosMarcados();
@@ -1669,7 +1670,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '49';
+const VERSAO_TESTE = '50';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -1780,3 +1781,40 @@ async function criarProcessoSFaltando() {
   return n;
 }
 
+
+// Embraport (R$ 572,24): despesa atípica do porto, não é de processo → vai para as despesas da empresa (ADM)
+const FORA_DOS_PROCESSOS = [/EMBRAPORT/i];
+async function despesasForaDosProcessos() {
+  let n = 0;
+  const fora = t => FORA_DOS_PROCESSOS.some(re => re.test(String(t || '')));
+  (S.lancamentos || []).forEach(l => {
+    if (l.vinculo !== 'processo' || !fora(l.empresa + ' ' + l.descricao)) return;
+    const de = l.vinculoId;
+    l.vinculo = 'avulso'; l.vinculoId = 'ADM'; l.categoria = 'Porto / Taxas';
+    l.descricao = 'Porto / Taxas — ' + (l.empresa || '') + ' (despesa atípica do porto, fora dos processos)';
+    ((S.banco && S.banco.linhas) || []).forEach(b => { if (b.lancId === l.id) { b.centro = 'ADM'; b.categoria = 'Porto / Taxas'; } });
+    logAction('editar', 'EXTRATO_CAIXA', l.id, `${l.empresa} R$ ${l.valor}: saiu do ${de} — despesa atípica do porto (ADM)`);
+    n++;
+  });
+  const docsAdm = [];
+  (S.processos || []).forEach(p => Object.entries(((p.docs || {})._files) || {}).forEach(([tipo, arr]) => (arr || []).slice().forEach(f => {
+    const quem = (f.emitente || '') + ' ' + ((f.pagamento || {}).recebedor || '');
+    if (!fora(quem)) return;
+    p.docs._files[tipo] = p.docs._files[tipo].filter(x => x !== f);
+    if (!p.docs._files[tipo].length) { delete p.docs._files[tipo]; delete p.docs[tipo]; } else if (p.docs[tipo] === f.url) p.docs[tipo] = p.docs._files[tipo][0].url;
+    Object.entries(p.docs._custoDocs || {}).forEach(([c, reg]) => { const antes = (reg.pagos || []).length + (reg.fiscais || []).length; reg.pagos = (reg.pagos || []).filter(d => d.url !== f.url); reg.fiscais = (reg.fiscais || []).filter(d => d.url !== f.url); if ((reg.pagos.length + reg.fiscais.length) !== antes) { if (!reg.pagos.length && !reg.fiscais.length) { delete p.docs._custoDocs[c]; p[c] = ''; p[c + '_status'] = ''; } else recalcularCustos(p, c); } });
+    docsAdm.push({ id: f.id, nome: f.name, url: f.url, tipo, categoria: 'Porto / Taxas', valor: f.valor || '', data: f.data || '', centro: 'ADM', md5: f.md5, criadoEm: new Date().toISOString() });
+    logAction('editar', 'PROCESSOS', p.id, `${f.name}: comprovante Embraport saiu do processo (despesa atípica do porto)`);
+    n++;
+  })));
+  if (docsAdm.length && typeof gravarAba2 === 'function') {
+    try { await ensureTabs2(); const docs = await lerAba2('DOCUMENTOS'); docsAdm.forEach(d => { if (!docs.some(x => x.url === d.url)) docs.push(d); }); await gravarAba2('DOCUMENTOS', docs); if (S.banco) S.banco.docs = docs; } catch (e) { console.warn('docs ADM', e); }
+  }
+  // próximos extratos: Embraport vai direto para Porto / Taxas da empresa
+  if (S.banco && !(S.banco.regras || []).some(r => r.tipo === 'texto' && /EMBRAPORT/i.test(r.valor))) {
+    S.banco.regras = (S.banco.regras || []).concat([{ id: genId(), tipo: 'texto', valor: 'EMBRAPORT', categoria: 'Porto / Taxas', centro: 'ADM', criadoEm: new Date().toISOString() }]);
+    try { await ensureTabs2(); await gravarAba2('REGRAS', S.banco.regras); } catch (e) {}
+  }
+  if (n) { try { if (typeof salvarBanco === 'function') await salvarBanco(); } catch (e) {} }
+  return n;
+}
