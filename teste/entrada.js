@@ -11,8 +11,9 @@
 // ── 1. ISOLAMENTO ───────────────────────────────────────────
 // Sem dados de exemplo no ambiente de testes: tudo vem da planilha de teste
 S.processos = []; S.clientes = []; S.fornecedores = []; S.lancamentos = []; S.custosMensais = [];
-// Geração 2 (11/10/2026): recomeço do zero com os dados reais — planilha e pasta novas; as antigas ficam no Drive sem uso
-const TESTE_SHEET_NAME = 'Fu Song ERP Database — TESTE 2';
+// Geração 3 (11/10/2026): recomeço do zero para importar a organização nova (Processos Unificados + Despesas Gerais + OFX);
+// planilha e pasta novas — as das gerações 1 e 2 ficam no Drive sem uso
+const TESTE_SHEET_NAME = 'Fu Song ERP Database — TESTE 3';
 let _ensureTestSheetPromise = null;
 
 function ensureTestSheet() {
@@ -24,11 +25,11 @@ function ensureTestSheet() {
 }
 
 async function _ensureTestSheet() {
-  // recomeço (geração 2): o backup local da planilha antiga não pode voltar
-  try { if (localStorage.getItem('teste:geracao') !== '2') { localStorage.removeItem('teste:erp-local-backup'); localStorage.setItem('teste:geracao', '2'); } } catch (e) {}
+  // recomeço (geração 3): o backup local da planilha antiga não pode voltar
+  try { if (localStorage.getItem('teste:geracao') !== '3') { localStorage.removeItem('teste:erp-local-backup'); localStorage.setItem('teste:geracao', '3'); } } catch (e) {}
   // a) já usada neste aparelho
   let saved = null;
-  try { saved = localStorage.getItem('teste:sheet-id-2'); } catch (e) {}
+  try { saved = localStorage.getItem('teste:sheet-id-3'); } catch (e) {}
   if (saved && saved !== PROD_SHEET_ID) {
     try {
       const f = await driveAPI('GET', '/files/' + saved, null, 'fields=id,trashed');
@@ -50,7 +51,7 @@ async function _ensureTestSheet() {
     showToast('✅ Planilha de testes criada');
   }
   if (SHEET_ID === PROD_SHEET_ID) throw new Error('Bloqueado: planilha de testes igual à de produção.');
-  try { localStorage.setItem('teste:sheet-id-2', SHEET_ID); } catch (e) {}
+  try { localStorage.setItem('teste:sheet-id-3', SHEET_ID); } catch (e) {}
   return SHEET_ID;
 }
 
