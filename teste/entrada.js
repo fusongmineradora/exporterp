@@ -521,7 +521,7 @@ async function lerEntrada() {
     const q = `'${folderId}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'`;
     const todos = await driveListAll(q, 'id,name,mimeType,size,md5Checksum,createdTime,webViewLink');
     const files = todos.filter(f => !/\.(ofx|html?|js|css)$/i.test(f.name || ''));
-    E.ofxNaEntrada = todos.length - files.length;
+    E.ofxNaEntrada = todos.filter(f => /\.ofx$/i.test(f.name || '')).length;
     const itens = [];
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
