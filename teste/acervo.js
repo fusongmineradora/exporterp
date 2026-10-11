@@ -267,6 +267,11 @@ function enriquecerInfo(item) {
     if (!info.emitNome) info.emitNome = mx(/Nome empresarial:\s*(.+?)\s+Endere[cç]o/i) || mx(/RECEBI\(EMOS\) DA EMPRESA:\s*(.+?)\s+A NOTA/i)
       || mx(/(?:EMITENTE DA NFS-?e|Prestador do Servi[cç]o)[\s\S]{0,120}?Nome \/ Nome Empresarial\s+(.+?)\s+(?:Inscri|CNPJ|CEP)/i) || mx(/Nome \/ Nome Empresarial\s+(.+?)\s+(?:Inscri|CNPJ|CEP)/i);
     if (!info.valor) info.valor = numBR(mx(/VALOR (?:TOTAL )?DOS? SERVI[CÇ]OS?:?\s*R?\$?\s*([\d.]+,\d{2})/i) || mx(/Valor l[ií]quido da NFS-?e[\s\S]{0,60}?([\d.]+,\d{2})/i) || mx(/VALOR TOTAL DA NFS-?E[\s\S]{0,80}?R\$\s*([\d.]+,\d{2})/i));
+    // NFS-e municipal (layout "VALOR SERVIÇO (R$) ... ISS (R$) 450,00", prestador no fim)
+    if (!info.valor) info.valor = numBR(mx(/VALOR SERVI[CÇ]O \(R\$\)[\s\S]{0,200}?([\d.]+,\d{2})/i));
+    if (!info.emitNome) { const r = [...U.matchAll(/Raz[aã]o Social:\s*(.+?)\s+(?:Endere[cç]o|Nome Fantasia)/gi)].map(m => m[1].trim()).find(n => !/FU\s?SONG/i.test(n)); if (r) info.emitNome = r; }
+    if (!info.emitCnpj) { const c = [...U.matchAll(/CPF\/CNPJ:\s*([\d.\/-]{14,18})/gi)].map(m => m[1].replace(/\D/g, '')).filter(x => x.length === 14 && x !== FU_SONG_CNPJ); if (c.length) info.emitCnpj = c[c.length - 1]; }
+    if (!info.data) { const d = mx(/EMITID[OA] EM\s+(\d{2}\/\d{2}\/\d{4})/i); if (d) info.data = brToIso(d); }
     if (!info.data) { const d = mx(/EMITIDA EM\s+(\d{2}\/\d{2}\/\d{4})/i) || mx(/Data da emiss[aã]o da NFS-?e\s+(\d{2}\/\d{2}\/\d{4})/i) || dataBrDe(U); if (d) info.data = brToIso(d); }
   }
   if (item.tipo === 'recibo') {
@@ -283,6 +288,17 @@ function enriquecerInfo(item) {
     if (!info.emitNome) { const n = U.match(/C\s*N\s*PJ\s+([A-ZÀ-Ú][A-ZÀ-Ú .&-]{3,60}?(?:LTDA|S\.?A\.?|EIRELI|ME))\b/); if (n) info.emitNome = n[1]; }
     if (!info.emitNome) info.emitNome = mx(/RAZ\s?[AÃ]O SOCIAL\s+(.+?)\s+CNPJ/i) || mx(/RECEBI(?:\(EMOS\))?\s+DE\s+(.+?)\s+(?:A|O)\s+(?:QUANTIA|IMPORT)/i);
     if (!info.data) { const m = U.match(/(\d{1,2}) de ([A-Za-zçÇ]+) de (\d{4})/); if (m && MESES_PT[m[2].toLowerCase()]) info.data = `${m[3]}-${MESES_PT[m[2].toLowerCase()]}-${m[1].padStart(2, '0')}`; else { const d = dataBrDe(U); if (d) info.data = brToIso(d); } }
+  }
+  if (item.tipo === 'boleto') {   // boleto de cobrança (a conta a pagar, não o comprovante)
+    if (!info.valor) info.valor = numBR(mx(/VALOR DO DOCUMENTO[\s\S]{0,120}?R\$\s*([\d.]+,\d{2})/i) || mx(/R\$\s*([\d.]+,\d{2})/));
+    const d = U.match(/Data Emiss[aã]o\s+Data Vencimento[\s\S]{0,200}?(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/i);
+    if (d) { if (!info.data) info.data = brToIso(d[1]); info.vencimento = d[2]; }
+    else { if (!info.data) { const x = dataBrDe(U); if (x) info.data = brToIso(x); } info.vencimento = mx(/VENCIMENTO[\s\S]{0,60}?(\d{2}\/\d{2}\/\d{4})/i); }
+    if (!info.emitNome) {
+      const pares = [...U.matchAll(/([A-ZÀ-Ú][A-Za-zÀ-ú0-9 .&-]{3,90}?)\s+(?:CNPJ:?\s*)?(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/g)].filter(m => m[2].replace(/\D/g, '') !== FU_SONG_CNPJ && !/FU\s?SONG/i.test(m[1]));
+      const par = pares.filter(m => !/\d/.test(m[1])).pop() || pares.pop();
+      if (par) { info.emitNome = par[1].split(/\.\s+/).pop().replace(/^(Endere[cç]o|Benefici[aá]rio)\s+/i, '').trim(); info.emitCnpj = par[2].replace(/\D/g, ''); }
+    }
   }
   if (item.tipo === 'faturaFrete') {
     if (!info.valor) info.valor = numBR(mx(/Total\s+em\s*:?\s*R\$\s*([\d.]+,\d{2})/i) || mx(/TOTAL\s*(?:GERAL|A PAGAR)?\s*:?\s*R\$\s*([\d.]+,\d{2})/i));
