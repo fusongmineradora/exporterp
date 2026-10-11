@@ -363,6 +363,9 @@ function lerCambio(texto) {
     refInterna,
     contratoExtrato: digits.length > 4 && digits.startsWith('0101') ? digits.slice(4) : digits, // = "LIQ EXPORT 3026633302" no extrato
     pagador: g(/NOME PAG\.?\W*:?\W*([A-Z0-9 ,.&]+?)\s+(?:PAIS|DATA|OPR)/i),
+    liquidacao: g(/Liquida[cç][aã]o at[eé]\s+(\d{2}\/\d{2}\/\d{4})/i) || g(/Data da entrega dos Reais\s+(\d{2}\/\d{2}\/\d{4})/i),
+    embarque: g(/\bEMB\W*:?\W*(\d{2}\/\d{2}\/\d{4})/i),
+    modalidade: /PAGAMENTO\s+ANTECIPADO|RECEBIMENTO\s+ANTECIPADO/i.test(T) ? 'PAEX' : '',
     faturas,
   };
 }
@@ -757,7 +760,7 @@ async function confirmarEntrada(i, silencioso) {
         chave: item.info.chave || '', numero: item.info.numero || '',
         emitente: item.info.emitNome || '', valor: item.info.valor || 0, data: item.info.data || '',
         categoria: item.categoria || '',
-        cambio: item.info.cambio ? { faturas: item.info.cambio.faturas, referencia: item.info.cambio.referencia, contratoExtrato: item.info.cambio.contratoExtrato, taxa: item.info.cambio.taxa, usdFatura: fatura ? fatura.usd : null, usdTotal: item.info.cambio.valorMoeda, reaisTotal: item.info.cambio.valorReais, data: item.info.cambio.data } : undefined,
+        cambio: item.info.cambio ? { faturas: item.info.cambio.faturas, referencia: item.info.cambio.referencia, contratoExtrato: item.info.cambio.contratoExtrato, taxa: item.info.cambio.taxa, usdFatura: fatura ? fatura.usd : null, usdTotal: item.info.cambio.valorMoeda, reaisTotal: item.info.cambio.valorReais, data: item.info.cambio.data, liquidacao: item.info.cambio.liquidacao || '', embarque: item.info.cambio.embarque || '', modalidade: item.info.cambio.modalidade || '' } : undefined,
         pagamento: item.info.pagamento || undefined,
         origem: 'entrada', em: new Date().toISOString(), nomeOriginal: item.nome,
         atalho: proc.id !== p.id && !item.divisao ? true : undefined, divisao: item.divisao || undefined,
