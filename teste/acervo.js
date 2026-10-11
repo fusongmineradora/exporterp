@@ -949,6 +949,7 @@ setTimeout(async function esperarDados() {
     try { mudou += await devolverArquivosDoS(); } catch (e) { console.warn('arquivos S', e); }
     try { mudou += await corrigirCambioDossie(); } catch (e) { console.warn('dossiê', e); }
     mudou += corrigirFaturasDigitadas();
+    { const t = transferirCambiosPeloNome(); if (t) { mudou += t; try { if (typeof salvarBanco === 'function') await salvarBanco(); } catch (e) {} } }
     // processo renumerado (FS260105 → FS260107) e custos previstos
     mudou += juntarProcessosRenumerados();
     (S.processos || []).forEach(p => { mudou += aplicarPrevistos(p); });
@@ -1505,5 +1506,55 @@ async function corrigirCambioDossie() {
     try { if (typeof autoConciliar === 'function') await autoConciliar(); } catch (e) { console.warn('reconciliar', e); }
     try { if (typeof salvarBanco === 'function') await salvarBanco(); } catch (e) {}
   }
+  return n;
+}
+
+// Câmbio transferido: "FS260103 - Câmbio 616711008 - Adiantamento transferido para FS260107" (ou, na pasta do 107,
+// "Adiantamento do FS260103"). Devolve { de, para } quando o nome do arquivo diz isso e a fatura do contrato é do "de".
+function transferenciaCambioDoNome(nome, c) {
+  const partes = String(nome || '').split(/\s+-\s+/);
+  const r = lerNomeArquivo(nome);
+  const fats = ((c && c.faturas) || []).map(f => f.processo);
+  if (r.transferePara) { const de = fats.find(id => id !== r.transferePara) || ''; if (de && fats.length === 1) return { de, para: r.transferePara }; }
+  if (r.transfereDe && fats.includes(r.transfereDe)) {
+    const para = partes.map(x => FS_DE(x)).find(id => id && id !== r.transfereDe);
+    if (para) return { de: r.transfereDe, para };
+  }
+  return null;
+}
+// dados já importados: aplica a transferência pelo nome original dos arquivos e leva receita, tarifa e extrato junto
+function transferirCambiosPeloNome() {
+  let n = 0;
+  (S.processos || []).forEach(p => ((((p.docs || {})._files || {}).comprovantes) || []).slice().forEach(f => {
+    const c = f.cambio; if (!c || !c.referencia) return;
+    const nomes = String(f.nomeOriginal || f.name || '').split(/^((?:FS\d{6}S?)(?:\+FS\d{6}S?)*) - /).filter(Boolean);
+    let tr = null; nomes.forEach(nm => { tr = tr || transferenciaCambioDoNome(nm, c); });
+    if (!tr) return;
+    const de = S.processos.find(x => x.id === tr.de), para = S.processos.find(x => x.id === tr.para); if (!para) return;
+    const faturas = c.faturas.map(x => x.processo === tr.de ? Object.assign({}, x, { processo: tr.para, transferidoDe: tr.de }) : x);
+    // arquivo e câmbio saem do processo antigo
+    if (de) {
+      de.docs._files.comprovantes = (de.docs._files.comprovantes || []).filter(y => !(y.cambio && y.cambio.referencia === c.referencia));
+      if (!de.docs._files.comprovantes.length) { delete de.docs._files.comprovantes; delete de.docs.comprovantes; }
+      const banco = de.docs._cambioDocs && de.docs._cambioDocs[c.referencia] ? de.docs._cambioDocs[c.referencia] : null;
+      if (de.docs._cambioDocs) delete de.docs._cambioDocs[c.referencia];
+      recalcularCambio(de);
+      de.docs._cambioTransferido = Object.assign({}, de.docs._cambioTransferido || {}, { [c.referencia]: tr.para });
+      logAction('editar', 'PROCESSOS', de.id, `Câmbio ${c.referencia} transferido para o ${tr.para}`);
+      if (banco) { para.docs = para.docs || {}; para.docs._cambioDocs = para.docs._cambioDocs || {}; para.docs._cambioDocs[c.referencia] = banco; }
+    }
+    // entra no processo novo
+    para.docs = para.docs || {}; para.docs._files = para.docs._files || {};
+    const arr = para.docs._files.comprovantes = (para.docs._files.comprovantes || []).filter(y => !(y.cambio && y.cambio.referencia === c.referencia));
+    arr.push(Object.assign({}, f, { atalho: undefined, cambio: Object.assign({}, c, { faturas }) }));
+    if (!para.docs.comprovantes) para.docs.comprovantes = f.url;
+    aplicarCambioNoProcesso(para, { referencia: c.referencia, taxa: c.taxa, valorReais: c.reaisTotal, valorMoeda: c.usdTotal, data: c.data, contratoExtrato: c.contratoExtrato, faturas }, f.url);
+    para.docs._cambioRecebidoDe = Object.assign({}, para.docs._cambioRecebidoDe || {}, { [c.referencia]: tr.de });
+    // receita, tarifa e linha do extrato
+    (S.lancamentos || []).forEach(l => { if (l.vinculoId === tr.de && ['Câmbio', 'Tarifa de câmbio'].includes(l.categoria) && String(l.descricao || '').includes(String(c.contratoExtrato))) { l.vinculoId = tr.para; l.descricao = String(l.descricao).split(tr.de).join(tr.para) + ' (adiantamento do ' + tr.de + ')'; } });
+    ((S.banco && S.banco.linhas) || []).forEach(l => { if (l.lancId === 'cambio:' + c.contratoExtrato && l.centro) l.centro = String(l.centro).split('P:' + tr.de).join('P:' + tr.para); });
+    logAction('editar', 'PROCESSOS', tr.para, `Câmbio ${c.referencia} (USD ${c.usdTotal}) recebido do ${tr.de}: adiantamento transferido`);
+    n++;
+  }));
   return n;
 }
