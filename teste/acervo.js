@@ -462,7 +462,8 @@ function aplicarDocNoProcesso(item, p, upd) {
   }
   // custos
   const campo = item.campoCusto !== undefined ? item.campoCusto : campoCustoSugerido(item);
-  const valor = Math.round((Number(info.valor) || 0) / (item.divisao > 1 ? item.divisao : 1) * 100) / 100;
+  const valor = item.divisaoValores && item.divisaoValores[p.id] != null ? Math.round(Number(item.divisaoValores[p.id]) * 100) / 100
+    : Math.round((Number(info.valor) || 0) / (item.divisao > 1 ? item.divisao : 1) * 100) / 100;
   if (campo && valor > 0 && DOCS_COM_CUSTO.includes(item.tipo)) {
     p.docs._custoDocs = p.docs._custoDocs || {};
     const reg = p.docs._custoDocs[campo] = p.docs._custoDocs[campo] || { fiscais: [], pagos: [] };
@@ -1104,4 +1105,56 @@ function lancarDespesaDaNota(item, upd) {
   S.lancamentos = S.lancamentos || []; S.lancamentos.unshift(obj);
   logAction('criar', 'EXTRATO_CAIXA', obj.id, 'Despesa ' + obj.descricao + ' R$ ' + valor.toFixed(2) + ' (pela nota)');
   return obj;
+}
+
+
+// ── Pagamento de um ou mais processos (divide igual ou valor de cada um) ──
+function procsDoItem(it) { return [it.processo, ...(it.processosExtras || [])].filter(id => id && id !== '__ADM'); }
+function aplicarDivisaoItem(it, ids) {
+  ids = [...new Set(ids.filter(Boolean))];
+  it.processo = ids[0] || ''; it.processosExtras = ids.slice(1);
+  it.divisao = ids.length > 1 ? ids.length : undefined;
+  if (it.divisaoValores) Object.keys(it.divisaoValores).forEach(k => { if (!ids.includes(k)) delete it.divisaoValores[k]; });
+  delete it.pastaErrada; delete it.corrigido;
+  it.aviso = String(it.aviso || '').replace(/Conflito:[^.]*\.[^.]*\./, '').replace(/Pagamento de [^:]*: dividido igualmente[^.]*\.?/, '').replace(/Confira: este arquivo de custo[^.]*\.[^.]*\./, '').trim();
+  it.confianca = 'manual';
+}
+function addProcDivisao(i, id) { const it = S.entrada.itens[i]; if (!it || !id) return; aplicarDivisaoItem(it, [...procsDoItem(it), id]); render(); }
+function tirarProcDivisao(i, id) { const it = S.entrada.itens[i]; if (!it) return; aplicarDivisaoItem(it, procsDoItem(it).filter(x => x !== id)); render(); }
+function setModoDivisao(i, modo) {
+  const it = S.entrada.itens[i]; if (!it) return;
+  if (modo === 'valores') { const ids = procsDoItem(it), parte = Math.round((Number(it.info.valor) || 0) / ids.length * 100) / 100; it.divisaoValores = Object.fromEntries(ids.map(id => [id, parte])); }
+  else delete it.divisaoValores;
+  render();
+}
+function setValorDivisao(i, id, v) { const it = S.entrada.itens[i]; if (!it) return; it.divisaoValores = it.divisaoValores || {}; it.divisaoValores[id] = numBR(String(v).replace(/[^\d.,]/g, '')) || 0; render(); }
+function somaDivisaoOk(it) { if (!it.divisaoValores) return true; const soma = Object.values(it.divisaoValores).reduce((a, v) => a + (Number(v) || 0), 0); return Math.abs(soma - (Number(it.info.valor) || 0)) < 0.01; }
+function blocoDivisao(it, i) {
+  const ids = procsDoItem(it);
+  const outros = (S.processos || []).map(p => p.id).filter(id => !ids.includes(id)).sort().reverse();
+  const total = Number(it.info.valor) || 0;
+  const soma = it.divisaoValores ? Object.values(it.divisaoValores).reduce((a, v) => a + (Number(v) || 0), 0) : total;
+  return `<div style="margin-top:10px;padding:10px;border-radius:10px;background:var(--bg3)">
+    <label class="lbl" style="display:block;margin-bottom:6px">Pagamento de</label>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      ${ids.map(id => `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:20px;border:1px solid var(--border2);font-size:13px;font-weight:600">${escHtml(id)}${ids.length > 1 ? `<button type="button" aria-label="Tirar ${escHtml(id)}" onclick="tirarProcDivisao(${i},'${escHtml(id)}')" style="border:none;background:none;color:var(--muted2);cursor:pointer;font-size:15px;padding:0 2px">×</button>` : ''}</span>`).join('')}
+      <select aria-label="Adicionar processo" style="width:auto;min-width:150px" onchange="addProcDivisao(${i},this.value)"><option value="">+ outro processo</option>${outros.map(id => `<option>${escHtml(id)}</option>`).join('')}</select>
+    </div>
+    ${ids.length > 1 ? `
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:13px">
+      <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" style="width:auto" name="dv-${i}" ${!it.divisaoValores ? 'checked' : ''} onchange="setModoDivisao(${i},'igual')"> Dividir igual (${brlE(total / ids.length)} cada)</label>
+      <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" style="width:auto" name="dv-${i}" ${it.divisaoValores ? 'checked' : ''} onchange="setModoDivisao(${i},'valores')"> Informar o valor de cada</label>
+    </div>
+    ${it.divisaoValores ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:8px">${ids.map(id => `<div class="ig" style="margin:0"><label class="lbl" for="dvv-${i}-${escHtml(id)}">${escHtml(id)} (R$)</label><input id="dvv-${i}-${escHtml(id)}" type="text" inputmode="decimal" value="${fmt(it.divisaoValores[id] || 0)}" onchange="setValorDivisao(${i},'${escHtml(id)}',this.value)"></div>`).join('')}</div>
+      <div style="font-size:12.5px;margin-top:6px;color:${somaDivisaoOk(it) ? 'var(--green)' : 'var(--red)'}">Soma ${brlE(soma)} de ${brlE(total)}${somaDivisaoOk(it) ? ' ✓' : ' — a soma precisa bater com o valor pago'}</div>` : ''}` : ''}
+  </div>`;
+}
+const brlE = n => 'R$ ' + (Math.round((Number(n) || 0) * 100) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Arquivo que não é documento (ex.: "Enviada do WhatsApp"): sai da Entrada para "🗑 Ignorados" (nada é apagado)
+async function ignorarEntrada(i) {
+  const E = S.entrada, it = E.itens[i]; if (!it) return;
+  try { const pasta = await getTesteFolder('🗑 Ignorados'); await driveAPI('PATCH', '/files/' + it.fileId, {}, 'addParents=' + pasta + '&removeParents=' + E.folderId + '&fields=id'); E.itens.splice(i, 1); showToast('Movido para "🗑 Ignorados" (nada foi apagado)'); }
+  catch (e) { showToast('⚠️ ' + (e.message || e)); }
+  render();
 }
