@@ -264,6 +264,9 @@ function enriquecerInfo(item) {
     if (!info.transpNome) info.transpNome = mx(/TRANSPORTADOR[\s\S]{0,140}?CNPJ \/ CPF\s+([A-ZÀ-Ú][A-ZÀ-Ú .&-]{3,60}?)\s+\d-/i);
   }
   if (item.tipo === 'nfse') {
+    // NFS-e de prefeitura (hotéis etc.): vale o VALOR LÍQUIDO; a DATA FATO GERADOR é o dia do pagamento
+    if (!info.valor) { const w = U.match(/VALOR L[IÍ]QUIDO\s*\(R\$\)([\s\S]{0,400})/i); if (w) { const vs = (w[1].match(/\d{1,3}(?:\.\d{3})*,\d{2}/g) || []).map(numBR); if (vs.length && Math.max(...vs) > 0) info.valor = Math.max(...vs); } }
+    if (!info.data) { const d = mx(/DATA FATO GERADOR[\s\S]{0,250}?(\d{2}\/\d{2}\/\d{4})/i); if (d) info.data = brToIso(d); }
     if (!info.emitNome) info.emitNome = mx(/Nome empresarial:\s*(.+?)\s+Endere[cç]o/i) || mx(/RECEBI\(EMOS\) DA EMPRESA:\s*(.+?)\s+A NOTA/i)
       || mx(/(?:EMITENTE DA NFS-?e|Prestador do Servi[cç]o)[\s\S]{0,120}?Nome \/ Nome Empresarial\s+(.+?)\s+(?:Inscri|CNPJ|CEP)/i) || mx(/Nome \/ Nome Empresarial\s+(.+?)\s+(?:Inscri|CNPJ|CEP)/i);
     if (!info.valor) info.valor = numBR(mx(/VALOR (?:TOTAL )?DOS? SERVI[CÇ]OS?:?\s*R?\$?\s*([\d.]+,\d{2})/i) || mx(/Valor l[ií]quido da NFS-?e[\s\S]{0,60}?([\d.]+,\d{2})/i) || mx(/VALOR TOTAL DA NFS-?E[\s\S]{0,80}?R\$\s*([\d.]+,\d{2})/i));
@@ -1076,3 +1079,29 @@ function lancarReembolsoSocio(item, p, upd) {
 }
 function reembolsosAbertos() { return (S.lancamentos || []).filter(l => l.docs && l.docs.reembolsoSocio && l.status !== 'Pago'); }
 function setPagoPor(i, v) { const it = S.entrada.itens[i]; if (!it) return; it.pagoPor = v; render(); }
+
+
+// Já existe lançamento da mesma despesa? (mesmo valor, mesma empresa, datas a até 10 dias) — evita contar nota + comprovante duas vezes
+function lancamentoParecido(valor, dataIso, nome) {
+  const base = t => semAcento(t).replace(/[^A-Z]/g, '').slice(0, 8);
+  const n = base(nome), d = dataIso ? new Date(dataIso) : null;
+  return (S.lancamentos || []).find(l => l.tipo === 'Despesa' && Math.abs((Number(l.valor) || 0) - valor) < 0.01
+    && (!n || !base(l.empresa) || base(l.empresa) === n)
+    && (!d || !l.data || Math.abs((new Date(brToIso(l.data)) - d) / 864e5) <= 10));
+}
+// Nota de serviço / recibo das despesas do mês pagos pela empresa: a própria nota confirma o pagamento
+function lancarDespesaDaNota(item, upd) {
+  const valor = Number(item.info && item.info.valor) || 0; if (!valor) return null;
+  const quem = (item.info && item.info.emitNome) || item.nome.replace(/^ADM\s*-\s*/i, '').replace(/\.[a-z0-9]+$/i, '');
+  const ja = lancamentoParecido(valor, item.info.data, quem);
+  if (ja) { ja.docs = ja.docs || {}; if (!ja.docs.nota && upd) ja.docs.nota = upd.webViewLink; return ja; }
+  const obj = {
+    id: genId(), tipo: 'Despesa', status: 'Pago', descricao: (item.categoria || 'Despesas administrativas') + ' — ' + quem,
+    valor, data: item.info.data ? isoToBr(item.info.data) : '', empresa: quem, categoria: item.categoria || 'Outras despesas',
+    vinculo: 'avulso', vinculoId: 'ADM', observacao: 'Nota: ' + (upd ? upd.name : item.nome),
+    docs: { nota: upd ? upd.webViewLink : '', _origem: 'entrada' },
+  };
+  S.lancamentos = S.lancamentos || []; S.lancamentos.unshift(obj);
+  logAction('criar', 'EXTRATO_CAIXA', obj.id, 'Despesa ' + obj.descricao + ' R$ ' + valor.toFixed(2) + ' (pela nota)');
+  return obj;
+}
