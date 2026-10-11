@@ -360,7 +360,7 @@ function campoCustoSugerido(item) {
   const info = item.info || {};
   const quem = normTxt([item.nomeOriginal || item.nome, info.emitNome, info.pagamento && info.pagamento.recebedor, String(item.texto || '').slice(0, 800)].filter(Boolean).join(' '));
   const cat = categoriaPeloNome(normTxt([info.emitNome, info.pagamento && info.pagamento.recebedor].filter(Boolean).join(' ')))
-    || item.categoria || categoriaPeloNome(normTxt(item.nomeOriginal || item.nome)) || categoriaPeloNome(quem);
+    || item.categoria || categoriaPeloNome(normTxt(item.nomeOriginal || item.nome)) || (item.tipo === 'nfe' ? '' : categoriaPeloNome(quem));   // NF-e de compra: o texto da nota (porto, frete…) não muda o custo
   if (CAMPO_POR_CATEG[cat]) return CAMPO_POR_CATEG[cat];
   if (item.tipo === 'nfe') return 'custoProduto';
   if (item.tipo === 'nfse') return 'custoServTerceiros';
@@ -481,7 +481,9 @@ function aplicarDocNoProcesso(item, p, upd) {
     const nf = x => String(x || '').toUpperCase().normalize('NFD').replace(/[^A-Z0-9]/g, '').slice(0, 10);
     const mesmaNota = !pago && lista.some(d => (Math.abs((Number(d.valor) || 0) - valor) < 0.01 && (!info.chave || !/^\d{44}$/.test(d.k)))
       || (d.tipo !== item.tipo && (d.tipo === 'faturaFrete' || item.tipo === 'faturaFrete') && nf(d.de) && nf(d.de) === nf(info.emitNome) && Math.abs((Number(d.valor) || 0) - valor) <= Math.max(5, valor * 0.05)));
-    if (!lista.some(d => d.k === chave) && !mesmaNota) {
+    // a mesma nota (chave de acesso) já lançada em outro custo do processo — ex.: o PDF da NF cujo XML já entrou: não lança de novo
+    const jaEmOutro = !pago && info.chave && Object.entries(p.docs._custoDocs).some(([c, r]) => c !== campo && (r.fiscais || []).some(d => d.k === info.chave));
+    if (!lista.some(d => d.k === chave) && !mesmaNota && !jaEmOutro) {
       lista.push({ k: chave, url, valor, tipo: item.tipo, adiant: info.adiantamento && pago ? true : undefined, data: info.data ? isoToBr(info.data) : (info.pagamento && info.pagamento.data) || '', nome: (upd && upd.name) || item.nome, de: info.emitNome || (info.pagamento && info.pagamento.recebedor) || '' });
       // pago com o cartão / conta pessoal do sócio: conta como pago no processo e vira reembolso a fazer
       if (!pago && item.pagoPor === 'socio' && !reg.pagos.some(d => d.k === 'socio:' + chave)) reg.pagos.push({ k: 'socio:' + chave, url, valor, tipo: 'socio', data: info.data ? isoToBr(info.data) : '', nome: 'pago pelo sócio (reembolsar)', de: info.emitNome || '' });
@@ -950,6 +952,7 @@ setTimeout(async function esperarDados() {
     try { mudou += await corrigirCambioDossie(); } catch (e) { console.warn('dossiê', e); }
     mudou += corrigirFaturasDigitadas();
     mudou += moverPagamentosMarcados();
+    mudou += notasDuplicadasEmCustos();
     mudou += lancamentosDeCustoViramBaixa();
     { const t = transferirCambiosPeloNome(); if (t) { mudou += t; try { if (typeof salvarBanco === 'function') await salvarBanco(); } catch (e) {} } }
     mudou += ajustarInvoiceTransferida();
@@ -1630,5 +1633,27 @@ function lancamentosDeCustoViramBaixa() {
     n++;
   });
   if (n) S.lancamentos = ficar;
+  return n;
+}
+
+// Correção: mesma NF (chave) lançada em dois custos (ex.: XML no Produto e o PDF lido errado no Frete Marítimo, FS260118).
+// Fica onde está o XML (valor exato); se não houver XML, no primeiro lançado.
+function notasDuplicadasEmCustos() {
+  let n = 0;
+  (S.processos || []).forEach(p => {
+    const cd = (p.docs && p.docs._custoDocs) || {}; const onde = {};
+    Object.entries(cd).forEach(([campo, reg]) => (reg.fiscais || []).forEach(d => { if (/^\d{44}$/.test(d.k)) (onde[d.k] = onde[d.k] || []).push({ campo, d }); }));
+    Object.entries(onde).filter(([, xs]) => new Set(xs.map(x => x.campo)).size > 1).forEach(([k, xs]) => {
+      const fica = xs.find(x => /\.xml$/i.test(x.d.nome || '')) || xs[0];
+      xs.filter(x => x.campo !== fica.campo).forEach(x => {
+        const reg = cd[x.campo]; reg.fiscais = reg.fiscais.filter(d => d !== x.d);
+        const lanc = p.docs['_lanc_' + x.campo]; if (lanc && lanc.nfe === x.d.url) delete lanc.nfe;
+        if (!(reg.fiscais || []).length && !(reg.pagos || []).length) { delete cd[x.campo]; p[x.campo] = ''; p[x.campo + '_status'] = ''; } else recalcularCustos(p, x.campo);
+        ((p.docs._files || {}).nfe || []).forEach(f => { if (f.url === x.d.url) f.campoCusto = fica.campo; });
+        logAction('editar', 'PROCESSOS', p.id, `NF ${k.slice(25, 34).replace(/^0+/, '')}: estava também em ${PROCESS_COST_FIELDS[x.campo]} (R$ ${x.d.valor}) — fica só em ${PROCESS_COST_FIELDS[fica.campo]}`);
+        n++;
+      });
+    });
+  });
   return n;
 }
