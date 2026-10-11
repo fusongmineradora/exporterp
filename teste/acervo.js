@@ -305,7 +305,7 @@ function enriquecerInfo(item) {
     info.lacre = [...lacres][0] || '';
     info.navio = (U.match(/V\s*e\s*s\s*s\s*e\s*l\s+(.{3,40}?)\s+V\s*o\s*y\s*a\s*g\s*e/i) || [])[1] || '';
     info.navio = info.navio.replace(/\s+(?=\S\s)/g, m => m).replace(/\s+/g, ' ').trim();
-    info.armador = /MAEU|MAERSK/i.test(C) ? 'MAERSK' : /COSU|COSCO/i.test(C) ? 'COSCO' : /MSCU|\bMSC\b/i.test(C) ? 'MSC' : /CMDU|CMA/i.test(C) ? 'CMA CGM' : /HLCU|HAPAG/i.test(C) ? 'Hapag-Lloyd' : /EGLV|EVERGREEN/i.test(C) ? 'Evergreen' : '';
+    info.armador = /MAEU|MAERSK/i.test(C) ? 'MAERSK' : /COSU|COSCO/i.test(C) ? 'COSCO' : /MSCU|\bMSC\b/i.test(C) ? 'MSC' : /CMDU|CMA/i.test(C) ? 'CMA CGM' : /HLCU|HAPAG/i.test(C) ? 'Hapag-Lloyd' : /EGLV|EVERGREEN/i.test(C) ? 'Evergreen' : /YMLU|YANGMING/i.test(C) ? 'Yang Ming' : '';
   }
   if (item.tipo === 'due') {
     info.dueNumero = info.dueNumero || mx(/\b(\d{2}BR\d{9}-?\d)\b/i);
