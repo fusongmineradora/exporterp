@@ -1693,7 +1693,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '58';
+const VERSAO_TESTE = '59';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -2035,7 +2035,11 @@ function lancamentosRepetidos() {
 const ASSESSORIA_PAGOS = { FS260096: 1200, FS260097: 1200, FS260098: 1200, FS260099: 1200, FS260100: 1200, FS260101: 1200, FS260102: 1200, FS260104: 1200, FS260107: 1200, FS260108: 1200, FS260109: 1200, FS260109S: 1200, FS260111: 1200, FS260106: 2400, FS260112: 2400 };
 const ASSESSORIA_RE = /\bFFA\s+COMERCIO|ADEMIR\s+FURTADO/;
 const ASSESSORIA_DECISAO = '2026-10-11';
-function ehLinhaAssessoria(l) { return l && l.valor < 0 && ASSESSORIA_RE.test(semAcento((l.favorecido || '') + ' ' + (l.memo || ''))); }
+// PIX da empresa para o Klismann que foi repassado ao Ademir (R$ 3.000 de 20/08): é assessoria, não empréstimo ao sócio
+const ASSESSORIA_VIA_SOCIO = ['0341-8262994992|2026-08-20|-300000|PIX ENVIADO KLISMANN LAI 070.929.029-24|1'];
+// custos confirmados por você (11/10/2026): FS260112 tem mais de uma carga e todos os produtos já estão pagos (COOP R$ 8.100 + Thomazini R$ 43.200)
+const DECISOES_CUSTO = [['FS260112', 'custoProduto', 'Pago']];
+function ehLinhaAssessoria(l) { return l && l.valor < 0 && (l.lancId === 'saldo:ASSESSORIA' || ASSESSORIA_RE.test(semAcento((l.favorecido || '') + ' ' + (l.memo || '')))); }
 function assessoriaPeloSaldo() {
   let n = 0;
   Object.entries(ASSESSORIA_PAGOS).forEach(([id, v]) => {
@@ -2051,6 +2055,17 @@ function assessoriaPeloSaldo() {
     p[c] = v; p[c + '_status'] = 'Pago';
     if (p.docs._custoDocs && p.docs._custoDocs[c]) recalcularCustos(p, c);
     n++;
+  });
+  ((S.banco && S.banco.linhas) || []).forEach(l => {
+    if (!ASSESSORIA_VIA_SOCIO.includes(l.chave) || l.lancId === 'saldo:ASSESSORIA') return;
+    const velho = l.lancId; if (velho) S.lancamentos = (S.lancamentos || []).filter(x => x.id !== velho);
+    l.status = 'conciliado'; l.lancId = 'saldo:ASSESSORIA'; l.categoria = 'Serviços de Terceiros'; l.centro = 'Assessoria (saldo)'; l.obs = 'Assessoria Ademir/FFA paga pelo Klismann (PIX da empresa para o sócio, repassado ao Ademir)'; n++;
+  });
+  DECISOES_CUSTO.forEach(([id, c, st]) => {
+    const p = (S.processos || []).find(x => x.id === id); if (!p) return; p.docs = p.docs || {};
+    if (p.docs._statusManual && p.docs._statusManual[c] === st && p[c + '_status'] === st) return;
+    p.docs._statusManual = Object.assign({}, p.docs._statusManual, { [c]: st }); p[c + '_status'] = st;
+    if (p.docs._custoDocs && p.docs._custoDocs[c]) recalcularCustos(p, c); n++;
   });
   // linhas do extrato para o Ademir/FFA até a decisão: entram na conta pelo saldo (sem precisar escolher o processo)
   ((S.banco && S.banco.linhas) || []).forEach(l => {
@@ -2081,7 +2096,7 @@ function blocoContaAssessoria() {
   return `<div style="padding:9px 12px;border-radius:10px;background:var(--bg3)">
     <div style="display:flex;justify-content:space-between;gap:10px;cursor:pointer" onclick="S._contaAss=!S._contaAss;render()"><div><div style="font-size:14px;font-weight:600">Assessoria Ademir / FFA ${aberto ? '▾' : '▸'}</div><div style="font-size:12.5px;color:var(--muted2)">pago ${m(c.pago)} · devido pelos processos pagos ${m(c.devido)} · ${txtDif}</div></div><div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;white-space:nowrap">${m(c.emAberto)} a pagar</div></div>
     ${aberto ? `<div style="font-size:12.5px;padding-top:8px;display:grid;gap:4px">
-      <div style="font-weight:600">Saídas no extrato para Ademir/FFA</div>${c.linhas.map(l => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${isoToBr(l.data)} · ${escHtml((l.favorecido || l.memo).slice(0, 40))}</span><span style="font-family:'JetBrains Mono',monospace">${m(Math.abs(l.valor))}</span></div>`).join('')}
+      <div style="font-weight:600">Saídas no extrato para Ademir/FFA</div>${c.linhas.map(l => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${isoToBr(l.data)} · ${escHtml((l.favorecido || l.memo).slice(0, 40))}${ASSESSORIA_VIA_SOCIO.includes(l.chave) ? ' (via Klismann)' : ''}</span><span style="font-family:'JetBrains Mono',monospace">${m(Math.abs(l.valor))}</span></div>`).join('')}
       <div style="font-weight:600;padding-top:6px">Processos já pagos (${c.devidos.length})</div><div style="color:var(--muted2)">${c.devidos.map(x => escHtml(x.id.replace(/^FS260/, '')) + ' ' + m(x.valor)).join(' · ')}</div>
       <div style="font-weight:600;padding-top:6px">Em aberto (${c.abertos.length})</div><div style="color:var(--muted2)">${c.abertos.map(x => escHtml(x.id.replace(/^FS260/, '')) + ' ' + m(x.valor) + (x.previsto ? ' (previsto)' : '')).join(' · ') || '—'}</div>
       ${dif < -0.009 ? `<div style="color:var(--yellow);padding-top:6px">A diferença de ${m(-dif)} pode ter sido paga por outra conta, em dinheiro, ou ainda não foi paga.</div>` : ''}
