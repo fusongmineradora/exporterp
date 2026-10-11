@@ -592,19 +592,20 @@ async function conciliarCambio(k, silencioso) {
       observacao: 'Extrato: LIQ EXPORT ' + gr.contrato + (ct && ct.referencia ? ' · contrato ' + ct.referencia : ''), docs: { _banco: chaves, _cambio: { contrato: gr.contrato, usd: f.usd, taxa: ct ? ct.taxa : null }, comprovante: ct ? ct.url : '' },
     };
     if (!ja) S.lancamentos.unshift(obj);
-    if (tarifa) {
-      S.lancamentos.unshift({
-        id: genId(), tipo: 'Despesa', status: 'Pago', descricao: `Tarifa de câmbio ${gr.contrato} — ${f.processo}`,
-        valor: Math.round(tarifa * parte(f) * 100) / 100, data: isoToBr(gr.data), empresa: 'ITAU UNIBANCO', categoria: 'Tarifa de câmbio',
-        vinculo: 'processo', vinculoId: f.processo, observacao: 'Extrato: TAR CAMB REC RECURS', docs: { _banco: gr.tarifas.map(l => l.chave).join(',') },
-      });
-    }
     const pr = (S.processos || []).find(x => x.id === f.processo);
     if (pr && typeof cambioPeloBanco === 'function') cambioPeloBanco(pr, gr.contrato, reais, gr.data);
     logAction('criar', 'EXTRATO_CAIXA', obj.id, `Câmbio ${gr.contrato} → ${f.processo} R$ ${reais.toFixed(2)}`);
   });
+  // tarifa do câmbio: fica no Câmbio (despesa da empresa), fora do custo dos processos
+  if (tarifa && !(S.lancamentos || []).some(x => x.categoria === 'Tarifa de câmbio' && String(x.descricao || '').includes(String(gr.contrato)))) {
+    S.lancamentos.unshift({
+      id: genId(), tipo: 'Despesa', status: 'Pago', descricao: `Tarifa de câmbio ${gr.contrato} (${faturas.map(f => f.processo).join(' + ')})`,
+      valor: Math.round(tarifa * 100) / 100, data: isoToBr(gr.data), empresa: 'ITAU UNIBANCO', categoria: 'Tarifa de câmbio',
+      vinculo: 'avulso', vinculoId: 'ADM', observacao: 'Extrato: TAR CAMB REC RECURS', docs: { _banco: gr.tarifas.map(l => l.chave).join(','), _cambio: { contrato: gr.contrato, processos: faturas.map(f => f.processo) } },
+    });
+  }
   const procDaLinha = l => { const f = faturas.find(x => linhaDe[x.processo] === l); return f ? 'P:' + f.processo : faturas.map(x => 'P:' + x.processo).join(' '); };
-  [...gr.linhas, ...gr.tarifas].forEach(l => { l.status = 'conciliado'; l.lancId = 'cambio:' + gr.contrato; l.categoria = l.valor > 0 ? 'Câmbio' : 'Tarifa de câmbio'; l.centro = l.valor > 0 ? procDaLinha(l) : faturas.map(f => 'P:' + f.processo).join(' '); });
+  [...gr.linhas, ...gr.tarifas].forEach(l => { l.status = 'conciliado'; l.lancId = 'cambio:' + gr.contrato; l.categoria = l.valor > 0 ? 'Câmbio' : 'Tarifa de câmbio'; l.centro = l.valor > 0 ? procDaLinha(l) : 'ADM'; });
   if (silencioso) return true;
   try { await persistir2(); showToast('✅ Câmbio conciliado'); } catch (e) { showToast('⚠️ ' + e.message); }
   render();
