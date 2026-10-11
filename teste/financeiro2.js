@@ -259,6 +259,12 @@ function gruposDivididos() {
   return Object.entries(g).filter(([, parts]) => new Set(parts.map(x => x.p.id)).size > 1)
     .map(([url, parts]) => ({ url, parts, total: Math.round(parts.reduce((a, x) => a + x.valor, 0) * 100) / 100, data: (parts.find(x => x.data) || {}).data || '' }));
 }
+// custo previsto (estimado): não é dívida real — o extrato não dá baixa nele sozinho (muitos processos têm o mesmo valor)
+function ehPrevisto(e) {
+  if (!e || !e._sourceField || !e._sourceProcessoId) return false;
+  const p = (S.processos || []).find(x => x.id === e._sourceProcessoId);
+  return !!(p && p.docs && p.docs._previsto && p.docs._previsto[e._sourceField]);
+}
 function sugestaoLinha(l) {
   const v = Math.abs(l.valor);
   if (l.valor < 0) {
@@ -277,7 +283,7 @@ function sugestaoLinha(l) {
       const f = pr && pr.docs && pr.docs._custoDocs && pr.docs._custoDocs[e._sourceField] && (pr.docs._custoDocs[e._sourceField].fiscais || [])[0];
       return f && f.data ? brToIso2(f.data) : '';
     };
-    const abertos = buildAllEntries().filter(e => e.tipo === 'Despesa' && e.status === 'Em Aberto' && Math.abs((Number(e.valor) || 0) - v) < 0.01).filter(e => {
+    const abertos = buildAllEntries().filter(e => e.tipo === 'Despesa' && e.status === 'Em Aberto' && !ehPrevisto(e) && Math.abs((Number(e.valor) || 0) - v) < 0.01).filter(e => {
       const d = dataRef(e); e._dataRef = d;
       if (!d) return true;                                   // sem data: só sugestão (não é automático)
       return e.data ? diasEntre(d, l.data) <= 10 : (l.data >= d ? diasEntre(d, l.data) <= 75 : diasEntre(d, l.data) <= 5);
@@ -297,7 +303,7 @@ function sugestaoLinha(l) {
   if (l.valor < 0) {
     const nf = s2 => String(s2 || '').toUpperCase().normalize('NFD').replace(/[^A-Z0-9]/g, '');
     const fav = nf(l.favorecido || l.memo);
-    const cands = buildAllEntries().filter(e => e._computed && e._sourceField && e.status === 'Em Aberto' && Number(e.valor) > 0).filter(e => {
+    const cands = buildAllEntries().filter(e => e._computed && e._sourceField && e.status === 'Em Aberto' && !ehPrevisto(e) && Number(e.valor) > 0).filter(e => {
       const pr = (S.processos || []).find(x => x.id === e._sourceProcessoId) || {};
       const emp = nf((pr.docs && pr.docs._costEmpresa && pr.docs._costEmpresa[e._sourceField]) || e.empresa);
       const tol = Math.max(5, Number(e.valor) * 0.01);
@@ -561,7 +567,12 @@ async function conciliarCambio(k, silencioso) {
       linhaDe[f.processo] = livres.splice(melhor, 1)[0];
       return true;
     });
-    if (!ok) Object.keys(linhaDe).forEach(k => delete linhaDe[k]);
+    if (!ok) {
+      // o extrato manda: uma linha por fatura mesmo com a taxa diferente → maior USD com a maior linha
+      Object.keys(linhaDe).forEach(k => delete linhaDe[k]);
+      const ls = gr.linhas.slice().sort((a, b) => b.valor - a.valor);
+      faturas.slice().sort((a, b) => b.usd - a.usd).forEach((f, i) => { linhaDe[f.processo] = ls[i]; });
+    }
   }
   faturas.forEach(f => {
     const minha = linhaDe[f.processo];
@@ -587,6 +598,8 @@ async function conciliarCambio(k, silencioso) {
         vinculo: 'processo', vinculoId: f.processo, observacao: 'Extrato: TAR CAMB REC RECURS', docs: { _banco: gr.tarifas.map(l => l.chave).join(',') },
       });
     }
+    const pr = (S.processos || []).find(x => x.id === f.processo);
+    if (pr && typeof cambioPeloBanco === 'function') cambioPeloBanco(pr, gr.contrato, reais, gr.data);
     logAction('criar', 'EXTRATO_CAIXA', obj.id, `Câmbio ${gr.contrato} → ${f.processo} R$ ${reais.toFixed(2)}`);
   });
   const procDaLinha = l => { const f = faturas.find(x => linhaDe[x.processo] === l); return f ? 'P:' + f.processo : faturas.map(x => 'P:' + x.processo).join(' '); };

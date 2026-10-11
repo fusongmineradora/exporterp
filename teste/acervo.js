@@ -159,7 +159,8 @@ function docVendaDoItem(it) {
 function numeroProcessoDoItem(it) {
   const d = docVendaDoItem(it);
   const n = (d && d.numero) || ((String(it.nome || '').toUpperCase().match(/FS\s?\d{6}/) || [''])[0]);
-  return n.replace(/\s/g, '').replace(/^(FS\d{6})S$/, '$1');
+  const id = n.replace(/\s/g, '').replace(/^(FS\d{6})S$/, '$1');
+  return id ? processoAtual(id) : id;
 }
 function podeCriarProcesso(it) {
   if (!it || !['invoice', 'contrato'].includes(it.tipo)) return '';
@@ -392,6 +393,7 @@ function recalcularCustos(p, campo) {
   const comp = (reg.pagos || []).find(d => d.url);
   if (comp) { p.docs._costComp = p.docs._costComp || {}; p.docs._costComp[campo] = comp.url; }
   p.docs._costPago = p.docs._costPago || {}; p.docs._costPago[campo] = Math.round(pago * 100) / 100;
+  if (p.docs._previsto && p.docs._previsto[campo] && ((reg.fiscais || []).length || (reg.pagos || []).length)) delete p.docs._previsto[campo];   // chegou o real
   // botões do lançamento (Comprov. / NF-e) já ficam marcados com os arquivos
   const lanc = p.docs['_lanc_' + campo] = p.docs['_lanc_' + campo] || {};
   if (comp && !lanc.comprovante) lanc.comprovante = comp.url;
@@ -406,7 +408,11 @@ function aplicarCambioNoProcesso(p, c, url) {
   if (!f || !f.usd) return false;
   const taxa = Number(c.taxa) || (c.valorReais && c.valorMoeda ? c.valorReais / c.valorMoeda : 0);
   p.docs._cambioDocs = p.docs._cambioDocs || {};
-  p.docs._cambioDocs[c.referencia || url] = { usd: f.usd, taxa, reais: Math.round(f.usd * taxa * 100) / 100, data: c.data || '', contrato: c.contratoExtrato || '', url };
+  // o extrato (OFX) é a verdade: se a linha do banco já foi conciliada, o valor em reais é o do banco
+  const antes = p.docs._cambioDocs[c.referencia || url];
+  const banco = antes && antes.banco != null && Math.abs((antes.usd || 0) - f.usd) < 0.01 ? antes.banco : null;
+  p.docs._cambioDocs[c.referencia || url] = { usd: f.usd, taxa, reais: banco != null ? banco : Math.round(f.usd * taxa * 100) / 100, data: (antes && antes.dataBanco) || c.data || '', contrato: c.contratoExtrato || '', url };
+  if (banco != null) { p.docs._cambioDocs[c.referencia || url].banco = banco; p.docs._cambioDocs[c.referencia || url].dataBanco = antes.dataBanco; }
   const cs = Object.values(p.docs._cambioDocs);
   const usd = cs.reduce((a, x) => a + x.usd, 0), reais = cs.reduce((a, x) => a + x.reais, 0);
   p.cambioRecebido = Math.round(usd * 100) / 100;
@@ -595,14 +601,14 @@ function tipoDaPasta(nome) {
 // Nome de pasta no padrão "FS2601xx - Booking - Cliente - Produto - Destino" (partes podem faltar)
 function lerNomePastaProcesso(nome) {
   const partes = String(nome || '').split(/\s+[-–—]\s+/).map(x => x.trim()).filter(Boolean);
-  const cab = partes[0] || ''; const id = FS_DE(cab); if (!id) return null;
+  const cab = partes[0] || ''; const id0 = FS_DE(cab); if (!id0) return null; const id = processoAtual(id0);
   const ids = [id];
   // "FS260109 + 109S" → FS260109 e FS260109S
   (cab.toUpperCase().match(/\+\s*(?:FS\s?)?\d{2,6}S?/g) || []).forEach(t => {
     const tok = t.replace(/[^0-9S]/g, ''), dig = tok.replace(/S$/, '');
     ids.push('FS' + id.slice(2, 8 - dig.length) + dig + (tok.endsWith('S') ? 'S' : ''));
   });
-  const r = { id, ids: [...new Set(ids)], cancelado: /CANCELAD/i.test(nome) };
+  const r = { id, ids: [...new Set(ids.map(processoAtual))], cancelado: /CANCELAD/i.test(nome) };
   const resto = partes.slice(1).filter(x => !/^(booking\s+pendente|pendente|cancelad[oa])$/i.test(x));
   const bk = resto[0] ? resto[0].split(/\s*\+\s*/) : null;
   if (bk && bk.every(x => /^[A-Z0-9]{6,20}$/i.test(x) && /\d/.test(x))) { r.bookings = bk.map(x => x.toUpperCase()); r.booking = r.bookings[0]; resto.shift(); }
@@ -931,6 +937,9 @@ setTimeout(async function esperarDados() {
       recalcularCustos(p, campo);
       if (p[campo] + '|' + p[campo + '_status'] !== antes) mudou++;
     }));
+    // processo renumerado (FS260105 → FS260107) e custos previstos
+    mudou += juntarProcessosRenumerados();
+    (S.processos || []).forEach(p => { mudou += aplicarPrevistos(p); });
     if (cadastrosPelosArquivos() > 0 || mudou) saveToSheets().catch(() => {});
   } catch (e) { console.warn('cadastros', e); }
 }, 4000);
@@ -1030,6 +1039,19 @@ function recalcularCambio(p) {
   if (!cs.length) { p.cambioRecebido = ''; p.cambioReais = ''; p.cambioTaxa = ''; p.cambioFechamento = ''; p.cambioRecebimento = ''; p.cambioStatus = 'Em Aberto'; return; }
   const usd = cs.reduce((a, x) => a + x.usd, 0), reais = cs.reduce((a, x) => a + x.reais, 0);
   p.cambioRecebido = Math.round(usd * 100) / 100; p.cambioReais = Math.round(reais * 100) / 100; p.cambioTaxa = usd ? reais / usd : 0;
+}
+// a linha do extrato (OFX) foi ligada a este processo: o valor recebido em reais passa a ser o do banco
+function cambioPeloBanco(p, contrato, reais, dataIso) {
+  const cs = (p.docs && p.docs._cambioDocs) || {};
+  const k = Object.keys(cs).find(x => String(cs[x].contrato) === String(contrato));
+  if (!k) return false;
+  cs[k].banco = Math.round(Number(reais) * 100) / 100; cs[k].reais = cs[k].banco;
+  if (dataIso) { cs[k].dataBanco = isoToBr(dataIso); cs[k].data = cs[k].dataBanco; }
+  recalcularCambio(p);
+  const datas = Object.values(cs).map(x => x.data).filter(Boolean).sort((a, b) => brToIso(a).localeCompare(brToIso(b)));
+  if (datas.length) { p.cambioFechamento = datas[0]; p.cambioRecebimento = datas[datas.length - 1]; }
+  p.cambioStatus = 'Pago';
+  return true;
 }
 // aplica o mapa contrato → processos: move o contrato para o processo certo e acerta lançamentos e extrato
 function aplicarMapaCambio(mapa) {
@@ -1194,5 +1216,141 @@ async function ignorarEntrada(i) {
   const E = S.entrada, it = E.itens[i]; if (!it) return;
   try { const pasta = await getTesteFolder('🗑 Ignorados'); await driveAPI('PATCH', '/files/' + it.fileId, {}, 'addParents=' + pasta + '&removeParents=' + E.folderId + '&fields=id'); E.itens.splice(i, 1); showToast('Movido para "🗑 Ignorados" (nada foi apagado)'); }
   catch (e) { showToast('⚠️ ' + (e.message || e)); }
+  render();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Processo renumerado: o número antigo aponta para o novo (ex.: FS260105 virou FS260107)
+// ═══════════════════════════════════════════════════════════════
+const ALIASES_PADRAO = { FS260105: 'FS260107' };
+function aliasesProcesso() {
+  const m = Object.assign({}, ALIASES_PADRAO);
+  ((S.banco && S.banco.regras) || []).filter(r => r.tipo === 'aliasProc').forEach(r => { if (r.valor && r.categoria) m[r.valor] = r.categoria; });
+  return m;
+}
+// junta o processo antigo no novo (arquivos, custos, câmbio, lançamentos e extrato) e anota "era o FS260105"
+function juntarProcessosRenumerados() {
+  let n = 0;
+  Object.entries(aliasesProcesso()).forEach(([antigo, novo]) => {
+    const pn = (S.processos || []).find(p => p.id === novo); if (!pn) return;
+    pn.docs = pn.docs || {};
+    if (pn.docs._numeroAntigo !== antigo) { pn.docs._numeroAntigo = antigo; n++; }
+    const pa = (S.processos || []).find(p => p.id === antigo); if (!pa) return;
+    const da = pa.docs || {}, dn = pn.docs;
+    // arquivos
+    dn._files = dn._files || {};
+    Object.entries(da._files || {}).forEach(([t, arr]) => {
+      const atual = dn._files[t] = dn._files[t] || [];
+      (arr || []).forEach(f => { if (!atual.some(x => (x.url && x.url === f.url) || (x.md5 && x.md5 === f.md5))) atual.push(f); });
+      if (atual.length && !dn[t]) dn[t] = atual[0].url;
+    });
+    // custos (notas e comprovantes)
+    dn._custoDocs = dn._custoDocs || {};
+    Object.entries(da._custoDocs || {}).forEach(([campo, reg]) => {
+      const r = dn._custoDocs[campo] = dn._custoDocs[campo] || { fiscais: [], pagos: [] };
+      ['fiscais', 'pagos'].forEach(k => (reg[k] || []).forEach(d => { if (!(r[k] || []).some(x => (x.k && x.k === d.k) || (x.url && x.url === d.url && x.valor === d.valor))) (r[k] = r[k] || []).push(d); }));
+      recalcularCustos(pn, campo);
+    });
+    ['_costBanco'].forEach(k => { if (da[k]) dn[k] = Object.assign({}, da[k], dn[k] || {}); });
+    // câmbio
+    if (da._cambioDocs) { dn._cambioDocs = Object.assign({}, da._cambioDocs, dn._cambioDocs || {}); recalcularCambio(pn); if (Object.keys(dn._cambioDocs).length) pn.cambioStatus = 'Pago'; }
+    // dados do processo que o novo ainda não tem
+    Object.keys(pa).forEach(k => { if (k === 'id' || k === 'docs' || k === 'status' || k === 'embarque') return; const v = pa[k]; if (v !== '' && v != null && v !== 0 && (pn[k] === '' || pn[k] == null || pn[k] === 0)) pn[k] = v; });
+    // lançamentos, extrato e comprovantes do mês
+    (S.lancamentos || []).forEach(l => { if (l.vinculoId === antigo) l.vinculoId = novo; if (l.descricao) l.descricao = String(l.descricao).split(antigo).join(novo); });
+    ((S.banco && S.banco.linhas) || []).forEach(l => { if (l.centro) l.centro = String(l.centro).split('P:' + antigo).join('P:' + novo); });
+    S.processos = S.processos.filter(p => p !== pa);
+    logAction('editar', 'PROCESSOS', novo, `Era o processo ${antigo}: arquivos, custos e lançamentos juntados no ${novo}`);
+    n++;
+  });
+  return n;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Custos previstos: lançados sozinhos (em aberto) e trocados pelo valor real quando chega a nota / comprovante / extrato.
+// Todos em reais e podem variar: você altera o valor no processo ou o padrão.
+// ═══════════════════════════════════════════════════════════════
+const PREVISTOS_PADRAO = [
+  { campo: 'custoServTerceiros', nome: 'Assessoria (Ademir / FFA)', valor: 1200, por: 'container' },
+  { campo: 'custoDespachante', nome: 'Despachante (CGA)', valor: 500, por: 'processo', certificado: 50 },
+  { campo: 'custoArmazem', nome: 'Armazém (estimado)', valor: 3200, por: 'container', soArmazem: true },
+];
+function regrasPrevisto() {
+  const rs = ((S.banco && S.banco.regras) || []).filter(r => r.tipo === 'previsto');
+  return PREVISTOS_PADRAO.map(d => {
+    const r = rs.find(x => x.valor === d.campo); if (!r) return Object.assign({}, d);
+    const o = Object.assign({}, d, { valor: Number(r.categoria) || 0 });
+    if (d.certificado != null && r.centro !== '' && r.centro != null) o.certificado = Number(r.centro) || 0;
+    return o;
+  });
+}
+function qtdContainers(p) { return Math.max(1, (p.containers || []).filter(Boolean).length, parseInt(p.qtdContainer, 10) || 0); }
+function temCertificadoOrigem(p) { const d = p.docs || {}; return Number(p.custoCertificado) > 0 || Object.keys(d._files || {}).some(k => /certific/i.test(k) && (d._files[k] || []).length) || !!(d._custoDocs && d._custoDocs.custoCertificado); }
+function vaiProArmazem(p) { const d = p.docs || {}; if (d._armazem != null) return !!d._armazem; return !!(p.logArmazem || /ARMAZ/i.test(p.logModalidade || '')); }
+function textoPrevisto(r, p) {
+  const q = qtdContainers(p);
+  return r.por === 'container' ? `R$ ${fmtBR2(r.valor)} × ${q} container${q > 1 ? 's' : ''}` : `R$ ${fmtBR2(r.valor)} por processo` + (r.certificado && temCertificadoOrigem(p) ? ` + R$ ${fmtBR2(r.certificado)} (certificado de origem)` : '');
+}
+function fmtBR2(v) { return (Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function aplicarPrevistos(p) {
+  if (!p) return 0;
+  p.docs = p.docs || {};
+  const pv = p.docs._previsto = p.docs._previsto || {}, off = p.docs._previstoOff || {};
+  let mud = 0;
+  const tirar = campo => { if (!pv[campo]) return; if (Math.abs((Number(p[campo]) || 0) - (Number(pv[campo].valor) || 0)) < 0.01) { p[campo] = ''; p[campo + '_status'] = ''; } delete pv[campo]; mud++; };
+  regrasPrevisto().forEach(r => {
+    const reg = p.docs._custoDocs && p.docs._custoDocs[r.campo];
+    const real = (reg && ((reg.fiscais || []).length || (reg.pagos || []).length)) || (p.docs._costBanco && p.docs._costBanco[r.campo])
+      || (S.lancamentos || []).some(l => l.vinculo === 'processo' && l.vinculoId === p.id && l.categoria === PROCESS_COST_FIELDS[r.campo] && l.status !== 'Cancelado');
+    if (real) { if (pv[r.campo]) { delete pv[r.campo]; mud++; } return; }   // chegou o valor real: deixa de ser previsto
+    if (p.status === 'Cancelado' || off[r.campo] || r.valor <= 0 || (r.soArmazem && !vaiProArmazem(p))) { tirar(r.campo); return; }
+    if (Number(p[r.campo]) > 0 && !pv[r.campo]) return;                    // valor digitado por você antes: não mexe
+    if (pv[r.campo] && Math.abs((Number(p[r.campo]) || 0) - (Number(pv[r.campo].valor) || 0)) >= 0.01) {  // você alterou o valor
+      if (!(Number(p[r.campo]) > 0)) { tirar(r.campo); return; }
+      pv[r.campo] = { valor: Number(p[r.campo]), regra: 'alterado por você', editado: true }; mud++; return;
+    }
+    if (pv[r.campo] && pv[r.campo].editado) return;
+    const valor = Math.round(((r.por === 'container' ? r.valor * qtdContainers(p) : r.valor) + (r.certificado && temCertificadoOrigem(p) ? r.certificado : 0)) * 100) / 100;
+    const regra = textoPrevisto(r, p);
+    if (!pv[r.campo] || pv[r.campo].valor !== valor || Number(p[r.campo]) !== valor) mud++;
+    pv[r.campo] = { valor, regra }; p[r.campo] = valor; p[r.campo + '_status'] = 'Em Aberto';
+    p.docs._costEmpresa = p.docs._costEmpresa || {}; if (!p.docs._costEmpresa[r.campo]) p.docs._costEmpresa[r.campo] = r.nome;
+  });
+  if (!Object.keys(pv).length) delete p.docs._previsto;
+  return mud;
+}
+async function alterarPrevisto(id, campo) {
+  const p = (S.processos || []).find(x => x.id === id); if (!p) return;
+  const atual = Number(p[campo]) || 0;
+  const v = await uiPrompt(`Valor previsto de ${PROCESS_COST_FIELDS[campo]} no ${id} (R$). Deixe 0 se não vai ter esse custo.`, fmtBR2(atual), 'Custo previsto');
+  if (v == null) return;
+  const n = numBR(String(v).replace(/[^\d.,]/g, '')) || 0;
+  p.docs._previstoOff = p.docs._previstoOff || {};
+  if (n <= 0) { p.docs._previstoOff[campo] = true; } else { delete p.docs._previstoOff[campo]; p[campo] = n; }
+  aplicarPrevistos(p);
+  try { await saveToSheets(); showToast('✅ Previsto atualizado'); } catch (e) { showToast('⚠️ ' + e.message); }
+  render();
+}
+async function setArmazemPrevisto(id, sim) {
+  const p = (S.processos || []).find(x => x.id === id); if (!p) return;
+  p.docs._armazem = !!sim; if (p.docs._previstoOff) delete p.docs._previstoOff.custoArmazem;
+  if (sim && p.docs._previsto && p.docs._previsto.custoArmazem) delete p.docs._previsto.custoArmazem.editado;
+  aplicarPrevistos(p);
+  try { await saveToSheets(); } catch (e) { showToast('⚠️ ' + e.message); }
+  render();
+}
+async function editarPadroesPrevistos() {
+  const rs = regrasPrevisto(), novas = [];
+  for (const r of rs) {
+    const v = await uiPrompt(`${r.nome}: valor padrão em R$ ${r.por === 'container' ? 'por container' : 'por processo'}${r.soArmazem ? ' (só quando o container vai para o armazém)' : ''}.`, fmtBR2(r.valor), 'Custos previstos');
+    if (v == null) return;
+    let cert = '';
+    if (r.certificado != null) { const c = await uiPrompt(`${r.nome}: valor a mais quando tem certificado de origem (R$).`, fmtBR2(r.certificado), 'Custos previstos'); if (c == null) return; cert = String(numBR(String(c).replace(/[^\d.,]/g, '')) || 0); }
+    novas.push({ id: genId(), tipo: 'previsto', valor: r.campo, categoria: String(numBR(String(v).replace(/[^\d.,]/g, '')) || 0), centro: cert, criadoEm: new Date().toISOString() });
+  }
+  S.banco.regras = (S.banco.regras || []).filter(r => r.tipo !== 'previsto').concat(novas);
+  // processos com previsto automático (não alterado por você) passam a usar o novo padrão
+  (S.processos || []).forEach(p => aplicarPrevistos(p));
+  try { if (typeof ensureTabs2 === 'function') await ensureTabs2(); await gravarAba2('REGRAS', S.banco.regras); await saveToSheets(); showToast('✅ Padrões dos previstos salvos'); } catch (e) { showToast('⚠️ ' + e.message); }
   render();
 }
