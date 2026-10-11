@@ -404,6 +404,8 @@ function recalcularCustos(p, campo) {
 }
 
 function aplicarCambioNoProcesso(p, c, url) {
+  // processo "S" (FS260109S) é a mesma venda do FS260109: receita e câmbio ficam só no principal
+  if (/^FS\d{6}S$/.test(p.id) && (S.processos || []).some(q => q.id === p.id.slice(0, -1))) return false;
   const f = (c.faturas || []).find(x => x.processo === p.id || x.processo.replace(/S$/, '') === p.id);
   if (!f || !f.usd) return false;
   const taxa = Number(c.taxa) || (c.valorReais && c.valorMoeda ? c.valorReais / c.valorMoeda : 0);
@@ -591,6 +593,7 @@ const semAcento = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').
 const FS_DE = s => ((semAcento(s).match(/FS\s?\d{6}/) || [''])[0]).replace(/\s/g, '');
 function tipoDaPasta(nome) {
   const u = semAcento(nome);
+  if (/^99\s*-?\s*ARQUIVO|ORIGINAIS/.test(u)) return '';   // "99 Arquivo - Originais Câmbio": o ERP não lê (valem as cópias FS na 05 Financeiro)
   if (/CANCELAD/.test(u) && !/^FS\s?\d{6}/.test(u)) return 'cancelados';
   if (/^FS\s?\d{6}/.test(u)) return 'processo';
   if (/^COMPROVANTE|DESPESAS GERAIS|^20\d{2}(-\d{2})?\b|EMPRESTIMOS? (?:DO |AO )?SOCIO/.test(u)) return 'comprovantes';   // organização nova: Despesas Gerais / 2026 / 2026-08 Agosto, Empréstimos sócio
@@ -678,6 +681,7 @@ async function executarImportacaoTudo() {
       const filhos = await driveListAll(`'${pasta.id}' in parents and trashed=false`, 'id,name,mimeType,md5Checksum,size');
       for (const f of filhos) {
         if (f.mimeType === 'application/vnd.google-apps.folder') {
+          if (/^99\s*-?\s*ARQUIVO|ORIGINAIS/.test(semAcento(f.name))) continue;
           const t = tipoDaPasta(f.name), fs = FS_DE(f.name);
           if (fs) anotarFS(f.name, pasta.cancelado);
           // subpasta de câmbio dentro de um processo: o processo vem do contrato, não da pasta
