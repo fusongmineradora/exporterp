@@ -11,7 +11,8 @@
 // ── 1. ISOLAMENTO ───────────────────────────────────────────
 // Sem dados de exemplo no ambiente de testes: tudo vem da planilha de teste
 S.processos = []; S.clientes = []; S.fornecedores = []; S.lancamentos = []; S.custosMensais = [];
-const TESTE_SHEET_NAME = 'Fu Song ERP Database — TESTE';
+// Geração 2 (11/10/2026): recomeço do zero com os dados reais — planilha e pasta novas; as antigas ficam no Drive sem uso
+const TESTE_SHEET_NAME = 'Fu Song ERP Database — TESTE 2';
 let _ensureTestSheetPromise = null;
 
 function ensureTestSheet() {
@@ -23,9 +24,11 @@ function ensureTestSheet() {
 }
 
 async function _ensureTestSheet() {
+  // recomeço (geração 2): o backup local da planilha antiga não pode voltar
+  try { if (localStorage.getItem('teste:geracao') !== '2') { localStorage.removeItem('teste:erp-local-backup'); localStorage.setItem('teste:geracao', '2'); } } catch (e) {}
   // a) já usada neste aparelho
   let saved = null;
-  try { saved = localStorage.getItem('teste:sheet-id'); } catch (e) {}
+  try { saved = localStorage.getItem('teste:sheet-id-2'); } catch (e) {}
   if (saved && saved !== PROD_SHEET_ID) {
     try {
       const f = await driveAPI('GET', '/files/' + saved, null, 'fields=id,trashed');
@@ -47,7 +50,7 @@ async function _ensureTestSheet() {
     showToast('✅ Planilha de testes criada');
   }
   if (SHEET_ID === PROD_SHEET_ID) throw new Error('Bloqueado: planilha de testes igual à de produção.');
-  try { localStorage.setItem('teste:sheet-id', SHEET_ID); } catch (e) {}
+  try { localStorage.setItem('teste:sheet-id-2', SHEET_ID); } catch (e) {}
   return SHEET_ID;
 }
 
@@ -541,6 +544,15 @@ async function analisarArquivo(f) {
     if (c.categoria) item.categoria = c.categoria;
   }
   if (typeof enriquecerInfo === 'function') { try { enriquecerInfo(item); } catch (e) { console.warn('enriquecer', e); } }
+  item._base = { tipo: item.tipo, confianca: item.confianca, motivo: item.motivo };
+  return identificarItem(item);
+}
+
+// Decide o processo do arquivo já lido. Pode ser refeito (ex.: depois de criar os processos) sem ler o arquivo de novo.
+function identificarItem(item) {
+  const nome = item.nome || '';
+  if (item._base) { item.tipo = item._base.tipo; item.confianca = item._base.confianca; item.motivo = item._base.motivo; }
+  ['processo', 'pastaErrada', 'corrigido', 'aviso', 'processosExtras', 'divisao', 'admAuto'].forEach(k => delete item[k]);
   // Prefixo colocado pelo acervo: "FS260105+FS260107 - nome original"
   const mPasta = nome.match(/^((?:FS\d{6}S?)(?:\+FS\d{6}S?)*) - /i);
   item.pastaProcessos = mPasta ? mPasta[1].toUpperCase().split('+') : [];
@@ -584,7 +596,11 @@ async function analisarArquivo(f) {
   }
   // Mesmo arquivo em pastas de processos diferentes: anexa a todos (atalho nos outros)
   if (item.pastaProcessos.length > 1 && !item.aviso && !item.pastaErrada) {
-    item.processosExtras = item.pastaProcessos.filter(id => id !== item.processo);
+    const ehCusto = typeof DOCS_COM_CUSTO !== 'undefined' && DOCS_COM_CUSTO.includes(item.tipo) && !(item.info && item.info.cambio);
+    const peloDoc = doDoc && item.pastaProcessos.includes(doDoc) && item.candidatos[0].score >= 100 && (!item.candidatos[1] || item.candidatos[1].score < item.candidatos[0].score);
+    if (ehCusto && peloDoc) item.processo = doDoc;   // nota/comprovante: o próprio documento diz de qual processo é
+    else if (ehCusto) { item.confianca = 'media'; item.aviso = `Confira: este arquivo de custo estava nas pastas ${item.pastaProcessos.join(' e ')}. Escolha o processo (para o custo não entrar duas vezes).`; }
+    else item.processosExtras = item.pastaProcessos.filter(id => id !== item.processo);
   }
   // Comprovante de pagamento sem nenhuma pista de processo → sugere "despesa do mês" (confira)
   if (!item.processo && item.tipo === 'pagamento' && !(item.candidatos || []).length) {
@@ -606,6 +622,7 @@ async function analisarArquivo(f) {
     item.processo = ids.includes(item.processo) ? item.processo : ids[0];
     item.processosExtras = ids.filter(id => id !== item.processo);
     item.divisao = ids.length;
+    if (item.aviso && /^Confira: este arquivo de custo/.test(item.aviso)) { item.aviso = ''; if (item._base && item._base.confianca === 'alta') item.confianca = 'alta'; }
     const parte = (Number(item.info.valor) || 0) / ids.length;
     item.aviso = (item.aviso ? item.aviso + ' ' : '') + `Pagamento de ${ids.join(' + ')}: dividido igualmente (R$ ${parte.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} cada).`;
   }
@@ -994,6 +1011,7 @@ function renderEntrada() {
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       ${E.folderUrl ? `<a class="btn btn-secondary btn-sm" href="${sanitizeUrl(E.folderUrl)}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">📂 Abrir pasta</a>` : ''}
+      <button class="btn btn-primary btn-sm" onclick="importarTudo()" ${E.carregando || (E.tudo && E.tudo.rodando) ? 'disabled' : ''}>🗂️ Importar tudo de uma pasta</button>
       <button class="btn btn-secondary btn-sm" onclick="importarPastaProcesso()" ${E.carregando ? 'disabled' : ''}>📂 Importar pasta de um processo</button>
       <button class="btn btn-secondary btn-sm" onclick="S.entrada.lido=false;lerEntrada()" ${E.carregando ? 'disabled' : ''}>🔄 Atualizar</button>
       <button class="btn btn-primary btn-sm" onclick="confirmarTodosEntrada()" ${prontos ? '' : 'disabled'}>✅ Anexar identificados (${prontos})</button>
@@ -1003,6 +1021,7 @@ function renderEntrada() {
   ${!window._sheetsToken ? `<div class="card" style="text-align:center;padding:30px;color:var(--muted)">Conecte ao Google Drive (botão no topo ou "Reconectar Drive" no menu) para ler a pasta Entrada.</div>` : ''}
   ${E.carregando ? `<div class="card" style="padding:18px;color:var(--muted);font-size:13px">⏳ ${escHtml(E.progresso || 'Lendo...')}</div>` : ''}
   ${E.erro ? `<div class="card" style="padding:16px;color:var(--red);font-size:13px">⚠️ ${escHtml(E.erro)}</div>` : ''}
+  ${typeof blocoImportarTudo === 'function' ? blocoImportarTudo() : ''}
   ${E.ofxNaEntrada ? `<div class="card" style="padding:12px 14px;font-size:12.5px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><span>🏦 ${E.ofxNaEntrada} extrato(s) OFX na Entrada.</span><button class="btn btn-primary btn-xs" onclick="nav('conciliacao');setTimeout(importarOFXDrive,300)">Importar na Conciliação</button></div>` : ''}
   ${E.lido && !E.carregando && !E.itens.length ? `<div class="card" style="text-align:center;padding:36px 20px">
       <div style="font-size:40px;margin-bottom:10px">📥</div>
