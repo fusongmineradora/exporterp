@@ -98,6 +98,8 @@ saveToSheets = async function () {
       if (recarregar) { await loadFromSheets(); showToast('Dados recarregados'); render(); return; }
     }
   }
+  // antes de gravar: junta processo renumerado e atualiza os custos previstos (containers, certificado, armazém, valor real)
+  try { if (typeof juntarProcessosRenumerados === 'function') juntarProcessosRenumerados(); if (typeof aplicarPrevistos === 'function') (S.processos || []).forEach(p => aplicarPrevistos(p)); } catch (e) { console.warn('previstos', e); }
   const r = await _saveToSheetsBase.apply(this, arguments);
   await _gravarMarca();
   _carregadoEm = new Date().toISOString();
@@ -331,7 +333,7 @@ const REGRAS_NOME = [
 function categoriaPeloNome(N) {
   const m = [
     [/MAR[IÍ]TIMO|FRETE INTERNACIONAL|ACC?ESS|AGENTE DE CARGA|MAERSK|COSCO|\bMSC\b|HAPAG/, 'Frete Marítimo'], [/TRANSPORTADORA|TRANSPORTES|ITALIANA|RODOVI|\bCT-?E\b|DACTE/, 'Frete Rodoviário'],
-    [/\bAZ\b|ARMAZ|T5S|OZIRIS/, 'Armazém'], [/DESPACHANTE|DESPACHOS|ADUANEIR|\bCGA\b/, 'Despachante'], [/CERTIFICADO/, 'Certificado de Origem'], [/PORTO|TERMINAL/, 'Porto / Taxas'],
+    [/\bAZ\b|ARMAZ|T5S|OZIRIS/, 'Armazém'], [/DESPACHANTE|DESPACHOS|ADUANEIR|\bCGA\b/, 'Despachante'], [/ASSESSORIA|\bADEMIR\b|\bFFA\b/, 'Serviços de Terceiros'], [/CERTIFICADO/, 'Certificado de Origem'], [/PORTO|TERMINAL/, 'Porto / Taxas'],
     [/NOTA DE ENTRADA|\bNFE\b|\bNF-E\b|MINERADORA|MINERA[CÇ][AÃ]O|PEDRA|PRODUTO|\bNOTA\b|CASCALHO/, 'Produto'], [/DARF|RECEITA FEDERAL|IMPOSTO/, 'Impostos'],
   ].find(([re]) => re.test(N));
   return m ? m[1] : '';
@@ -419,20 +421,52 @@ function completarPagamento(pag, texto) {
 }
 
 // "FS260098 99 01" ou "FS2600989901" = FS260098, FS260099 e FS260101 (só os 2 últimos dígitos; se diminuir, vira a centena seguinte)
-function processosAbreviados(txt) {
-  const T = String(txt || '').toUpperCase().replace(/FS(\d{6})((?:\d{2}){1,3})(?!\d)/g, (m, a, b) => 'FS' + a + ' ' + b.match(/\d{2}/g).join(' ') + ' '), out = [];
-  const re = /FS\s?(\d{6})((?:[\s,;+]*\d{2}(?=[\s.,;+\-_)]|$))*)/g; let m;
+// Também a forma curta do PIX (campo de 30 caracteres): "FS 113 114" = FS260113 e FS260114; "109S"; "113x2" = 2 containers
+// (o "xN" logo depois do número é a quantidade de containers daquele processo: o PIX é dividido por container)
+function anoProcessos() {
+  const ids = (S.processos || []).map(p => p.id).filter(id => /^FS\d{6}/.test(id)).sort();
+  return ids.length ? ids[ids.length - 1].slice(2, 4) : String(new Date().getFullYear()).slice(2);
+}
+function processoAtual(id) { const a = (typeof aliasesProcesso === 'function' ? aliasesProcesso() : {})[id]; return a || id; }
+function lerAbreviados(txt) {
+  const T = String(txt || '').toUpperCase().replace(/FS(\d{6})((?:\d{2}){1,3})(?!\d)/g, (m, a, b) => 'FS' + a + ' ' + b.match(/\d{2}/g).join(' ') + ' ');
+  const out = [], pesos = {}, ano = anoProcessos();
+  const re = /FS\s?(\d{3,6})(S?)((?:[\s,;+\/]*\d{2,3}S?(?:\s*X\s*\d{1,2})?(?=[\s.,;+\/\-_)]|$)|\s*X\s*\d{1,2}(?=[\s.,;+\/\-_)]|$))*)/g; let m;
+  const add = (id, peso) => { id = processoAtual(id); if (!out.includes(id)) out.push(id); if (peso > 1) pesos[id] = peso; };
   while ((m = re.exec(T))) {
-    let base = Number(m[1]); out.push('FS' + m[1]);
-    const extras = (m[2].match(/\d{2}/g) || []);
-    if (extras.length > 6) continue;
-    extras.forEach(x => {
-      let n = Math.floor(base / 100) * 100 + Number(x);
-      if (n <= base) n += 100;
-      base = n; out.push('FS' + String(n).padStart(6, '0'));
+    if (m[1].length === 5) continue;
+    let base = m[1].length === 6 ? Number(m[1]) : Number(ano + m[1].padStart(4, '0'));
+    let ultimo = 'FS' + String(base).padStart(6, '0') + m[2];
+    const toks = m[3].match(/\d{2,3}S?|X\s*\d{1,2}/g) || [];
+    if (toks.length > 8) continue;
+    let peso = 1;
+    const fecha = () => { add(ultimo, peso); peso = 1; };
+    toks.forEach(t => {
+      if (/^X/.test(t)) { peso = Number(t.replace(/\D/g, '')) || 1; return; }
+      fecha();
+      const s = t.endsWith('S') ? 'S' : '', d = t.replace(/S$/, '');
+      let n;
+      if (d.length === 3) { n = Number(ano + '0' + d); if (Math.abs(n - base) > 100) return; }
+      else { n = Math.floor(base / 100) * 100 + Number(d); if (n < base || (n === base && !s)) n += 100; }
+      base = n; ultimo = 'FS' + String(n).padStart(6, '0') + s;
     });
+    fecha();
   }
-  return [...new Set(out)];
+  return { processos: out, pesos };
+}
+function processosAbreviados(txt) { return lerAbreviados(txt).processos; }
+// nome padrão das pastas organizadas: "2026-08-20 - Favorecido - R$ 1.200,00 - Desc",
+// "FS - Desc - R$ 550,00 (parte do PIX de R$ 1.650,00 de 2026-06-19)", "... - Reembolsar Klismann"
+function lerNomeArquivo(nome) {
+  const N = String(nome || '').replace(/\.[a-z0-9]{2,5}$/i, ''), r = {};
+  const parte = N.match(/R\$\s*([\d.]+,\d{2})\s*\(\s*parte do PIX de R\$\s*([\d.]+,\d{2})(?:\s*de\s*(\d{4}-\d{2}-\d{2}))?/i);
+  if (parte) { r.valor = numBR(parte[1]); r.totalPix = numBR(parte[2]); if (parte[3]) r.data = parte[3]; }
+  if (!r.valor) { const v = N.match(/R\$\s*([\d.]+,\d{2}|\d+(?:\.\d{3})*)(?![\d,])/i); if (v) r.valor = numBR(v[1]); }
+  if (!r.data) { const d = N.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/); if (d && Number(d[2]) <= 12 && Number(d[3]) <= 31) r.data = d[0]; }
+  const p = N.match(/^(20\d{2}-\d{2}-\d{2})\s+-\s+([^-]+?)\s+-\s+R\$/i); if (p) r.favorecido = p[2].trim();
+  if (/REEMBOLSAR\s+KLISMANN/i.test(N)) r.reembolsar = true;
+  if (/\(CANCELAD[AO]\)/i.test(N)) r.cancelada = true;
+  return r;
 }
 function normTxt(s) { return String(s || '').toUpperCase().replace(/\s+/g, ' '); }
 
@@ -493,6 +527,9 @@ function identificarProcesso(info, texto, nome) {
     let score = 0; const motivos = [];
     const id = String(p.id || '').toUpperCase();
     if (id && new RegExp('\\b' + id.replace(/[^A-Z0-9]/g, '') + 'S?\\b').test(T.replace(/[\s\-]/g, ' ').replace(/FS\s+(\d)/g, 'FS$1'))) { score += 100; motivos.push('número ' + id); }
+    Object.entries(typeof aliasesProcesso === 'function' ? aliasesProcesso() : {}).filter(([, novo]) => novo === id).forEach(([antigo]) => {
+      if (!score && new RegExp('\\b' + antigo + '\\b').test(T.replace(/FS\s+(\d)/g, 'FS$1'))) { score += 100; motivos.push('número antigo ' + antigo + ' (virou ' + id + ')'); }
+    });
     const conts = [...(p.containers || []), p.container].filter(Boolean).map(c => String(c).toUpperCase().replace(/[\s\-]/g, ''));
     conts.forEach(c => { if (c.length >= 10 && compact.includes(c)) { score += 80; motivos.push('container ' + c); } });
     const bk = String(p.booking || '').replace(/\s/g, '').toUpperCase();
@@ -608,6 +645,18 @@ async function analisarArquivo(f) {
   }
   if (typeof enriquecerInfo === 'function') { try { enriquecerInfo(item); } catch (e) { console.warn('enriquecer', e); } }
   if (/ADIANTAMENTO|ANTECIPA/i.test(nome + ' ' + ((item.info.pagamento && item.info.pagamento.identificacao) || ''))) item.info.adiantamento = true;
+  // o que o documento não traz, o nome do arquivo diz (valor, data, favorecido, reembolso ao sócio)
+  {
+    const pn = lerNomeArquivo(nome.replace(/^((?:FS\d{6}S?)(?:\+FS\d{6}S?)*|ADM) - /i, ''));
+    const usado = [];
+    if (!(Number(item.info.valor) > 0) && pn.valor > 0 && !item.info.cambio) { item.info.valor = pn.valor; if (item.info.pagamento) item.info.pagamento.valor = pn.valor; usado.push('valor'); }
+    if (!item.info.data && pn.data) { item.info.data = pn.data; usado.push('data'); }
+    if (!item.info.emitNome && pn.favorecido) { item.info.emitNome = pn.favorecido; usado.push('favorecido'); }
+    if (pn.totalPix) item.info.totalPix = pn.totalPix;
+    if (pn.reembolsar && !item.pagoPor) item.pagoPor = 'socio';
+    if (pn.cancelada) item.info.cancelada = true;
+    if (usado.length) { item.info.peloNome = usado; item.motivo = (item.motivo ? item.motivo + ' · ' : '') + usado.join(', ') + ' pelo nome do arquivo'; }
+  }
   if (['nfse', 'boleto', 'recibo'].includes(item.tipo) && Number(item.info.valor) > 0 && item.info.emitNome && item.info.data && item.confianca !== 'alta') { item.confianca = 'alta'; item.motivo = (item.motivo ? item.motivo + ' · ' : '') + 'valor, data e emitente lidos'; }
   item._base = { tipo: item.tipo, confianca: item.confianca, motivo: item.motivo };
   return identificarItem(item);
@@ -627,10 +676,12 @@ function identificarItem(item) {
   }
   // Prefixo colocado pelo acervo: "FS260105+FS260107 - nome original"
   const mPasta = nome.match(/^((?:FS\d{6}S?)(?:\+FS\d{6}S?)*) - /i);
-  item.pastaProcessos = mPasta ? mPasta[1].toUpperCase().split('+') : [];
+  item.pastaProcessos = mPasta ? [...new Set(mPasta[1].toUpperCase().split('+').map(processoAtual))] : [];
   const nomeSemPasta = mPasta ? nome.slice(mPasta[0].length) : nome;
   const pelaPasta = new Set(item.pastaProcessos);
   item.candidatos = identificarProcesso(item.info, item.texto, nomeSemPasta);       // só o documento
+  // processo renumerado (ex.: FS260105 virou FS260107): o número antigo aponta para o novo
+  item.candidatos = item.candidatos.reduce((acc, c) => { const id = processoAtual(c.id), j = acc.find(x => x.id === id); if (j) { j.score = Math.max(j.score, c.score); } else acc.push(Object.assign({}, c, { id })); return acc; }, []);
   const doDoc = item.candidatos[0] ? item.candidatos[0].id : '';
   if (doDoc && pelaPasta.size && !pelaPasta.has(doDoc) && item.candidatos[0].score >= 100) {
     // Documento na pasta errada. Se a prova vem de DENTRO do documento (chave de acesso, nota citada,
@@ -698,8 +749,12 @@ function identificarItem(item) {
     item.aviso = (item.aviso ? item.aviso + ' ' : '') + 'Fatura sem processo no ERP: ' + item.info.cambio.faturas.filter(f => !(S.processos || []).some(p => p.id === f.processo)).map(f => f.processo).join(', ');
   }
   // comprovante com mais de um processo na identificação ("FS260096 FS260097"): divide igualmente
-  let ids = ((item.info.pagamento && item.info.pagamento.processos) || []).filter(id => (S.processos || []).some(p => p.id === id));
-  if (ids.length < 2) { const peloNome = processosAbreviados(nomeSemPasta).filter(id => (S.processos || []).some(p => p.id === id)); if (peloNome.length > 1) ids = peloNome; }
+  const existe = id => (S.processos || []).some(p => p.id === id);
+  let ab = lerAbreviados((item.info.pagamento && item.info.pagamento.identificacao) || '');
+  let ids = ab.processos.filter(existe);
+  if (!ids.length) ids = ((item.info.pagamento && item.info.pagamento.processos) || []).map(processoAtual).filter(existe);
+  if (ids.length < 2) { const abN = lerAbreviados(nomeSemPasta), peloNome = abN.processos.filter(existe); if (peloNome.length > 1) { ids = peloNome; ab = abN; } }
+  if (item._divPeso) { delete item.divisaoValores; delete item._divPeso; }
   // comprovante / recibo salvo nas pastas de mais de um processo: pagou os dois → divide
   if (ids.length < 2 && (item.tipo === 'pagamento' || item.tipo === 'recibo') && (item.pastaProcessos || []).length > 1) ids = item.pastaProcessos.filter(id => (S.processos || []).some(p => p.id === id));
   if (ids.length > 1 && (item.tipo === 'pagamento' || item.tipo === 'recibo')) {
@@ -709,8 +764,17 @@ function identificarItem(item) {
     if (item.aviso && /^Confira: este arquivo de custo/.test(item.aviso)) { item.aviso = ''; if (item._base && item._base.confianca === 'alta') item.confianca = 'alta'; }
     // a pasta onde estava é um dos processos pagos: não é pasta errada
     if ((item.pastaProcessos || []).length && item.pastaProcessos.every(id => ids.includes(id))) { delete item.pastaErrada; delete item.corrigido; item.aviso = String(item.aviso || '').replace(/Conflito:[^.]*\.[^.]*\./, '').trim(); if (item._base && item._base.confianca === 'alta') item.confianca = 'alta'; }
-    const parte = (Number(item.info.valor) || 0) / ids.length;
-    item.aviso = (item.aviso ? item.aviso + ' ' : '') + `Pagamento de ${ids.join(' + ')}: dividido igualmente (R$ ${parte.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} cada).`;
+    const f2 = v => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const pesos = ids.map(id => (ab.pesos && ab.pesos[id]) || 1), somaP = pesos.reduce((a, x) => a + x, 0), total = Number(item.info.valor) || 0;
+    if (pesos.some(x => x > 1) && !item.divisaoValores) {
+      // "FS 113x2 114": divide por container (2 partes para o 113, 1 para o 114); o último leva os centavos que sobram
+      const vals = pesos.map(w => Math.round(total * w / somaP * 100) / 100);
+      vals[vals.length - 1] = Math.round((total - vals.slice(0, -1).reduce((a, x) => a + x, 0)) * 100) / 100;
+      item.divisaoValores = Object.fromEntries(ids.map((id, k) => [id, vals[k]])); item._divPeso = true;
+      item.aviso = (item.aviso ? item.aviso + ' ' : '') + `Pagamento de ${ids.join(' + ')}: dividido por container (${ids.map((id, k) => id + (pesos[k] > 1 ? ' x' + pesos[k] : '') + ' R$ ' + f2(vals[k])).join(' · ')}).`;
+    } else {
+      item.aviso = (item.aviso ? item.aviso + ' ' : '') + `Pagamento de ${ids.join(' + ')}: dividido igualmente (R$ ${f2(total / ids.length)} cada).`;
+    }
   }
   if (item.processo === '__ADM' && !item.categoriaManual && typeof categoriaAdm === 'function') { const c = categoriaAdm(item); if (c) item.categoria = c; }
   item.duplicado = procurarDuplicado(item);

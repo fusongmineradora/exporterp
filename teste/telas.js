@@ -59,7 +59,8 @@ function estadoCusto(p, campo) {
   const comp = compArquivo || banco;
   const aberto = status === 'Pago' ? 0 : Math.max(0, valor - pago);
   const fiscal = (reg.fiscais || [])[0];
-  return { valor, status, banco, nota, comp, compArquivo, soRecibo, aberto, empresa: (p.docs && p.docs._costEmpresa && p.docs._costEmpresa[campo]) || '', dataNota: fiscal ? fiscal.data : '' };
+  const previsto = (p.docs && p.docs._previsto && p.docs._previsto[campo]) || null;
+  return { valor, status, banco, nota, comp, compArquivo, soRecibo, aberto, previsto, empresa: (p.docs && p.docs._costEmpresa && p.docs._costEmpresa[campo]) || '', dataNota: fiscal ? fiscal.data : '' };
 }
 
 function pendenciasProcesso(p) {
@@ -118,7 +119,9 @@ function renderInicio() {
   if (S.banco && !S.banco.carregado && !S.banco.carregando && window._sheetsToken && typeof carregarBanco === 'function') setTimeout(() => carregarBanco(), 80);
   const ativos = (S.processos || []).filter(p => p.status !== 'Cancelado');
   const pagar = [];
-  ativos.forEach(p => custosAbertos(p).forEach(e => pagar.push({ p, ...e, dias: diasDesde(e.dataNota) })));
+  const previstos = [];
+  ativos.forEach(p => custosAbertos(p).forEach(e => (e.previsto ? previstos : pagar).push({ p, ...e, dias: diasDesde(e.dataNota) })));
+  const totalPrevisto = previstos.reduce((a, x) => a + x.aberto, 0);
   pagar.sort((a, b) => (b.dias || 0) - (a.dias || 0));
   const totalPagar = pagar.reduce((a, x) => a + x.aberto, 0);
   const receber = ativos.map(p => ({ p, falta: (Number(p.cambioInvoice) || 0) - (Number(p.cambioRecebido) || 0) })).filter(x => x.falta > 0.009);
@@ -144,6 +147,7 @@ function renderInicio() {
         <div style="font-size:12.5px;color:var(--muted2)">${escHtml(x.empresa || 'fornecedor não identificado')}${x.dataNota ? ' · nota de ' + escHtml(x.dataNota) : ''}${x.dias != null && x.dias > 30 ? ` · <span style="color:var(--yellow);font-weight:600">em aberto há ${x.dias} dias</span>` : ''}${x.aberto < x.valor ? ` · pago ${m2(x.valor - x.aberto)} de ${m2(x.valor)}` : ''}</div></div>
         <div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;white-space:nowrap">${m2(x.aberto)}</div>
       </div>`).join('')}${pagar.length > 8 ? `<div style="font-size:12.5px;color:var(--muted2);padding-top:8px">+ ${pagar.length - 8} outros</div>` : ''}</div>` : `<div style="font-size:13.5px;color:var(--muted2)">Nenhum custo em aberto.</div>`}
+    ${previstos.length ? `<div style="padding:9px 12px;border-radius:10px;background:var(--bg3)"><div style="display:flex;justify-content:space-between;gap:10px"><span style="font-size:14px;font-weight:600">Custos previstos (estimados)</span><span style="font-family:'JetBrains Mono',monospace;font-size:13.5px">${m2(totalPrevisto)}</span></div><div style="font-size:12.5px;color:var(--muted2);padding-top:4px">${[...new Set(previstos.map(x => PROCESS_COST_FIELDS[x.campo]))].map(n => escHtml(n) + ' (' + previstos.filter(x => PROCESS_COST_FIELDS[x.campo] === n).length + ')').join(' · ')} — viram valor real quando chegam a nota, o comprovante ou o extrato.</div></div>` : ''}
     ${(() => { const ad = []; (S.processos || []).forEach(q => Object.entries((q.docs && q.docs._costAdiant) || {}).forEach(([c, v]) => ad.push({ q, c, v, emp: (q.docs._costEmpresa || {})[c] || '' }))); return ad.length ? `<div style="padding:9px 12px;border-radius:10px;background:var(--bg3)"><div style="font-size:14px;font-weight:600">Adiantamentos aguardando nota</div>${ad.map(x => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding-top:6px"><span>${linkProc(x.q.id)} · ${escHtml(PROCESS_COST_FIELDS[x.c])}${x.emp ? ' · ' + escHtml(x.emp) : ''}</span><span style="font-family:'JetBrains Mono',monospace">${m2(x.v)} adiantado</span></div>`).join('')}<div style="font-size:11.5px;color:var(--muted2);padding-top:6px">Quando a nota chegar, o saldo a pagar aparece aqui em "A pagar".</div></div>` : ''; })()}
     ${typeof reembolsosAbertos === 'function' && reembolsosAbertos().length ? `<div style="display:flex;justify-content:space-between;gap:10px;padding:9px 12px;border-radius:10px;background:var(--bg3)"><div><div style="font-size:14px;font-weight:600">Reembolso ao sócio</div><div style="font-size:12.5px;color:var(--muted2)">${reembolsosAbertos().length} despesa(s) pagas no cartão / conta pessoal</div></div><div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;white-space:nowrap">${m2(reembolsosAbertos().reduce((a, l) => a + (Number(l.valor) || 0), 0))}</div></div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
@@ -227,7 +231,7 @@ function renderProcesso2() {
     <button class="btn btn-secondary btn-sm" onclick="goBack()" style="margin-bottom:12px">← Voltar</button>
     <section style="background:#0F2A5C;color:#FFFFFF;border-radius:14px;padding:18px;margin-bottom:14px;display:flex;flex-direction:column;gap:8px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-        <div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:26px">${escHtml(p.id)}</div>
+        <div style="display:flex;flex-direction:column"><div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:26px">${escHtml(p.id)}</div>${p.docs && p.docs._numeroAntigo ? `<span style="font-size:12.5px;color:#E0E7FF">Era o processo ${escHtml(p.docs._numeroAntigo)} (virou ${escHtml(p.id)})</span>` : ''}</div>
         <span style="background:${fech ? '#BBF7D0' : '#FDE68A'};color:${fech ? '#14532D' : '#78350F'};font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px">${fech ? 'Fechado' : `Provisório · ${pend.length + custosAbertos(p).length} pendência(s)`}</span>
       </div>
       <div style="font-size:13.5px;color:#E0E7FF">${escHtml([p.cliente, p.produto, c.ton ? m2(c.ton) + ' t' : ''].filter(Boolean).join(' · '))}</div>
@@ -259,8 +263,9 @@ function renderProcesso2() {
     ${card(`${titulo2('Custos', `<span style="font-family:'JetBrains Mono',monospace;font-size:15px">${brl(c.custo)}</span>`)}
       ${linhasCusto.map(({ k, e }) => `<div style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px solid var(--border)">
         <div style="display:flex;flex-direction:column;gap:3px;min-width:0"><b style="font-size:14px">${escHtml(PROCESS_COST_FIELDS[k])}</b><span style="font-size:12.5px;color:var(--muted2)">${escHtml(e.empresa || '—')}</span>
-          <span style="font-size:12px">${e.soRecibo ? '<span style="color:var(--yellow)">recibo sem nota (não dedutível)</span>' : sel(e.nota, k === 'custoMaritimo' ? 'fatura' : 'nota')} · ${sel(e.comp, 'comprovante')}${e.banco ? ' · <span style="color:var(--green)">banco ✓</span>' : ''}</span></div>
-        <div style="text-align:right;display:flex;flex-direction:column;gap:3px"><span style="font-family:'JetBrains Mono',monospace;font-size:13.5px">${m2(e.valor)}</span><span style="font-size:12px;font-weight:600;color:${e.status === 'Pago' ? 'var(--green)' : 'var(--yellow)'}">${e.status === 'Pago' ? 'Pago' : e.aberto < e.valor ? 'falta ' + m2(e.aberto) : 'Em aberto'}</span></div>
+          ${e.previsto ? `<span style="font-size:12px;color:var(--yellow)">previsto · ${escHtml(e.previsto.regra || '')}</span>
+          <span style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" onclick="alterarPrevisto('${escHtml(p.id)}','${k}')">Alterar valor</button>${k === 'custoArmazem' ? `<button class="btn btn-secondary btn-xs" onclick="setArmazemPrevisto('${escHtml(p.id)}',false)">Não vai para o armazém</button>` : ''}</span>` : `<span style="font-size:12px">${e.soRecibo ? '<span style="color:var(--yellow)">recibo sem nota (não dedutível)</span>' : sel(e.nota, k === 'custoMaritimo' ? 'fatura' : 'nota')} · ${sel(e.comp, 'comprovante')}${e.banco ? ' · <span style="color:var(--green)">banco ✓</span>' : ''}</span>`}</div>
+        <div style="text-align:right;display:flex;flex-direction:column;gap:3px"><span style="font-family:'JetBrains Mono',monospace;font-size:13.5px">${m2(e.valor)}</span><span style="font-size:12px;font-weight:600;color:${e.status === 'Pago' ? 'var(--green)' : 'var(--yellow)'}">${e.previsto ? 'Previsto' : e.status === 'Pago' ? 'Pago' : e.aberto < e.valor ? 'falta ' + m2(e.aberto) : 'Em aberto'}</span></div>
       </div>`).join('')}
       ${manuais.map(l => `<div style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px solid var(--border)"><div style="display:flex;flex-direction:column;gap:3px;min-width:0"><b style="font-size:14px">${escHtml(l.categoria || 'Outro custo')}</b><span style="font-size:12.5px;color:var(--muted2)">${escHtml(l.empresa || l.descricao || '')} · ${escHtml(l.data || '')}</span><span style="font-size:12px">${l.docs && l.docs._banco ? '<span style="color:var(--green)">banco ✓</span>' : ''}${l.docs && l.docs.comprovante ? ' <span style="color:var(--green)">comprovante ✓</span>' : ''}</span></div><div style="text-align:right;display:flex;flex-direction:column;gap:3px"><span style="font-family:'JetBrains Mono',monospace;font-size:13.5px">${m2(l.valor)}</span><span style="font-size:12px;font-weight:600;color:${l.status === 'Pago' ? 'var(--green)' : 'var(--yellow)'}">${escHtml(l.status)}</span></div></div>`).join('')}
       ${faltaCusto.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:10px;background:rgba(251,146,60,.14);border-radius:8px"><div><b style="font-size:14px;color:var(--orange)">${escHtml(PROCESS_COST_FIELDS[x.campo])}</b><div style="font-size:12.5px;color:var(--orange)">${x.campo === 'custoMaritimo' ? 'CFR: falta a fatura do agente e o comprovante' : 'falta nota e comprovante'}</div></div><span style="font-size:12px;color:var(--orange);font-weight:600">Falta</span></div>`).join('')}
@@ -269,7 +274,9 @@ function renderProcesso2() {
         <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--muted2)">Custo do produto</div><div style="font-family:'JetBrains Mono',monospace;font-size:14px">${brl(c.produto)}</div><div style="font-size:11.5px;color:var(--muted2)">${brl(c.produtoT)} por t</div></div>
         <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--muted2)">Custo de envio</div><div style="font-family:'JetBrains Mono',monospace;font-size:14px">${brl(c.envio)}</div><div style="font-size:11.5px;color:var(--muted2)">${brl(c.envioT)} por t</div></div>
       </div>` : ''}
-      <button class="btn btn-secondary btn-sm" style="min-height:44px" onclick="S.editMode=true;render()">Lançar ou corrigir custo</button>`)}
+      ${typeof vaiProArmazem === 'function' && !vaiProArmazem(p) && !(Number(p.custoArmazem) > 0) && p.status !== 'Cancelado' ? `<div style="font-size:12.5px;color:var(--muted2)">Container vai para o armazém? <button class="btn btn-secondary btn-xs" onclick="setArmazemPrevisto('${escHtml(p.id)}',true)">Sim, prever armazém</button></div>` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-secondary btn-sm" style="min-height:44px" onclick="S.editMode=true;render()">Lançar ou corrigir custo</button>
+      <button class="btn btn-secondary btn-sm" style="min-height:44px" onclick="editarPadroesPrevistos()">Padrões dos previstos</button></div>`)}
 
     ${card(`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
         <div style="display:flex;flex-direction:column;gap:2px"><h2 style="margin:0;font-family:'Outfit',sans-serif;font-size:17px">Fotos</h2>${fotos.length ? `<a href="${sanitizeUrl((p.docs && p.docs._fotosUrl) || fotos[0].url)}" target="_blank" rel="noopener noreferrer" style="font-size:13px;text-decoration:none">Ver as ${fotos.length} foto(s)</a>` : '<span style="font-size:13px;color:var(--muted2)">Nenhuma foto</span>'}</div>
