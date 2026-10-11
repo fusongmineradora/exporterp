@@ -82,7 +82,7 @@ const CATEGORIAS2 = [
   'Tarifa de câmbio', 'Assessoria', 'Imposto COOP', 'Laboratório',
   'Tarifas bancárias', 'IOF', 'Impostos federais', 'Taxas e impostos municipais', 'Taxas de órgãos',
   'Contabilidade', 'Aluguel / Coworking', 'Combustível', 'Cartório', 'Seguros', 'Software',
-  'Viagem', 'Registro e licenças', 'Equipamentos', 'Materiais e embalagens', 'Alimentação', 'Acordos e parcelamentos', 'Outras despesas',
+  'Reembolso ao sócio', 'Viagem', 'Registro e licenças', 'Equipamentos', 'Materiais e embalagens', 'Alimentação', 'Acordos e parcelamentos', 'Outras despesas',
   'Rendimentos financeiros', 'Outras receitas', 'Câmbio',
   'Retirada de sócio', 'Aporte de sócio', 'Transferência entre contas',
 ];
@@ -135,7 +135,7 @@ async function conciliarDepoisDoOFX() {
   B.msg = { tipo: 'ok', texto: antes + ' Conciliando...', lote: B.msg && B.msg.lote }; render();
   try {
     const r = await autoConciliar();
-    B.msg = { tipo: 'ok', lote: B.msg.lote, texto: `${antes} Conciliado sozinho: ${r.cambio} câmbio(s), ${r.baixas} pagamento(s), ${r.regras} tarifa(s)/regra(s), ${r.rendimentos} rendimento(s). ${r.pendentes} linha(s) para você conferir.` };
+    B.msg = { tipo: 'ok', lote: B.msg.lote, texto: `${antes} Conciliado sozinho: ${r.cambio} câmbio(s), ${r.baixas} pagamento(s), ${r.regras} tarifa(s)/regra(s), ${r.rendimentos} rendimento(s)${r.reembolsos ? `, ${r.reembolsos} reembolso(s) ao sócio` : ''}. ${r.pendentes} linha(s) para você conferir.` };
   } catch (e) { B.msg = { tipo: 'erro', texto: antes + ' Erro na conciliação automática: ' + (e.message || e) }; }
 }
 
@@ -586,6 +586,23 @@ async function autoConciliar() {
     const sug = sugestaoLinha(l);
     if (sug && sug.acao === 'baixar' && sug.unico && await conciliarLinha(l.chave, 'baixar', true)) r.baixas++;
   }
+  // reembolso ao sócio: PIX da empresa para o sócio que fecha (somando do mais antigo) despesas pagas no cartão pessoal
+  r.reembolsos = 0;
+  const abertos = typeof reembolsosAbertos === 'function' ? reembolsosAbertos().slice().sort((a, b) => (brToIso(a.data) || '').localeCompare(brToIso(b.data) || '')) : [];
+  if (abertos.length) {
+    let nomeUser = ''; try { nomeUser = (JSON.parse(sessionStorage.getItem('teste:erp-user') || '{}').name) || ''; } catch (e) {}
+    const socio = [...new Set(semAcentoF(nomeUser + ' KLISMANN').split(/\s+/).filter(w => w.length >= 4))];
+    for (const l of B.linhas.filter(x => x.status === 'pendente' && x.valor < 0)) {
+      const txt = semAcentoF(l.favorecido + ' ' + l.memo);
+      if (!socio.some(w => txt.includes(w))) continue;
+      const alvo = Math.abs(l.valor); let soma = 0; const usados = [];
+      for (const a of abertos) { if (a.status === 'Pago') continue; if (soma + a.valor > alvo + 0.01) continue; soma = Math.round((soma + a.valor) * 100) / 100; usados.push(a); if (Math.abs(soma - alvo) < 0.01) break; }
+      if (!usados.length || Math.abs(soma - alvo) >= 0.01) continue;
+      usados.forEach(a => { a.status = 'Pago'; a.docs._banco = l.chave; a.observacao = (a.observacao || '') + ' · reembolsado em ' + isoToBr(l.data); });
+      l.status = 'conciliado'; l.lancId = 'reembolso:' + usados.map(a => a.id).join(','); l.categoria = 'Reembolso ao sócio'; l.centro = 'ADM';
+      r.reembolsos++;
+    }
+  }
   // regra do banco com categoria E centro definidos (tarifas, seguros, regras aprendidas para ADM)
   r.regras = 0;
   for (const l of B.linhas.filter(x => x.status === 'pendente' && !/^RENDIMENTOS/i.test(x.memo) && x.categoria && x.centro && !x.contrato)) {
@@ -836,7 +853,7 @@ async function conciliarAutomatico() {
   showSyncIndicator('Conciliando...');
   try {
     const r = await autoConciliar();
-    B.msg = { tipo: 'ok', texto: `Conciliação automática: ${r.cambio} câmbio(s), ${r.baixas} pagamento(s) ligados a comprovantes/custos, ${r.regras} tarifa(s)/regra(s), ${r.rendimentos} mês(es) de rendimento. ${r.pendentes} linha(s) continuam pendentes.` };
+    B.msg = { tipo: 'ok', texto: `Conciliação automática: ${r.cambio} câmbio(s), ${r.baixas} pagamento(s) ligados a comprovantes/custos, ${r.regras} tarifa(s)/regra(s), ${r.rendimentos} mês(es) de rendimento${r.reembolsos ? `, ${r.reembolsos} reembolso(s) ao sócio` : ''}. ${r.pendentes} linha(s) continuam pendentes.` };
   } catch (e) { B.msg = { tipo: 'erro', texto: 'Erro na conciliação automática: ' + (e.message || e) }; }
   hideSyncIndicator(); render();
 }
@@ -928,3 +945,5 @@ function blocoRelCambio() {
     : '<div style="font-size:13px;color:var(--muted2);margin-top:10px">Nenhum contrato de câmbio anexado ainda.</div>'}
   </div>`;
 }
+
+function semAcentoF(t) { return String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase(); }
