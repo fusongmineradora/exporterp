@@ -330,10 +330,12 @@ function sugestaoLinha(l) {
   return null;
 }
 
+// id único de cada linha do extrato na tela (antes: últimos 24 caracteres — linhas do mesmo favorecido se misturavam)
+function idLinha(chave) { let h = 5381; const t = String(chave || ''); for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) >>> 0; return 'L' + h.toString(36) + t.replace(/[^a-zA-Z0-9]/g, '').slice(-8); }
 // ── Ações ───────────────────────────────────────────────────
 function lerControles(chave) {
   const g = id => { const el = document.getElementById(id); return el ? el.value : ''; };
-  const k = chave.replace(/[^a-zA-Z0-9]/g, '').slice(-24);
+  const k = idLinha(chave);
   return { categoria: g('bc-cat-' + k), centro: g('bc-cen-' + k), regra: (document.getElementById('bc-reg-' + k) || {}).checked, fixa: (document.getElementById('bc-fix-' + k) || {}).checked };
 }
 
@@ -666,7 +668,7 @@ function renderConciliacao() {
   pend.filter(l => /^RENDIMENTOS/i.test(l.memo)).forEach(l => { const m = l.data.slice(0, 7); rend[m] = rend[m] || { n: 0, t: 0 }; rend[m].n++; rend[m].t += l.valor; });
   const contratos = contratosCambio();
   const procOpts = (S.processos || []).map(p => p.id).sort().reverse();
-  const k8 = c => c.replace(/[^a-zA-Z0-9]/g, '').slice(-24);
+  const k8 = idLinha;
 
   let lista = B.filtro === 'todos' ? B.linhas : B.linhas.filter(l => l.status === B.filtro);
   if (B.filtro === 'pendente') lista = lista.filter(l => !noCambio.has(l.chave) && !/^RENDIMENTOS/i.test(l.memo));
