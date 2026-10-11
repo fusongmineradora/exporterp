@@ -275,6 +275,15 @@ function sugestaoLinha(l) {
       return { acao: 'baixarGrupo', grupo: g, unico: gs.length === 1 && !!g.data, texto: `Pagamento dividido entre ${g.parts.map(x => x.p.id).join(' + ')} (${g.parts.map(x => 'R$ ' + fmt(x.valor)).join(' + ')})` };
     }
   }
+  // 0) despesa já lançada pelo comprovante (sem extrato), mesmo valor e data perto → liga a ela (não cria outra)
+  if (l.valor < 0) {
+    const datasL = x => { const ds = [brToIso2(x.data) || ''].filter(Boolean); (String(x.observacao || '').match(/20\d{2}-\d{2}-\d{2}/g) || []).forEach(d => ds.push(d)); return ds; };
+    const jaPago = (S.lancamentos || []).filter(x => (x.tipo === 'Despesa' || x.tipo === 'Transferência') && x.status === 'Pago' && !(x.docs && x.docs._banco) && Math.abs((Number(x.valor) || 0) - v) < 0.01 && datasL(x).some(d => diasEntre(d, l.data) <= 7));
+    if (jaPago.length) {
+      const e = buildAllEntries().find(x => !x._computed && String(x.id) === String(jaPago[0].id));
+      if (e) return { acao: 'baixar', entry: e, unico: jaPago.length === 1, texto: `Já lançado pelo comprovante: "${jaPago[0].descricao}"` + (jaPago.length > 1 ? ` (+${jaPago.length - 1} com o mesmo valor — confira)` : '') };
+    }
+  }
   // 1) já há um lançamento em aberto com o mesmo valor → dar baixa
   if (l.valor < 0) {
     const dataRef = e => {

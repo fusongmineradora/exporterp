@@ -1011,7 +1011,7 @@ function lancarFinanceiroDoDoc(item, p, upd) {
   const centroAdm = !p;
   const categoria = item.categoria || (centroAdm ? 'Despesas administrativas' : 'Outros custos do processo');
   const obj = {
-    id: genId(), tipo: 'Despesa', status: 'Pago',
+    id: genId(), tipo: categoria === 'Empréstimo ao sócio' ? 'Transferência' : 'Despesa', status: 'Pago',
     descricao: categoria + ' — ' + (pag.recebedor || item.info.emitNome || item.nome.replace(/\.[a-z0-9]+$/i, '')),
     valor, data: item.info.data ? isoToBr(item.info.data) : '', empresa: pag.recebedor || item.info.emitNome || '',
     categoria, vinculo: centroAdm ? 'avulso' : 'processo', vinculoId: centroAdm ? 'ADM' : p.id,
@@ -1231,3 +1231,18 @@ function renderEntrada() {
   ${E.itens.map(card).join('')}
   ${E.itens.length ? `<div style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.6">Ao anexar, o arquivo é movido da Entrada para a pasta do processo e renomeado no padrão do ERP; o nome original fica na descrição do arquivo. Nada é apagado.</div>` : ''}`;
 }
+
+// CONFIG: grava a chave uma vez só (antes cada abertura acrescentava uma linha nova)
+saveConfig = async function (key, value) {
+  try {
+    await ensureTestSheet();
+    const r = await sheetsAPI('GET', `/${SHEET_ID}/values/CONFIG!A1:B200`);
+    const rows = (r && r.values) || [];
+    const i = rows.findIndex(x => x[0] === key);
+    if (i >= 0) { if (rows[i][1] !== value) await sheetsAPI('PUT', `/${SHEET_ID}/values/CONFIG!A${i + 1}:B${i + 1}?valueInputOption=RAW`, { values: [[key, value]] }); }
+    else await sheetsAPI('POST', `/${SHEET_ID}/values/CONFIG!A:B:append?valueInputOption=RAW`, { values: [[key, value]] });
+    // tira as linhas repetidas que já existem
+    const rep = rows.map((x, j) => ({ x, j })).filter(({ x, j }) => j > 0 && x[0] && rows.findIndex(y => y[0] === x[0]) !== j);
+    if (rep.length) { const unicos = rows.filter((x, j) => j === 0 || !x[0] || rows.findIndex(y => y[0] === x[0]) === j); await sheetsAPI('POST', `/${SHEET_ID}/values:batchClear`, { ranges: ['CONFIG!A2:B200'] }); await sheetsAPI('PUT', `/${SHEET_ID}/values/CONFIG!A1:B${unicos.length}?valueInputOption=RAW`, { values: unicos.map(x => [x[0] || '', x[1] || '']) }); }
+  } catch (e) {}
+};
