@@ -1301,7 +1301,7 @@ function renderProcessos(){
   ${lista.map(p=>`
     <div class="proc-row" onclick="S.sub=S.processos.find(x=>x.id==='${p.id}');S.editMode=false;render()">
       <div style="flex:1">
-        <div class="proc-id">${p.id} <span style="color:var(--muted);font-weight:400;font-size:11px">· ${p.produto} · Embarque ${p.embarque}</span></div>
+        <div class="proc-id">${p.id} <span style="color:var(--muted2);font-weight:500;font-size:12px">${escHtml(typeof restoNomeProcesso==='function'?restoNomeProcesso(p):'· '+p.produto)}</span></div>
         <div style="color:var(--muted2);font-size:11.5px;margin:3px 0">${p.pol} → ${p.pod} · ${p.companhia} · Saída: ${p.saida}</div>
         <div style="color:var(--muted);font-size:10.5px">Container: ${escHtml(getContainer(p))} · Booking: ${p.booking}</div>
       </div>
@@ -5593,7 +5593,7 @@ if (!checkSession()) {
 <script src="entrada.js?v=b21d8f1665"></script>
 <script src="ofx.js?v=7289280781"></script>
 <script src="financeiro2.js?v=a5f0a243d6"></script>
-<script src="acervo.js?v=964b5d2bc8"></script>
-<script src="telas.js?v=e342ae1895"></script>
+<script src="acervo.js?v=9f53497820"></script>
+<script src="telas.js?v=a256625172"></script>
 </body>
 </html>
