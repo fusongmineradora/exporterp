@@ -668,6 +668,13 @@ function identificarItem(item) {
   if (item._base) { item.tipo = item._base.tipo; item.confianca = item._base.confianca; item.motivo = item._base.motivo; }
   ['processo', 'pastaErrada', 'corrigido', 'aviso', 'processosExtras', 'divisao', 'admAuto'].forEach(k => delete item[k]);
   if (item.tipo === 'planilhaCambio') { item.processo = '__CAMBIO'; return item; }
+  // câmbio: número antigo → novo (FS260105 → FS260107) e "S" → principal (FS260109S recebe pelo FS260109)
+  if (item.info && item.info.cambio && Array.isArray(item.info.cambio.faturas)) {
+    const base = id => { id = processoAtual(id); return /^FS\d{6}S$/.test(id) && (S.processos || []).some(p => p.id === id.slice(0, -1)) ? id.slice(0, -1) : id; };
+    const m = {};
+    item.info.cambio.faturas.forEach(f => { const id = base(f.processo); if (m[id]) m[id].usd = Math.round((m[id].usd + (Number(f.usd) || 0)) * 100) / 100; else m[id] = Object.assign({}, f, { processo: id }); });
+    item.info.cambio.faturas = Object.values(m);
+  }
   // contrato de câmbio sem "FATURA": a planilha do banco diz de qual processo é
   if (item.info && item.info.cambio && !(item.info.cambio.faturas || []).some(x => !x.pelaPasta) && typeof mapaCambioGuardado === 'function') {
     const m = mapaCambioGuardado().find(x => x.ref === String(item.info.cambio.referencia || ''));
