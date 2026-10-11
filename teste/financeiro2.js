@@ -507,19 +507,36 @@ async function conciliarCambio(k, silencioso) {
   // reparte o valor em reais (e a tarifa) proporcionalmente ao USD de cada fatura
   const parte = f => usdSoma > 0 ? f.usd / usdSoma : 1 / faturas.length;
   const tarifa = gr.tarifas.reduce((a, l) => a + Math.abs(l.valor), 0);
+  // o banco credita uma linha por fatura (USD da fatura × taxa do contrato): liga cada linha ao seu processo
+  const taxa = ct && Number(ct.taxa);
+  const linhaDe = {};
+  if (taxa && faturas.length > 1 && gr.linhas.length === faturas.length && faturas.every(f => f.usd > 0)) {
+    const livres = gr.linhas.slice();
+    const ok = faturas.every(f => {
+      const esperado = f.usd * taxa;
+      let melhor = -1, dif = Infinity;
+      livres.forEach((l, i) => { const d = Math.abs(l.valor - esperado); if (d < dif) { dif = d; melhor = i; } });
+      if (melhor < 0 || dif > Math.max(1, esperado * 0.002)) return false;
+      linhaDe[f.processo] = livres.splice(melhor, 1)[0];
+      return true;
+    });
+    if (!ok) Object.keys(linhaDe).forEach(k => delete linhaDe[k]);
+  }
   faturas.forEach(f => {
-    const reais = Math.round(gr.total * parte(f) * 100) / 100;
+    const minha = linhaDe[f.processo];
+    const reais = minha ? minha.valor : Math.round(gr.total * parte(f) * 100) / 100;
+    const chaves = minha ? minha.chave : gr.linhas.map(l => l.chave).join(',');
     const ja = (S.lancamentos || []).find(x => x.categoria === 'Câmbio' && x.vinculoId === f.processo && !(x.docs && x.docs._banco)
       && x.docs && x.docs._cambio && String(x.docs._cambio.contrato) === String(gr.contrato));
     if (ja) {
       // o banco é a verdade: valor e data do extrato; o contrato fica como comprovante
       ja.valor = reais; ja.data = isoToBr(gr.data); ja.status = 'Pago';
-      ja.docs._banco = gr.linhas.map(l => l.chave).join(','); ja.observacao = 'Extrato: LIQ EXPORT ' + gr.contrato;
+      ja.docs._banco = chaves; ja.observacao = 'Extrato: LIQ EXPORT ' + gr.contrato + (ct && ct.referencia ? ' · contrato ' + ct.referencia : '');
     }
     const obj = ja || {
       id: genId(), tipo: 'Receita', status: 'Pago', descricao: `Câmbio contrato ${gr.contrato} — ${f.processo}` + (f.usd ? ` (USD ${fmt(f.usd)})` : ''),
       valor: reais, data: isoToBr(gr.data), empresa: '', categoria: 'Câmbio', vinculo: 'processo', vinculoId: f.processo,
-      observacao: 'Extrato: LIQ EXPORT ' + gr.contrato, docs: { _banco: gr.linhas.map(l => l.chave).join(','), _cambio: { contrato: gr.contrato, usd: f.usd, taxa: ct ? ct.taxa : null }, comprovante: ct ? ct.url : '' },
+      observacao: 'Extrato: LIQ EXPORT ' + gr.contrato + (ct && ct.referencia ? ' · contrato ' + ct.referencia : ''), docs: { _banco: chaves, _cambio: { contrato: gr.contrato, usd: f.usd, taxa: ct ? ct.taxa : null }, comprovante: ct ? ct.url : '' },
     };
     if (!ja) S.lancamentos.unshift(obj);
     if (tarifa) {
@@ -531,7 +548,8 @@ async function conciliarCambio(k, silencioso) {
     }
     logAction('criar', 'EXTRATO_CAIXA', obj.id, `Câmbio ${gr.contrato} → ${f.processo} R$ ${reais.toFixed(2)}`);
   });
-  [...gr.linhas, ...gr.tarifas].forEach(l => { l.status = 'conciliado'; l.lancId = 'cambio:' + gr.contrato; l.categoria = l.valor > 0 ? 'Câmbio' : 'Tarifa de câmbio'; l.centro = faturas.map(f => 'P:' + f.processo).join(' '); });
+  const procDaLinha = l => { const f = faturas.find(x => linhaDe[x.processo] === l); return f ? 'P:' + f.processo : faturas.map(x => 'P:' + x.processo).join(' '); };
+  [...gr.linhas, ...gr.tarifas].forEach(l => { l.status = 'conciliado'; l.lancId = 'cambio:' + gr.contrato; l.categoria = l.valor > 0 ? 'Câmbio' : 'Tarifa de câmbio'; l.centro = l.valor > 0 ? procDaLinha(l) : faturas.map(f => 'P:' + f.processo).join(' '); });
   if (silencioso) return true;
   try { await persistir2(); showToast('✅ Câmbio conciliado'); } catch (e) { showToast('⚠️ ' + e.message); }
   render();
