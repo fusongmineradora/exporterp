@@ -411,13 +411,29 @@ function completarPagamento(pag, texto) {
   }
   if (!pag.recebedor) { const m = T.match(/(?:^|\n)\s*para\s*\n\s*([A-ZÀ-Ú0-9][^\n]{2,70})/i); if (m) pag.recebedor = m[1].trim(); }
   if (pag.identificacao) {
-    pag.processos = [...new Set((pag.identificacao.toUpperCase().match(/FS\s?\d{6}/g) || []).map(x => x.replace(/\s/g, '')))];
+    pag.processos = processosAbreviados(pag.identificacao);
     pag.identificacao = pag.identificacao.replace(/\s+/g, '').toUpperCase();
   }
   if (!pag.recebedor) { const m = T.match(/(?:recebedor|favorecido|para|destinat[aá]rio)\s*:?\s*\n?\s*([A-ZÀ-Ú][^\n]{2,60})/i); if (m) pag.recebedor = m[1].trim(); }
   return pag;
 }
 
+// "FS260098 99 01" ou "FS2600989901" = FS260098, FS260099 e FS260101 (só os 2 últimos dígitos; se diminuir, vira a centena seguinte)
+function processosAbreviados(txt) {
+  const T = String(txt || '').toUpperCase().replace(/FS(\d{6})((?:\d{2}){1,3})(?!\d)/g, (m, a, b) => 'FS' + a + ' ' + b.match(/\d{2}/g).join(' ') + ' '), out = [];
+  const re = /FS\s?(\d{6})((?:[\s,;+]*\d{2}(?=[\s.,;+\-_)]|$))*)/g; let m;
+  while ((m = re.exec(T))) {
+    let base = Number(m[1]); out.push('FS' + m[1]);
+    const extras = (m[2].match(/\d{2}/g) || []);
+    if (extras.length > 6) continue;
+    extras.forEach(x => {
+      let n = Math.floor(base / 100) * 100 + Number(x);
+      if (n <= base) n += 100;
+      base = n; out.push('FS' + String(n).padStart(6, '0'));
+    });
+  }
+  return [...new Set(out)];
+}
 function normTxt(s) { return String(s || '').toUpperCase().replace(/\s+/g, ' '); }
 
 function classificarDocumento(texto, nome) {
@@ -682,12 +698,17 @@ function identificarItem(item) {
     item.aviso = (item.aviso ? item.aviso + ' ' : '') + 'Fatura sem processo no ERP: ' + item.info.cambio.faturas.filter(f => !(S.processos || []).some(p => p.id === f.processo)).map(f => f.processo).join(', ');
   }
   // comprovante com mais de um processo na identificação ("FS260096 FS260097"): divide igualmente
-  const ids = ((item.info.pagamento && item.info.pagamento.processos) || []).filter(id => (S.processos || []).some(p => p.id === id));
+  let ids = ((item.info.pagamento && item.info.pagamento.processos) || []).filter(id => (S.processos || []).some(p => p.id === id));
+  if (ids.length < 2) { const peloNome = processosAbreviados(nomeSemPasta).filter(id => (S.processos || []).some(p => p.id === id)); if (peloNome.length > 1) ids = peloNome; }
+  // comprovante / recibo salvo nas pastas de mais de um processo: pagou os dois → divide
+  if (ids.length < 2 && (item.tipo === 'pagamento' || item.tipo === 'recibo') && (item.pastaProcessos || []).length > 1) ids = item.pastaProcessos.filter(id => (S.processos || []).some(p => p.id === id));
   if (ids.length > 1 && (item.tipo === 'pagamento' || item.tipo === 'recibo')) {
     item.processo = ids.includes(item.processo) ? item.processo : ids[0];
     item.processosExtras = ids.filter(id => id !== item.processo);
     item.divisao = ids.length;
     if (item.aviso && /^Confira: este arquivo de custo/.test(item.aviso)) { item.aviso = ''; if (item._base && item._base.confianca === 'alta') item.confianca = 'alta'; }
+    // a pasta onde estava é um dos processos pagos: não é pasta errada
+    if ((item.pastaProcessos || []).length && item.pastaProcessos.every(id => ids.includes(id))) { delete item.pastaErrada; delete item.corrigido; item.aviso = String(item.aviso || '').replace(/Conflito:[^.]*\.[^.]*\./, '').trim(); if (item._base && item._base.confianca === 'alta') item.confianca = 'alta'; }
     const parte = (Number(item.info.valor) || 0) / ids.length;
     item.aviso = (item.aviso ? item.aviso + ' ' : '') + `Pagamento de ${ids.join(' + ')}: dividido igualmente (R$ ${parte.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} cada).`;
   }
