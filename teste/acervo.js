@@ -271,7 +271,16 @@ function enriquecerInfo(item) {
   }
   if (item.tipo === 'recibo') {
     const J = U.replace(/\b([A-ZÀ-Ú]) (?=[A-ZÀ-Ú]\b)/g, '$1');   // "V A L O R T O T A L" → "VALORTOTAL"
-    if (!info.valor) { const m = J.match(/VALOR\s*TOTAL\s*RECEBIDO[\s\S]{0,80}?R\$\s*([\d.]+,\d{2})/i) || U.match(/R\$\s*([\d.]+,\d{2})/); if (m) info.valor = numBR(m[1]); }
+    if (!info.valor) {
+      // o valor total é o maior do recibo (o texto do PDF pode vir fora de ordem: "VALOR TOTAL RECEBIDO" seguido da parte em DINHEIRO)
+      const todos = [...U.matchAll(/R\$\s*([\d.]+,\d{2})/g)].map(m => numBR(m[1])).filter(v => v > 0);
+      const m = J.match(/VALOR\s*TOTAL\s*RECEBIDO[\s\S]{0,80}?R\$\s*([\d.]+,\d{2})/i);
+      info.valor = todos.length ? Math.max(...todos) : (m ? numBR(m[1]) : 0);
+    }
+    { const pix = U.match(/PIX\s*[—-]?\s*[A-ZÀ-Ú]*\s*R\$\s*([\d.]+,\d{2})/i), din = U.match(/DINHEIRO\s*R\$\s*([\d.]+,\d{2})/i);
+      if (pix) info.reciboPix = numBR(pix[1]); if (din) info.reciboDinheiro = numBR(din[1]); }
+    if (!info.emitCnpj) { const c = (U.match(/\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/g) || []).map(x => x.replace(/\D/g, '')).find(x => x !== FU_SONG_CNPJ); if (c) info.emitCnpj = c; }
+    if (!info.emitNome) { const n = U.match(/C\s*N\s*PJ\s+([A-ZÀ-Ú][A-ZÀ-Ú .&-]{3,60}?(?:LTDA|S\.?A\.?|EIRELI|ME))\b/); if (n) info.emitNome = n[1]; }
     if (!info.emitNome) info.emitNome = mx(/RAZ\s?[AÃ]O SOCIAL\s+(.+?)\s+CNPJ/i) || mx(/RECEBI(?:\(EMOS\))?\s+DE\s+(.+?)\s+(?:A|O)\s+(?:QUANTIA|IMPORT)/i);
     if (!info.data) { const m = U.match(/(\d{1,2}) de ([A-Za-zçÇ]+) de (\d{4})/); if (m && MESES_PT[m[2].toLowerCase()]) info.data = `${m[3]}-${MESES_PT[m[2].toLowerCase()]}-${m[1].padStart(2, '0')}`; else { const d = dataBrDe(U); if (d) info.data = brToIso(d); } }
   }
