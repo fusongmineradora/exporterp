@@ -249,8 +249,26 @@ function comprovantesPagamento(incluirUsados) {
   return out.filter(c => !c.url || !usados.has(c.url));
 }
 
+// Um comprovante dividido entre processos (FS260098 + FS260099 + FS260101): no banco é UM pagamento só
+function gruposDivididos() {
+  const g = {};
+  (S.processos || []).forEach(p => Object.entries(((p.docs || {})._custoDocs) || {}).forEach(([campo, reg]) => (reg.pagos || []).forEach(d => {
+    if (!d.url || d.tipo === 'socio') return;
+    (g[d.url] = g[d.url] || []).push({ p, campo, valor: Number(d.valor) || 0, data: d.data || '' });
+  })));
+  return Object.entries(g).filter(([, parts]) => new Set(parts.map(x => x.p.id)).size > 1)
+    .map(([url, parts]) => ({ url, parts, total: Math.round(parts.reduce((a, x) => a + x.valor, 0) * 100) / 100, data: (parts.find(x => x.data) || {}).data || '' }));
+}
 function sugestaoLinha(l) {
   const v = Math.abs(l.valor);
+  if (l.valor < 0) {
+    const gs = gruposDivididos().filter(g => Math.abs(g.total - v) < 0.01 && g.parts.some(x => !(x.p.docs._costBanco && x.p.docs._costBanco[x.campo]))
+      && (!g.data || diasEntre(brToIso2(g.data) || l.data, l.data) <= 4));
+    if (gs.length) {
+      const g = gs[0];
+      return { acao: 'baixarGrupo', grupo: g, unico: gs.length === 1 && !!g.data, texto: `Pagamento dividido entre ${g.parts.map(x => x.p.id).join(' + ')} (${g.parts.map(x => 'R$ ' + fmt(x.valor)).join(' + ')})` };
+    }
+  }
   // 1) já há um lançamento em aberto com o mesmo valor → dar baixa
   if (l.valor < 0) {
     const dataRef = e => {
@@ -408,7 +426,19 @@ async function conciliarLinha(chave, modo, silencioso) {
     }
   }
   try {
-    if (modo === 'baixar' && sug && sug.acao === 'baixar') {
+    if (modo === 'baixar' && sug && sug.acao === 'baixarGrupo') {
+      const data = isoToBr(l.data);
+      sug.grupo.parts.forEach(({ p, campo }) => {
+        p.docs = p.docs || {};
+        p.docs._costBanco = p.docs._costBanco || {}; p.docs._costBanco[campo] = l.chave;
+        p.docs._costData = p.docs._costData || {}; p.docs._costData[campo] = data;
+        p.docs._costComp = p.docs._costComp || {}; if (!p.docs._costComp[campo]) p.docs._costComp[campo] = sug.grupo.url;
+        p[campo + '_status'] = 'Pago';
+      });
+      const c1 = sug.grupo.parts[0].campo;
+      l.status = 'conciliado'; l.lancId = 'grupo:' + sug.grupo.parts.map(x => x.p.id + '/' + x.campo).join(',');
+      l.categoria = PROCESS_COST_FIELDS[c1] || l.categoria; l.centro = [...new Set(sug.grupo.parts.map(x => 'P:' + x.p.id))].join(' ');
+    } else if (modo === 'baixar' && sug && sug.acao === 'baixar') {
       if (!darBaixa(sug.entry, l)) throw new Error('Não foi possível dar baixa no lançamento.');
       // liga o comprovante (se houver) para ele não ser sugerido de novo em outra linha
       const pid = sug.entry.vinculo === 'processo' ? sug.entry.vinculoId : '';
@@ -592,7 +622,7 @@ async function autoConciliar() {
   for (const l of B.linhas.filter(x => x.status === 'pendente')) {
     if (/^RENDIMENTOS/i.test(l.memo)) continue;
     const sug = sugestaoLinha(l);
-    if (sug && sug.acao === 'baixar' && sug.unico && await conciliarLinha(l.chave, 'baixar', true)) r.baixas++;
+    if (sug && (sug.acao === 'baixar' || sug.acao === 'baixarGrupo') && sug.unico && await conciliarLinha(l.chave, 'baixar', true)) r.baixas++;
   }
   // reembolso ao sócio: PIX da empresa para o sócio que fecha (somando do mais antigo) despesas pagas no cartão pessoal
   r.reembolsos = 0;
@@ -669,7 +699,7 @@ function renderConciliacao() {
           </span>
           <span style="display:flex;gap:6px">
             <button class="btn btn-secondary btn-xs" onclick="ignorarLinha('${escHtml(l.chave)}')">Ignorar</button>
-            ${sug && sug.acao === 'baixar' ? `<button class="btn btn-success btn-xs" onclick="conciliarLinha('${escHtml(l.chave)}','baixar')">Dar baixa</button>` : ''}
+            ${sug && (sug.acao === 'baixar' || sug.acao === 'baixarGrupo') ? `<button class="btn btn-success btn-xs" onclick="conciliarLinha('${escHtml(l.chave)}','baixar')">Dar baixa</button>` : ''}
             <button class="btn btn-primary btn-xs" onclick="conciliarLinha('${escHtml(l.chave)}','lancar')">Lançar</button>
           </span>
         </div>` : `
