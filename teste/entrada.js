@@ -243,6 +243,9 @@ function lerXmlFiscal(txt) {
     serie: first('serie'),
     emitCnpj: emit ? first('CNPJ', emit) || first('CPF', emit) : '',
     emitNome: emit ? first('xNome', emit) : '',
+    emitIE: emit ? first('IE', emit) : '',
+    emitCep: emit ? first('CEP', emit) : '',
+    emitEnd: emit ? [[first('xLgr', emit), first('nro', emit)].filter(Boolean).join(', '), [first('xMun', emit), first('UF', emit)].filter(Boolean).join('/')].filter(Boolean).join(' - ') : '',
     destNome: dest ? first('xNome', dest) : '',
     valor: Number(first('vNF') || first('vTPrest') || 0) || 0,
     cfop: first('CFOP'),
@@ -765,6 +768,7 @@ async function confirmarEntrada(i, silencioso) {
       logAction('anexar', 'PROCESSOS', proc.id, tipoLabel(item.tipo) + ': ' + upd.name + ' (Caixa de Entrada)' + (item.pastaErrada && proc.id === item.pastaErrada.certo ? ' — corrigido: estava na pasta ' + item.pastaErrada.estava.join('+') : ''));
     };
     registro(p);
+    if (typeof cadastrarPeloDoc === 'function') { try { cadastrarPeloDoc(item); } catch (e) { console.warn('cadastro', e); } }
     if (typeof aplicarDocNoProcesso === 'function') aplicarDocNoProcesso(item, p, upd); else lancarFinanceiroDoDoc(item, p, upd);
     // Mesmo contrato de câmbio em outros processos: atalho na pasta de cada um (o arquivo existe uma vez só)
     for (const idExtra of item.processosExtras || []) {
@@ -867,6 +871,7 @@ async function confirmarAdm(i, silencioso) {
       if (S.banco) S.banco.docs = docs;
     }
     logAction('anexar', 'DOCUMENTOS', upd.id, 'ADM: ' + upd.name + ' (Caixa de Entrada)');
+    if (typeof cadastrarPeloDoc === 'function') { try { cadastrarPeloDoc(item); } catch (e) { console.warn('cadastro', e); } }
     lancarFinanceiroDoDoc(item, null, upd);
     E.itens.splice(i, 1);
     if (!silencioso) { showToast('✅ Guardado como despesa do mês ' + mes.slice(5) + '/' + mes.slice(0, 4)); render(); }

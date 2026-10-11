@@ -763,3 +763,65 @@ function blocoImportarTudo() {
     ${faltas.length ? faltas.map(x => `<div style="padding:8px 0;border-bottom:1px solid var(--border)"><div style="font-size:13.5px;font-weight:700;cursor:pointer;color:var(--accent)" onclick="abrirProcesso2('${escHtml(x.id)}')">${escHtml(x.id)} <span style="font-weight:400;color:var(--muted2)">${escHtml(x.cliente)}</span></div>
       <div style="font-size:12.5px;color:var(--muted2)">${escHtml(x.faltas.map(f => f.texto).concat(x.abertos.map(a => PROCESS_COST_FIELDS[a.campo] + ' a pagar ' + 'R$ ' + fmt(a.aberto))).join(' · '))}</div></div>`).join('') : '<div style="font-size:13px;color:var(--green)">Nenhuma pendência.</div>'}`, 'var(--green)');
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Cadastros automáticos: quem emitiu a nota / recebeu o pagamento vira fornecedor
+// (Fornecedor, Transportadora, Despachante, Agente de Carga, Armazém, Serviço de Terceiros).
+// Clientes vêm da invoice / contrato (garantirCliente). Não duplica: procura pelo CNPJ e pelo nome.
+// ═══════════════════════════════════════════════════════════════
+const TIPO_FORN_POR_CAMPO = { custoFrete: 'Transportadora', custoMaritimo: 'Agente de Carga', custoDespachante: 'Despachante', custoArmazem: 'Armazém', custoProduto: 'Fornecedor', custoServTerceiros: 'Serviço de Terceiros', custoPorto: 'Serviço de Terceiros', custoCertificado: 'Serviço de Terceiros' };
+const fmtCnpj = d => d.length === 14 ? d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5') : d.length === 11 ? d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : d;
+function garantirFornecedor(d) {
+  let nome = String(d.nome || '').replace(/\s+/g, ' ').trim();
+  const cnpj = String(d.cnpj || '').replace(/\D/g, '');
+  if (!nome || nome.length < 3 || !/[A-Za-zÀ-ú]{3}/.test(nome)) return null;
+  if (cnpj === FU_SONG_CNPJ || /FU\s?SONG/i.test(nome) || /^(ITAU|BANCO|PIX|TRANSFER)/i.test(nome)) return null;
+  if (nome === nome.toUpperCase()) nome = titulo(nome);
+  S.fornecedores = S.fornecedores || [];
+  const base = t => normNome(String(t || '').replace(/\b(LTDA|EIRELI|ME|EPP|S\/?A|SA|MEI)\b\.?/gi, ''));
+  const primeira = t => (String(t || '').toUpperCase().normalize('NFD').replace(/[^A-Z0-9 ]/g, ' ').split(/\s+/).find(w => w.length >= 3) || '');
+  let f = S.fornecedores.find(x => (cnpj && String(x.cnpj || '').replace(/\D/g, '') === cnpj) || base(x.nome) === base(nome))
+    // sem CNPJ (ex.: print do PIX com o nome fantasia): mesmo tipo e mesma primeira palavra = mesma empresa
+    || (!cnpj && S.fornecedores.find(x => x.tipo === (d.tipo || 'Fornecedor') && primeira(x.nome) && primeira(x.nome) === primeira(nome)));
+  if (f) {
+    if (!f.cnpj && cnpj) f.cnpj = fmtCnpj(cnpj);
+    if (!f.ie && d.ie) f.ie = d.ie; if (!f.cep && d.cep) f.cep = d.cep; if (!f.end && d.end) f.end = d.end;
+    return f;
+  }
+  f = { id: genId(), tipo: d.tipo || 'Fornecedor', nome, cnpj: cnpj ? fmtCnpj(cnpj) : '', ie: d.ie || '', cep: d.cep || '', email: '', end: d.end || '', banco: '', agencia: '', conta: '', pix: '' };
+  S.fornecedores.push(f);
+  logAction('criar', 'FORNECEDORES', f.id, f.tipo + ': ' + f.nome + ' (pelo documento ' + (d.origem || '') + ')');
+  (S._cadastrosNovos = S._cadastrosNovos || []).push(f.tipo + ': ' + f.nome);
+  return f;
+}
+function cadastrarPeloDoc(item) {
+  const info = item.info || {};
+  if (!['nfe', 'cte', 'mdfe', 'nfse', 'recibo', 'faturaFrete', 'pagamento'].includes(item.tipo)) return null;
+  const pag = info.pagamento || null;
+  const nome = item.tipo === 'cte' || item.tipo === 'mdfe' ? (info.transportadora || info.emitNome) : item.tipo === 'pagamento' ? (pag && pag.recebedor) : info.emitNome;
+  let cnpj = info.emitCnpj || '';
+  if (!cnpj && item.tipo === 'pagamento') {   // CNPJ/CPF do recebedor no comprovante (o primeiro que não é da Fu Song)
+    const docs = (String(item.texto || '').match(/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g) || []).map(x => x.replace(/\D/g, '')).filter(x => x !== FU_SONG_CNPJ);
+    cnpj = docs[0] || '';
+  }
+  const campo = item.campoCusto || (typeof campoCustoSugerido === 'function' ? campoCustoSugerido(item) : '') || CAMPO_POR_CATEG[item.categoria] || '';
+  const tipo = item.tipo === 'cte' || item.tipo === 'mdfe' ? 'Transportadora' : item.tipo === 'faturaFrete' ? 'Agente de Carga' : item.tipo === 'nfe' ? 'Fornecedor' : (TIPO_FORN_POR_CAMPO[campo] || 'Serviço de Terceiros');
+  return garantirFornecedor({ nome, cnpj, tipo, ie: info.emitIE, cep: info.emitCep, end: info.emitEnd, origem: tipoLabel(item.tipo) });
+}
+// Completa os cadastros com o que já está anexado nos processos (roda ao abrir; não duplica)
+function cadastrosPelosArquivos() {
+  const antes = (S.fornecedores || []).length + (S.clientes || []).length;
+  (S.processos || []).forEach(p => {
+    garantirCliente(p);
+    Object.entries(((p.docs || {})._files) || {}).forEach(([tipo, arr]) => (arr || []).forEach(f => {
+      if (f.atalho) return;
+      const ch = String(f.chave || '').replace(/\D/g, '');
+      cadastrarPeloDoc({ tipo, campoCusto: f.campoCusto, categoria: f.categoria, texto: '', info: { emitNome: f.emitente, emitCnpj: ch.length === 44 ? ch.slice(6, 20) : '', pagamento: f.pagamento } });
+    }));
+  });
+  return (S.fornecedores || []).length + (S.clientes || []).length - antes;
+}
+setTimeout(function esperarDados() {
+  if (!S.processos || !S.processos.length || typeof saveToSheets !== 'function') { if (!window._cadastrosTentativas || window._cadastrosTentativas++ < 40) { window._cadastrosTentativas = window._cadastrosTentativas || 1; setTimeout(esperarDados, 3000); } return; }
+  try { if (cadastrosPelosArquivos() > 0) saveToSheets().catch(() => {}); } catch (e) { console.warn('cadastros', e); }
+}, 4000);
