@@ -364,7 +364,7 @@ function lerCambio(texto) {
     contratoExtrato: digits.length > 4 && digits.startsWith('0101') ? digits.slice(4) : digits, // = "LIQ EXPORT 3026633302" no extrato
     pagador: g(/NOME PAG\.?\W*:?\W*([A-Z0-9 ,.&]+?)\s+(?:PAIS|DATA|OPR)/i),
     liquidacao: g(/Liquida[cç][aã]o at[eé]\s+(\d{2}\/\d{2}\/\d{4})/i) || g(/Data da entrega dos Reais\s+(\d{2}\/\d{2}\/\d{4})/i),
-    embarque: g(/\bEMB\W*:?\W*(\d{2}\/\d{2}\/\d{4})/i),
+    embarque: g(/\bEMB\W*:?\W*(\d{2}\/\d{2}\/\d{4})/i) || g(/PREVIS[AÃ]O\s+(?:DE\s+)?EMBARQUE\W*:?\W*(\d{2}\/\d{2}\/\d{4})/i),
     modalidade: /PAGAMENTO\s+ANTECIPADO|RECEBIMENTO\s+ANTECIPADO/i.test(T) ? 'PAEX' : '',
     faturas,
   };
@@ -628,6 +628,15 @@ function identificarItem(item) {
   }
   if (!item.tipo && item.pastaProcessos.length && item.processo && item.processo !== '__ADM') { item.tipo = 'outros'; item.confianca = 'media'; item.motivo = 'arquivo da pasta do processo'; }
   if (item.processo === '__ADM' && !item.tipo) { item.tipo = 'pagamento'; item.confianca = 'media'; item.motivo = 'pasta de comprovantes do mês'; }
+  // Contrato antigo sem "FATURA: FS…": o processo vem da pasta; o dólar é dividido igualmente entre as pastas onde ele estava
+  if (item.info.cambio && !(item.info.cambio.faturas || []).length && item.processo && item.processo !== '__ADM') {
+    const ids = [...new Set([item.processo, ...(item.pastaProcessos || [])])].filter(id => (S.processos || []).some(p => p.id === id));
+    if (ids.length) {
+      const usd = Math.round((Number(item.info.cambio.valorMoeda) || 0) / ids.length * 100) / 100;
+      item.info.cambio.faturas = ids.map(id => ({ processo: id, usd, pelaPasta: true }));
+      item.aviso = (item.aviso ? item.aviso + ' ' : '') + `O contrato não cita a fatura: ligado pela pasta a ${ids.join(' + ')}.`;
+    }
+  }
   // Contrato de câmbio que paga mais de uma fatura: anexa a todos os processos citados
   if (item.info.cambio) item.processosExtras = item.info.cambio.faturas.map(f => f.processo).filter(id => id !== item.processo && (S.processos || []).some(p => p.id === id));
   item.processosExtras = (item.processosExtras || []).filter(id => (S.processos || []).some(p => p.id === id));
