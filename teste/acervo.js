@@ -945,6 +945,7 @@ setTimeout(async function esperarDados() {
     }));
     // arquivos da pasta FS2601xxS que foram para o principal (importação de 11/10): voltam para o S
     try { mudou += await devolverArquivosDoS(); } catch (e) { console.warn('arquivos S', e); }
+    mudou += corrigirFaturasDigitadas();
     // processo renumerado (FS260105 → FS260107) e custos previstos
     mudou += juntarProcessosRenumerados();
     (S.processos || []).forEach(p => { mudou += aplicarPrevistos(p); });
@@ -1404,5 +1405,40 @@ async function devolverArquivosDoS() {
       }
     }
   }
+  return n;
+}
+
+// Número de processo digitado errado no documento do banco (ex.: contrato de câmbio com "FS230109" em vez de FS260109):
+// se o processo não existe e só um processo tem os mesmos 4 últimos dígitos, é ele.
+function numeroCorrigido(id) {
+  id = processoAtual(String(id || '').toUpperCase());
+  if (!/^FS\d{6}S?$/.test(id) || (S.processos || []).some(p => p.id === id)) return id;
+  const anos = new Set((S.processos || []).map(p => String(p.id).slice(2, 4)));
+  if (anos.has(id.slice(2, 4))) return id;   // ano que existe: pode ser um processo ainda não criado — não adivinha
+  const c = (S.processos || []).filter(p => /^FS\d{6}S?$/.test(p.id) && p.id.slice(4) === id.slice(4));
+  return c.length === 1 ? c[0].id : id;
+}
+function corrigirFaturasDigitadas() {
+  let n = 0;
+  const modelos = {};
+  (S.processos || []).forEach(p => ((((p.docs || {})._files || {}).comprovantes) || []).forEach(f => {
+    const c = f.cambio; if (!c || !Array.isArray(c.faturas)) return;
+    const troca = c.faturas.filter(x => numeroCorrigido(x.processo) !== x.processo);
+    if (!troca.length) return;
+    troca.forEach(x => logAction('editar', 'PROCESSOS', numeroCorrigido(x.processo), `Câmbio ${c.referencia || ''}: fatura "${x.processo}" no contrato = ${numeroCorrigido(x.processo)} (erro de digitação)`));
+    c.faturas = c.faturas.map(x => Object.assign({}, x, { processo: numeroCorrigido(x.processo), digitado: x.digitado || (numeroCorrigido(x.processo) !== x.processo ? x.processo : undefined) }));
+    modelos[c.referencia || f.url] = { f, c };
+    n++;
+  }));
+  // anexa o contrato (atalho) e aplica o câmbio nos processos corrigidos
+  Object.values(modelos).forEach(({ f, c }) => c.faturas.forEach(x => {
+    const p = (S.processos || []).find(q => q.id === x.processo); if (!p) return;
+    p.docs = p.docs || {}; p.docs._files = p.docs._files || {};
+    const arr = p.docs._files.comprovantes = p.docs._files.comprovantes || [];
+    if (!arr.some(y => y.cambio && y.cambio.referencia === c.referencia)) { arr.push(Object.assign({}, f, { atalho: true, cambio: Object.assign({}, c, { usdFatura: x.usd }) })); if (!p.docs.comprovantes) p.docs.comprovantes = f.url; }
+    aplicarCambioNoProcesso(p, { referencia: c.referencia, taxa: c.taxa, valorReais: c.reaisTotal, valorMoeda: c.usdTotal, data: c.data, contratoExtrato: c.contratoExtrato, faturas: c.faturas }, f.url);
+  }));
+  // todas as cópias do mesmo contrato com as faturas corrigidas
+  (S.processos || []).forEach(p => ((((p.docs || {})._files || {}).comprovantes) || []).forEach(f => { const m = f.cambio && modelos[f.cambio.referencia]; if (m && f.cambio !== m.c) f.cambio.faturas = m.c.faturas; }));
   return n;
 }
