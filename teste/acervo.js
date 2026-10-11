@@ -168,7 +168,7 @@ function podeCriarProcesso(it) {
   return id;
 }
 
-async function criarProcessoDoDoc(i) {
+async function criarProcessoDoDoc(i, semPerguntar) {
   const E = S.entrada, it = E.itens[i];
   const id = podeCriarProcesso(it);
   if (!id) return;
@@ -176,7 +176,7 @@ async function criarProcessoDoDoc(i) {
   const irmaos = E.itens.filter(x => ['invoice', 'contrato'].includes(x.tipo) && numeroProcessoDoItem(x) === id);
   const docs = irmaos.map(docVendaDoItem).filter(Boolean);
   const inv = docs.find(d => !d.contrato) || null, ct = docs.find(d => d.contrato) || null;
-  if (!inv && !ct) { await uiAlert('Não consegui ler os dados deste documento. Crie o processo pela tela de Processos.'); return; }
+  if (!inv && !ct) { if (semPerguntar) return null; await uiAlert('Não consegui ler os dados deste documento. Crie o processo pela tela de Processos.'); return; }
   const p = montarProcesso({ proc: id, nome: it.nome, id: '' }, inv, ct);
   const resumo = [
     'Cliente: ' + (p.cliente || '—'), 'Produto: ' + (p.produto || '—') + (p.ncm ? ' (NCM ' + p.ncm + ')' : ''),
@@ -184,11 +184,12 @@ async function criarProcessoDoDoc(i) {
     'Valor: USD ' + (p.cambioInvoice ? p.cambioInvoice.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '—') + ' · Peso: ' + (p.peso || '—') + ' kg · Containers: ' + p.qtdContainer,
     'Lido de: ' + [inv ? 'invoice' : '', ct ? 'contrato' : ''].filter(Boolean).join(' + '),
   ].concat(p.docs._criadoDe.avisos.length ? ['⚠️ ' + p.docs._criadoDe.avisos.join('; ')] : []);
-  if (!await uiConfirm('Criar o processo ' + id + ' com estes dados?\n\n' + resumo.join('\n') + '\n\nVocê pode editar tudo depois na tela do processo.', 'Novo processo pela ' + (inv ? 'invoice' : 'contrato'), 'Criar processo', 'Cancelar')) return;
+  if (!semPerguntar && !await uiConfirm('Criar o processo ' + id + ' com estes dados?\n\n' + resumo.join('\n') + '\n\nVocê pode editar tudo depois na tela do processo.', 'Novo processo pela ' + (inv ? 'invoice' : 'contrato'), 'Criar processo', 'Cancelar')) return;
   S.processos.push(p);
   garantirCliente(p);
   logAction('criar', 'PROCESSOS', p.id, (p.cliente || '') + ' · ' + (p.produto || '') + ' (pela invoice/contrato)');
   vincularCambiosExistentes(p);
+  if (semPerguntar) return p;
   try {
     await saveToSheets();
     await criarPastaProcesso(p);
@@ -265,7 +266,7 @@ function enriquecerInfo(item) {
   if (item.tipo === 'nfse') {
     if (!info.emitNome) info.emitNome = mx(/Nome empresarial:\s*(.+?)\s+Endere[cç]o/i) || mx(/RECEBI\(EMOS\) DA EMPRESA:\s*(.+?)\s+A NOTA/i)
       || mx(/(?:EMITENTE DA NFS-?e|Prestador do Servi[cç]o)[\s\S]{0,120}?Nome \/ Nome Empresarial\s+(.+?)\s+(?:Inscri|CNPJ|CEP)/i) || mx(/Nome \/ Nome Empresarial\s+(.+?)\s+(?:Inscri|CNPJ|CEP)/i);
-    if (!info.valor) info.valor = numBR(mx(/VALOR (?:TOTAL )?DO SERVI[CÇ]O:?\s*R?\$?\s*([\d.]+,\d{2})/i) || mx(/Valor l[ií]quido da NFS-?e[\s\S]{0,60}?([\d.]+,\d{2})/i) || mx(/VALOR TOTAL DA NFS-?E[\s\S]{0,80}?R\$\s*([\d.]+,\d{2})/i));
+    if (!info.valor) info.valor = numBR(mx(/VALOR (?:TOTAL )?DOS? SERVI[CÇ]OS?:?\s*R?\$?\s*([\d.]+,\d{2})/i) || mx(/Valor l[ií]quido da NFS-?e[\s\S]{0,60}?([\d.]+,\d{2})/i) || mx(/VALOR TOTAL DA NFS-?E[\s\S]{0,80}?R\$\s*([\d.]+,\d{2})/i));
     if (!info.data) { const d = mx(/EMITIDA EM\s+(\d{2}\/\d{2}\/\d{4})/i) || mx(/Data da emiss[aã]o da NFS-?e\s+(\d{2}\/\d{2}\/\d{4})/i) || dataBrDe(U); if (d) info.data = brToIso(d); }
   }
   if (item.tipo === 'recibo') {
@@ -526,4 +527,239 @@ function somarContainers(p, novos) {
   if (!add.length) return false;
   p.containers = atuais.concat(add); p.container = p.containers[0]; p.qtdContainer = String(p.containers.length);
   return true;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Importar TUDO de uma pasta do Drive (acervo completo)
+// 1. Lista as pastas e sugere quais importar (FS…, Comprovantes…, câmbio/DU-E, extratos)
+// 2. Copia os arquivos para a Entrada (originais intactos; repetidos pelo conteúdo são pulados)
+// 3. Cria os processos (pela invoice/contrato ou só pelo número da pasta)
+// 4. Anexa o que foi identificado com segurança · o resto fica na Entrada para você conferir
+// 5. Importa o OFX e faz a conciliação automática · mostra o que falta em cada processo
+// ═══════════════════════════════════════════════════════════════
+const semAcento = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+const FS_DE = s => ((semAcento(s).match(/FS\s?\d{6}/) || [''])[0]).replace(/\s/g, '');
+function tipoDaPasta(nome) {
+  const u = semAcento(nome);
+  if (/^FS\s?\d{6}/.test(u)) return 'processo';
+  if (/^COMPROVANTE/.test(u)) return 'comprovantes';
+  if (/EXTRATO/.test(u)) return 'extrato';
+  if (/CAMBIO|CONTRATO|\bDUE\b|DU-E/.test(u)) return 'cambio';
+  return '';
+}
+const ROTULO_PASTA = { processo: 'Processo', comprovantes: 'Despesas do mês', cambio: 'Câmbio / DU-E', extrato: 'Extrato do banco', soltos: 'Arquivos soltos', '': 'Não reconhecida' };
+const ORDEM_PASTA = { processo: 0, cambio: 1, comprovantes: 2, extrato: 3, soltos: 4, '': 5 };
+
+async function importarTudo(linkDado) {
+  const E = S.entrada;
+  const link = linkDado || await uiPrompt('Cole o link da pasta do Drive que tem todas as pastas (processos FS…, comprovantes, câmbio, extratos).\nOs arquivos são COPIADOS para a Entrada de teste; os originais não mudam.', 'https://drive.google.com/drive/folders/', 'Importar tudo de uma pasta');
+  if (!link) return;
+  const m = String(link).match(/folders\/([A-Za-z0-9_-]{10,})/) || String(link).trim().match(/^([A-Za-z0-9_-]{20,})$/);
+  if (!m) { await uiAlert('Link de pasta inválido. Copie o endereço da pasta no Drive (…/folders/…).'); return; }
+  E.tudo = { etapa: 'Lendo as pastas...', rodando: true };
+  render();
+  try {
+    await getAccessToken(); await ensureTestSheet();
+    const filhos = await driveListAll(`'${m[1]}' in parents and trashed=false`, 'id,name,mimeType,md5Checksum,size');
+    const pastas = [];
+    for (const f of filhos.filter(x => x.mimeType === 'application/vnd.google-apps.folder')) {
+      let tipo = tipoDaPasta(f.name);
+      if (!tipo) {   // ex.: "maio a setembro": olha o que tem dentro
+        const dentro = await driveListAll(`'${f.id}' in parents and trashed=false`, 'id,name,mimeType');
+        if (dentro.some(x => /^CONTRATO\s*\d{6,}/.test(semAcento(x.name)) || /EXTRATO-?DUE/.test(semAcento(x.name))) || dentro.some(x => x.mimeType === 'application/vnd.google-apps.folder' && tipoDaPasta(x.name) === 'extrato')) tipo = 'cambio';
+      }
+      pastas.push({ id: f.id, nome: f.name.trim(), tipo, marcada: !!tipo });
+    }
+    const soltos = filhos.filter(x => x.mimeType !== 'application/vnd.google-apps.folder' && !/^application\/vnd\.google-apps/.test(x.mimeType));
+    if (soltos.length) pastas.push({ id: '__soltos', nome: 'Arquivos soltos na pasta principal (' + soltos.length + '): ' + soltos.map(x => x.name).join(', '), tipo: 'soltos', marcada: false, arquivos: soltos });
+    pastas.sort((a, b) => ORDEM_PASTA[a.tipo] - ORDEM_PASTA[b.tipo] || a.nome.localeCompare(b.nome, 'pt-BR', { numeric: true }));
+    E.tudo = { raiz: m[1], pastas, rodando: false };
+  } catch (e) { E.tudo = { erro: e.message || String(e) }; }
+  render();
+}
+
+async function executarImportacaoTudo() {
+  const E = S.entrada, T = E.tudo;
+  if (!T || T.rodando) return;
+  const sel = T.pastas.filter(p => p.marcada);
+  if (!sel.length) { showToast('Marque pelo menos uma pasta'); return; }
+  T.rodando = true; T.erro = '';
+  const rel = T.relatorio = { copiados: 0, pulados: 0, processosNovos: [], semInvoice: [], anexados: 0, pastaErrada: [], ofx: [], conc: null, inicio: Date.now() };
+  const etapa = t => { T.etapa = t; render(); };
+  try {
+    await getAccessToken(); await ensureTestSheet();
+    const entradaId = await getTesteFolder(ENTRADA_FOLDER);
+    // ── 1. percorre as pastas marcadas ──
+    const arquivos = [], ofx = [];
+    const fila = [];
+    sel.forEach(p => {
+      if (p.tipo === 'soltos') p.arquivos.forEach(f => arquivos.push({ ...f, contexto: FS_DE(f.name) || '' }));
+      else fila.push({ id: p.id, contexto: p.tipo === 'processo' ? FS_DE(p.nome) : p.tipo === 'comprovantes' ? 'ADM' : '', extrato: p.tipo === 'extrato', nome: p.nome });
+    });
+    while (fila.length) {
+      const pasta = fila.shift();
+      etapa(`Lendo a pasta ${pasta.nome}... (${arquivos.length} arquivos até agora)`);
+      const filhos = await driveListAll(`'${pasta.id}' in parents and trashed=false`, 'id,name,mimeType,md5Checksum,size');
+      for (const f of filhos) {
+        if (f.mimeType === 'application/vnd.google-apps.folder') {
+          const t = tipoDaPasta(f.name), fs = FS_DE(f.name);
+          // subpasta de câmbio dentro de um processo: o processo vem do contrato, não da pasta
+          fila.push({ id: f.id, nome: pasta.nome + ' / ' + f.name.trim(), extrato: pasta.extrato || t === 'extrato', contexto: fs || (t === 'cambio' ? '' : t === 'comprovantes' ? 'ADM' : pasta.contexto) });
+        } else if (/\.ofx$/i.test(f.name) || f.mimeType === 'application/x-ofx') {
+          ofx.push(f);
+        } else if (pasta.extrato) {
+          // extratos mensais em PDF: ficam só guardados no Drive (o OFX já traz os movimentos)
+        } else if (!/^application\/vnd\.google-apps/.test(f.mimeType) && !ACERVO_IGNORAR_ARQ.test(f.name)) {
+          arquivos.push({ ...f, contexto: pasta.contexto, pasta: pasta.nome });
+        }
+      }
+    }
+    // ── 2. copia para a Entrada (pula o que já existe, pelo conteúdo) ──
+    const ja = new Set();
+    (await driveListAll(`'${entradaId}' in parents and trashed=false`, 'md5Checksum')).forEach(f => f.md5Checksum && ja.add(f.md5Checksum));
+    (S.processos || []).forEach(p => Object.values(((p.docs || {})._files) || {}).forEach(arr => (arr || []).forEach(f => f.md5 && ja.add(f.md5))));
+    ((S.banco && S.banco.docs) || []).forEach(d => d.md5 && ja.add(d.md5));
+    const porMd5 = {};
+    arquivos.forEach(f => { if (f.md5Checksum) (porMd5[f.md5Checksum] = porMd5[f.md5Checksum] || new Set()).add(f.contexto); });
+    const copiadoMd5 = new Set();
+    for (let i = 0; i < arquivos.length; i++) {
+      const f = arquivos[i];
+      if (f.md5Checksum && (ja.has(f.md5Checksum) || copiadoMd5.has(f.md5Checksum))) { if (ja.has(f.md5Checksum)) rel.pulados++; continue; }
+      const ctxs = [...(f.md5Checksum ? porMd5[f.md5Checksum] : new Set([f.contexto]))].filter(c => c && c !== 'ADM');
+      const fsNome = FS_DE(f.name);
+      let nome = f.name.trim();
+      if (ctxs.length && !(ctxs.length === 1 && fsNome === ctxs[0])) nome = `${ctxs.join('+')} - ${nome}`;
+      else if (!ctxs.length && f.contexto === 'ADM' && !fsNome) nome = `ADM - ${nome}`;
+      etapa(`Copiando ${i + 1} de ${arquivos.length}: ${f.name}`);
+      try {
+        await driveAPI('POST', '/files/' + f.id + '/copy', { name: nome, parents: [entradaId], description: 'Cópia do acervo (original: ' + f.id + (f.pasta ? ' · pasta: ' + f.pasta : '') + ')' }, 'fields=id');
+        if (f.md5Checksum) copiadoMd5.add(f.md5Checksum);
+        rel.copiados++;
+      } catch (e) { console.warn('copiar', f.name, e.message); }
+    }
+    // ── 3. lê tudo (texto, OCR dos prints) ──
+    etapa('Lendo os documentos (os prints passam pelo OCR do Google, pode demorar)...');
+    E.lido = false; E.carregando = false;
+    const progresso0 = setInterval(() => { if (E.progresso) { T.etapa = E.progresso; } }, 700);
+    await lerEntrada();
+    clearInterval(progresso0);
+    if (E.erro) throw new Error(E.erro);
+    // ── 4. cria os processos das pastas FS ──
+    const ids = [...new Set(sel.filter(p => p.tipo === 'processo').map(p => FS_DE(p.nome)).filter(Boolean))];
+    // processos citados pelas invoices/contratos soltos também
+    E.itens.forEach(it => { const id = podeCriarProcesso(it); if (id && !ids.includes(id)) ids.push(id); });
+    const novos = [];
+    for (const id of ids.sort()) {
+      if ((S.processos || []).some(p => p.id === id)) continue;
+      etapa('Criando o processo ' + id + '...');
+      const iDoc = E.itens.findIndex(it => podeCriarProcesso(it) === id);
+      let p = iDoc >= 0 ? await criarProcessoDoDoc(iDoc, true) : null;
+      if (!p) {
+        p = montarProcesso({ proc: id, nome: id, id: '' }, null, null);
+        S.processos.push(p);
+        logAction('criar', 'PROCESSOS', p.id, 'pela pasta do Drive (sem invoice/contrato)');
+        rel.semInvoice.push(id);
+      }
+      novos.push(p); rel.processosNovos.push(id);
+    }
+    if (novos.length) {
+      await saveToSheets();
+      for (const p of novos) { etapa('Criando a pasta do processo ' + p.id + ' no Drive...'); try { await criarPastaProcesso(p); } catch (e) { console.warn('pasta', p.id, e.message); } }
+      await saveToSheets();
+    }
+    // ── 5. identifica de novo (agora os processos existem) e anexa o que é seguro ──
+    E.itens.forEach(it => { try { identificarItem(it); } catch (e) { console.warn('identificar', it.nome, e); } });
+    E.itens.forEach(it => {
+      if (it.pastaErrada) rel.pastaErrada.push({ nome: (it.nome || '').replace(/^((?:FS\d{6}S?)(?:\+FS\d{6}S?)*|ADM) - /i, ''), estava: it.pastaErrada.estava.join(', '), certo: it.pastaErrada.certo, motivos: it.pastaErrada.motivos || [], auto: !!it.corrigido });
+      else if (it.aviso && /^Conflito/.test(it.aviso)) rel.pastaErrada.push({ nome: it.nome, estava: (it.pastaProcessos || []).join(', '), certo: '?', motivos: [it.aviso], auto: false });
+    });
+    const existe = id => id === '__ADM' || (S.processos || []).some(p => p.id === id);
+    const seguro = it => {
+      if (!it.tipo || !it.processo || it.duplicado || it.confianca === 'nenhuma' || !existe(it.processo)) return false;
+      if (it.info && it.info.pagamento && it.info.pagamento.valorIncerto) return false;
+      if (DOCS_COM_CUSTO.includes(it.tipo) && !(Number(it.info && it.info.valor) > 0)) return false;
+      if (it.confianca === 'alta') return true;
+      if (it.pastaErrada && !it.corrigido) return false;
+      if (/Conflito|confira/i.test(it.aviso || '') && !it.admAuto) return false;
+      return true;
+    };
+    let rodada = 0, achou = true;
+    while (achou && rodada++ < 5) {
+      achou = false;
+      for (let i = E.itens.length - 1; i >= 0; i--) {
+        const it = E.itens[i];
+        if (!seguro(it)) continue;
+        etapa(`Anexando ${rel.anexados + 1}: ${it.nome}`);
+        if (await confirmarEntrada(i, true)) { rel.anexados++; achou = true; }
+      }
+    }
+    await saveToSheets();
+    // ── 6. extrato OFX + conciliação automática ──
+    if (ofx.length && typeof importarOFXBytes === 'function') {
+      for (const f of ofx) {
+        etapa('Importando o extrato ' + f.name + '...');
+        try { const ok = await importarOFXBytes(new Uint8Array(await driveDownload(f.id)), f.name); rel.ofx.push({ nome: f.name, ok, texto: (S.banco.msg || {}).texto || '' }); }
+        catch (e) { rel.ofx.push({ nome: f.name, ok: false, texto: e.message || String(e) }); }
+      }
+    }
+    if (typeof autoConciliar === 'function' && S.banco && (S.banco.linhas || []).length) {
+      etapa('Conferindo o extrato com os lançamentos...');
+      try { await carregarBanco(); rel.conc = await autoConciliar(); } catch (e) { console.warn('conciliar', e); }
+      await saveToSheets();
+    }
+    rel.paraConferir = E.itens.length;
+    rel.fim = Date.now();
+    T.rodando = false; T.pastas = null; T.etapa = '';
+    showToast('✅ Importação concluída');
+  } catch (e) {
+    T.rodando = false; T.erro = (e.message || String(e)) + ' — pode tocar em "Importar" de novo: o que já entrou não é repetido.';
+  }
+  render();
+}
+
+function marcarPastaTudo(i, v) { const T = S.entrada.tudo; if (T && T.pastas && T.pastas[i]) T.pastas[i].marcada = v; render(); }
+
+// O que falta em cada processo (lista única)
+function relatorioFaltas() {
+  return (S.processos || []).map(p => ({ id: p.id, cliente: p.cliente || '', faltas: (typeof pendenciasProcesso === 'function' ? pendenciasProcesso(p) : []), abertos: (typeof custosAbertos === 'function' ? custosAbertos(p) : []) }))
+    .filter(x => x.faltas.length || x.abertos.length).sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function blocoImportarTudo() {
+  const E = S.entrada, T = E.tudo;
+  if (!T) return '';
+  const caixa = (corpo, cor) => `<div class="card" style="padding:16px;margin-bottom:12px;${cor ? 'border-left:3px solid ' + cor : ''}">${corpo}</div>`;
+  if (T.erro && !T.pastas && !T.relatorio) return caixa(`<div style="color:var(--red);font-size:13px">⚠️ ${escHtml(T.erro)}</div>`, 'var(--red)');
+  if (T.rodando) return caixa(`<div style="font-weight:700;font-size:14px;margin-bottom:6px">⏳ Importando…</div><div style="font-size:12.5px;color:var(--muted2)">${escHtml(T.etapa || '')}</div><div style="font-size:11.5px;color:var(--muted);margin-top:8px">Deixe esta tela aberta. Se parar no meio, é só importar de novo: o que já entrou não é repetido.</div>`, 'var(--accent)');
+  if (T.pastas) {
+    const linha = (p, i) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer">
+        <input type="checkbox" style="width:auto;margin-top:3px" ${p.marcada ? 'checked' : ''} onchange="marcarPastaTudo(${i},this.checked)">
+        <span style="min-width:0"><span style="font-size:13.5px;font-weight:600;word-break:break-word">${escHtml(p.nome)}</span>
+        <span style="display:block;font-size:11.5px;color:${p.tipo ? 'var(--muted2)' : 'var(--muted)'}">${escHtml(ROTULO_PASTA[p.tipo])}</span></span></label>`;
+    const n = T.pastas.filter(p => p.marcada).length;
+    return caixa(`<div style="font-weight:700;font-size:14px">Quais pastas importar?</div>
+      <div style="font-size:12px;color:var(--muted2);margin:4px 0 8px">As reconhecidas já vêm marcadas. Desmarque o que não tem a ver com o sistema.</div>
+      ${T.pastas.map(linha).join('')}
+      ${T.erro ? `<div style="color:var(--red);font-size:12.5px;margin-top:8px">⚠️ ${escHtml(T.erro)}</div>` : ''}
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" style="min-height:42px" onclick="executarImportacaoTudo()" ${n ? '' : 'disabled'}>Importar ${n} pasta(s)</button><button class="btn btn-secondary btn-sm" style="min-height:42px" onclick="S.entrada.tudo=null;render()">Cancelar</button></div>`, 'var(--accent)');
+  }
+  const R = T.relatorio; if (!R) return '';
+  const faltas = relatorioFaltas();
+  const min = Math.max(1, Math.round((R.fim - R.inicio) / 60000));
+  const li = s => `<li style="margin:3px 0">${s}</li>`;
+  return caixa(`<div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><div style="font-weight:700;font-size:15px">✅ Importação concluída</div><button class="btn btn-secondary btn-xs" onclick="S.entrada.tudo=null;render()">Fechar</button></div>
+    <ul style="font-size:13px;margin:8px 0 0 18px;padding:0">
+      ${li(`${R.copiados} arquivo(s) copiados${R.pulados ? ` · ${R.pulados} já existiam (não repetidos)` : ''} · ${min} min`)}
+      ${li(`${R.processosNovos.length} processo(s) criados${R.semInvoice.length ? ` · sem invoice/contrato: <b>${R.semInvoice.join(', ')}</b>` : ''}`)}
+      ${li(`${R.anexados} documento(s) anexados automaticamente`)}
+      ${R.paraConferir ? li(`<b>${R.paraConferir} ficaram aqui na Entrada para você conferir</b> (abaixo)`) : ''}
+      ${R.ofx.map(o => li(`Extrato ${escHtml(o.nome)}: ${o.ok ? escHtml(o.texto.replace(/^Extrato íntegro: /, '')) : '⚠️ ' + escHtml(o.texto)}`)).join('')}
+      ${R.conc ? li(`Conciliação automática: ${R.conc.cambio} câmbio(s), ${R.conc.baixas} pagamento(s) ligados, ${R.conc.regras} tarifas/regras, ${R.conc.rendimentos} rendimento(s) · ${R.conc.pendentes} movimento(s) do banco para conferir na Conciliação`) : ''}
+    </ul>
+    ${R.pastaErrada.length ? `<div style="font-weight:700;font-size:14px;margin-top:14px">📁 Arquivos em pasta errada (${R.pastaErrada.length})</div>
+      <div style="font-size:12px;color:var(--muted2);margin-bottom:4px">Nada foi movido no seu Drive. ${R.pastaErrada.some(x => x.auto) ? '"Corrigido" = já foi anexado ao processo certo.' : ''}</div>
+      ${R.pastaErrada.map(x => `<div style="font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--border)"><b>${escHtml(x.nome)}</b><br>estava em ${escHtml(x.estava || '—')} → ${x.certo === '?' ? 'confira' : 'é do <b>' + escHtml(x.certo) + '</b>'} ${x.auto ? '<span style="color:var(--green)">· corrigido</span>' : '<span style="color:var(--yellow)">· confira abaixo</span>'}<br><span style="color:var(--muted)">${escHtml((x.motivos || []).join(', '))}</span></div>`).join('')}` : ''}
+    <div style="font-weight:700;font-size:14px;margin-top:14px">📋 O que falta em cada processo (${faltas.length})</div>
+    ${faltas.length ? faltas.map(x => `<div style="padding:8px 0;border-bottom:1px solid var(--border)"><div style="font-size:13.5px;font-weight:700;cursor:pointer;color:var(--accent)" onclick="abrirProcesso2('${escHtml(x.id)}')">${escHtml(x.id)} <span style="font-weight:400;color:var(--muted2)">${escHtml(x.cliente)}</span></div>
+      <div style="font-size:12.5px;color:var(--muted2)">${escHtml(x.faltas.map(f => f.texto).concat(x.abertos.map(a => PROCESS_COST_FIELDS[a.campo] + ' a pagar ' + 'R$ ' + fmt(a.aberto))).join(' · '))}</div></div>`).join('') : '<div style="font-size:13px;color:var(--green)">Nenhuma pendência.</div>'}`, 'var(--green)');
 }

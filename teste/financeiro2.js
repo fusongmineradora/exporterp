@@ -210,6 +210,7 @@ function contratosCambio() {
         const k = f.cambio.contratoExtrato;
         m[k] = m[k] || { contrato: k, referencia: f.cambio.referencia, taxa: f.cambio.taxa, usdTotal: f.cambio.usdTotal, reaisTotal: f.cambio.reaisTotal, data: f.cambio.data, url: f.url, faturas: [] };
         if (!m[k].faturas.some(x => x.processo === p.id)) m[k].faturas.push({ processo: p.id, usd: Number(f.cambio.usdFatura) || 0 });
+        (f.cambio.faturas || []).forEach(x => { m[k].todas = m[k].todas || []; if (x.processo && !m[k].todas.includes(x.processo)) m[k].todas.push(x.processo); });
       }
     });
   });
@@ -479,6 +480,9 @@ async function conciliarCambio(k, silencioso) {
   const gr = gruposCambio(pend).find(x => x.k === k);
   if (!gr) return;
   const ct = contratosCambio()[gr.contrato];
+  // contrato que paga faturas de processos ainda não criados: não reparte (o valor iria todo para os que existem)
+  const faltam = ct && ct.todas ? ct.todas.filter(id => !(S.processos || []).some(p => p.id === id)) : [];
+  if (faltam.length) { if (!silencioso) showToast('Crie antes o processo ' + faltam.join(', ') + ' — este câmbio também paga a fatura dele'); return false; }
   let faturas = ct ? ct.faturas.filter(f => f.usd > 0) : [];
   if (!faturas.length) {
     const sel = document.getElementById('bc-camb-' + gr.contrato);
