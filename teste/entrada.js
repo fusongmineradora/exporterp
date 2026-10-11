@@ -932,7 +932,7 @@ async function confirmarAdm(i, silencioso) {
     }
     logAction('anexar', 'DOCUMENTOS', upd.id, 'ADM: ' + upd.name + ' (Caixa de Entrada)');
     if (typeof cadastrarPeloDoc === 'function') { try { cadastrarPeloDoc(item); } catch (e) { console.warn('cadastro', e); } }
-    lancarFinanceiroDoDoc(item, null, upd);
+    if (item.pagoPor === 'socio' && typeof lancarReembolsoSocio === 'function') lancarReembolsoSocio(item, null, upd); else lancarFinanceiroDoDoc(item, null, upd);
     E.itens.splice(i, 1);
     if (!silencioso) { showToast('✅ Guardado como despesa do mês ' + mes.slice(5) + '/' + mes.slice(0, 4)); render(); }
     return true;
@@ -1048,6 +1048,9 @@ function renderEntrada() {
         <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-dat-${i}">Data</label>
           <input id="ent-dat-${i}" type="date" value="${escHtml(it.info.data || '')}" onchange="setInfoEntrada(${i},'data',this.value)"/></div>
       </div>` : ''}
+      ${it.processo && ['nfse', 'nfe', 'recibo', 'faturaFrete', 'cte', 'boleto', 'pagamento', 'outros'].includes(it.tipo) ? `
+      <div class="ig" style="margin-top:10px;margin-bottom:0"><label class="lbl" for="ent-pp-${i}">Pago com</label>
+        <select id="ent-pp-${i}" onchange="setPagoPor(${i},this.value)"><option value="empresa"${it.pagoPor !== 'socio' ? ' selected' : ''}>Conta da empresa</option><option value="socio"${it.pagoPor === 'socio' ? ' selected' : ''}>Cartão / conta pessoal do sócio (reembolsar)</option></select></div>` : ''}
       ${it.processo === '__ADM' && typeof categOpts === 'function' ? `
       <div class="ig" style="margin-top:10px;margin-bottom:0"><label class="lbl" for="ent-cat-${i}">Categoria da despesa${it.categoria ? '' : ' <span style="color:var(--yellow)">· escolha</span>'}</label>
         <select id="ent-cat-${i}" onchange="setCategoriaAdm(${i},this.value)">${categOpts(it.categoria || '')}</select></div>` : ''}
