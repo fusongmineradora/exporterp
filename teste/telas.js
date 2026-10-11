@@ -54,10 +54,11 @@ function estadoCusto(p, campo) {
   const lanc = (p.docs && p.docs['_lanc_' + campo]) || {};
   const nota = (reg.fiscais || []).length > 0 || !!lanc.nfe || !!lanc.fatura;
   const soRecibo = !nota && (reg.pagos || []).some(d => d.tipo === 'recibo');
-  const comp = (reg.pagos || []).length > 0 || !!lanc.comprovante || banco;
+  const compArquivo = (reg.pagos || []).length > 0 || !!lanc.comprovante;
+  const comp = compArquivo || banco;
   const aberto = status === 'Pago' ? 0 : Math.max(0, valor - pago);
   const fiscal = (reg.fiscais || [])[0];
-  return { valor, status, banco, nota, comp, soRecibo, aberto, empresa: (p.docs && p.docs._costEmpresa && p.docs._costEmpresa[campo]) || '', dataNota: fiscal ? fiscal.data : '' };
+  return { valor, status, banco, nota, comp, compArquivo, soRecibo, aberto, empresa: (p.docs && p.docs._costEmpresa && p.docs._costEmpresa[campo]) || '', dataNota: fiscal ? fiscal.data : '' };
 }
 
 function pendenciasProcesso(p) {
@@ -66,7 +67,9 @@ function pendenciasProcesso(p) {
   CUSTOS_OBRIGATORIOS.forEach(c => { if (f >= c.fase && !(Number(p[c.campo]) > 0)) out.push({ tipo: 'custo', texto: 'sem custo de ' + PROCESS_COST_FIELDS[c.campo].toLowerCase() + (c.campo === 'custoMaritimo' ? ' (CFR)' : '') }); });
   Object.keys(PROCESS_COST_FIELDS).forEach(c => {
     const e = estadoCusto(p, c);
-    if (e.valor > 0 && e.status === 'Pago' && !e.nota && !e.soRecibo && c !== 'custoImpostos') out.push({ tipo: 'nota', texto: PROCESS_COST_FIELDS[c] + ' pago sem nota/fatura' });
+    // marítimo e armazém: a fatura costuma chegar depois — com comprovante e saída no extrato, conta como pago e não cobra a nota
+    const faturaDepois = (c === 'custoMaritimo' || c === 'custoArmazem') && e.banco && e.compArquivo;
+    if (e.valor > 0 && e.status === 'Pago' && !e.nota && !e.soRecibo && !faturaDepois && c !== 'custoImpostos') out.push({ tipo: 'nota', texto: PROCESS_COST_FIELDS[c] + ' pago sem nota/fatura' });
     if (e.valor > 0 && e.status === 'Pago' && !e.comp) out.push({ tipo: 'comprovante', texto: PROCESS_COST_FIELDS[c] + ' sem comprovante' });
   });
   const inv = Number(p.cambioInvoice) || 0, rec = Number(p.cambioRecebido) || 0;
