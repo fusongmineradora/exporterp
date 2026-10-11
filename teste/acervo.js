@@ -949,7 +949,10 @@ setTimeout(async function esperarDados() {
     try { mudou += await devolverArquivosDoS(); } catch (e) { console.warn('arquivos S', e); }
     try { mudou += await corrigirCambioDossie(); } catch (e) { console.warn('dossiê', e); }
     mudou += corrigirFaturasDigitadas();
+    mudou += moverPagamentosMarcados();
+    mudou += lancamentosDeCustoViramBaixa();
     { const t = transferirCambiosPeloNome(); if (t) { mudou += t; try { if (typeof salvarBanco === 'function') await salvarBanco(); } catch (e) {} } }
+    mudou += ajustarInvoiceTransferida();
     // processo renumerado (FS260105 → FS260107) e custos previstos
     mudou += juntarProcessosRenumerados();
     (S.processos || []).forEach(p => { mudou += aplicarPrevistos(p); });
@@ -1556,5 +1559,76 @@ function transferirCambiosPeloNome() {
     logAction('editar', 'PROCESSOS', tr.para, `Câmbio ${c.referencia} (USD ${c.usdTotal}) recebido do ${tr.de}: adiantamento transferido`);
     n++;
   }));
+  return n;
+}
+
+// Invoice do processo que recebeu câmbio transferido: invoice própria + adiantamento recebido (ex.: FS260107 = 5.400 + 102.545)
+function ajustarInvoiceTransferida() {
+  let n = 0;
+  (S.processos || []).forEach(p => {
+    const rec = (p.docs && p.docs._cambioRecebidoDe) || {}; if (!Object.keys(rec).length) return;
+    if (p.docs._invoiceBase == null) p.docs._invoiceBase = Number(p.cambioInvoice) || 0;
+    const extra = Object.keys(rec).reduce((a, ref) => { const c = (p.docs._cambioDocs || {})[ref]; return a + (c ? Number(c.usd) || 0 : 0); }, 0);
+    const novo = Math.round((p.docs._invoiceBase + extra) * 100) / 100;
+    if (Number(p.cambioInvoice) !== novo) { p.cambioInvoice = novo; n++; }
+  });
+  return n;
+}
+
+// Pagamentos que estavam no processo errado (o PIX citava outro número): idTransacao → processo certo
+const PAGAMENTOS_OUTRO_PROCESSO = {
+  E60701190202608181157DY5P7WRLALA: 'FS260108',   // Omar R$ 1.200 (NF Compra 40) — identificação dizia FS260107
+  E60701190202608171253DY51LIZ5XD7: 'FS260108',   // Italiana R$ 11.500 de 17/08 — estava no FS260107
+};
+function processoDoPagamento(idTransacao) { return PAGAMENTOS_OUTRO_PROCESSO[String(idTransacao || '').trim()] || ''; }
+function moverPagamentosMarcados() {
+  let n = 0;
+  (S.processos || []).forEach(de => Object.entries(((de.docs || {})._files) || {}).forEach(([tipo, arr]) => (arr || []).slice().forEach(f => {
+    const para = S.processos.find(x => x.id === processoDoPagamento(f.pagamento && f.pagamento.idTransacao));
+    if (!para || para === de) return;
+    de.docs._files[tipo] = de.docs._files[tipo].filter(x => x !== f);
+    if (!de.docs._files[tipo].length) { delete de.docs._files[tipo]; delete de.docs[tipo]; } else if (de.docs[tipo] === f.url) de.docs[tipo] = de.docs._files[tipo][0].url;
+    para.docs = para.docs || {}; para.docs._files = para.docs._files || {};
+    (para.docs._files[tipo] = para.docs._files[tipo] || []).push(Object.assign({}, f, { movidoDe: de.id, pastaOriginal: undefined }));
+    if (!para.docs[tipo]) para.docs[tipo] = f.url;
+    Object.entries(de.docs._custoDocs || {}).forEach(([campo, reg]) => {
+      const fora = (reg.pagos || []).filter(d => d.url === f.url); if (!fora.length) return;
+      reg.pagos = reg.pagos.filter(d => d.url !== f.url);
+      ['_costComp'].forEach(k => { if (de.docs[k] && de.docs[k][campo] === f.url) delete de.docs[k][campo]; });
+      const lanc = de.docs['_lanc_' + campo]; if (lanc && lanc.comprovante === f.url) delete lanc.comprovante;
+      if (!(reg.fiscais || []).length && !(reg.pagos || []).length) { delete de.docs._custoDocs[campo]; de[campo] = ''; de[campo + '_status'] = ''; } else recalcularCustos(de, campo);
+      para.docs._custoDocs = para.docs._custoDocs || {};
+      const rP = para.docs._custoDocs[campo] = para.docs._custoDocs[campo] || { fiscais: [], pagos: [] };
+      rP.pagos = (rP.pagos || []).concat(fora); recalcularCustos(para, campo);
+    });
+    // lançamento do extrato com o mesmo valor e data
+    const v = Number(f.valor) || 0, d = f.data ? isoToBr(f.data) : '';
+    (S.lancamentos || []).forEach(l => { if (l.vinculoId === de.id && l.tipo === 'Despesa' && Math.abs((Number(l.valor) || 0) - v) < 0.01 && (!d || l.data === d)) {
+      l.vinculoId = para.id; ((S.banco && S.banco.linhas) || []).forEach(b => { if (b.lancId === l.id && b.centro) b.centro = String(b.centro).split('P:' + de.id).join('P:' + para.id); }); } });
+    logAction('editar', 'PROCESSOS', para.id, `${f.name}: pagamento de R$ ${v} movido do ${de.id} para o ${para.id}`);
+    n++;
+  })));
+  return n;
+}
+
+// Pagamento do extrato lançado à parte num custo que já tem nota/fatura (ou o mesmo comprovante) no processo:
+// vira baixa desse custo (senão o lançamento substitui o custo da nota — ex.: PIX de R$ 1.200 no lugar da NF de R$ 3.240).
+function lancamentosDeCustoViramBaixa() {
+  let n = 0;
+  const ficar = [];
+  (S.lancamentos || []).forEach(l => {
+    const campo = l.tipo === 'Despesa' && l.vinculo === 'processo' && l.status === 'Pago' && l.docs && l.docs._banco && typeof l.docs._banco === 'string' ? CAMPO_POR_CATEG[l.categoria] : '';
+    const p = campo && (S.processos || []).find(x => x.id === l.vinculoId);
+    const reg = p && p.docs && p.docs._custoDocs && p.docs._custoDocs[campo];
+    const v = Number(l.valor) || 0, dIso = brToIso(l.data || '');
+    const igual = reg && (reg.pagos || []).find(d => d.tipo !== 'banco' && Math.abs((Number(d.valor) || 0) - v) < 0.01 && (!d.data || !dIso || Math.abs((new Date(brToIso(d.data) || d.data) - new Date(dIso)) / 864e5) <= 3));
+    if (!reg || (!(reg.fiscais || []).length && !igual)) { ficar.push(l); return; }
+    if (!igual && !(reg.pagos || []).some(d => d.k === 'banco:' + l.docs._banco)) reg.pagos = (reg.pagos || []).concat([{ k: 'banco:' + l.docs._banco, tipo: 'banco', valor: v, data: l.data || '', nome: 'extrato: ' + (l.empresa || ''), de: l.empresa || '' }]);
+    p.docs._costBanco = p.docs._costBanco || {}; if (!p.docs._costBanco[campo]) p.docs._costBanco[campo] = l.docs._banco;
+    ((S.banco && S.banco.linhas) || []).forEach(b => { if (b.lancId === l.id) b.lancId = 'custo:' + p.id + '/' + campo; });
+    recalcularCustos(p, campo);
+    n++;
+  });
+  if (n) S.lancamentos = ficar;
   return n;
 }
