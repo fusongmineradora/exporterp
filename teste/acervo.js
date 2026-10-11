@@ -959,6 +959,7 @@ setTimeout(async function esperarDados() {
     try { mudou += await corrigirPartesPeloNome(); } catch (e) { console.warn('partes', e); }
     // (a planilha de custos do Ademir é só para conferência: não é aplicada no ERP)
     try { mudou += await despesasForaDosProcessos(); } catch (e) { console.warn('fora dos processos', e); }
+    try { mudou += ajustesDaConferencia(); } catch (e) { console.warn('ajustes', e); }
     try { mudou += await corrigirCambioDossie(); } catch (e) { console.warn('dossiê', e); }
     mudou += corrigirFaturasDigitadas();
     mudou += moverPagamentosMarcados();
@@ -1670,7 +1671,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '50';
+const VERSAO_TESTE = '51';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -1818,3 +1819,42 @@ async function despesasForaDosProcessos() {
   if (n) { try { if (typeof salvarBanco === 'function') await salvarBanco(); } catch (e) {} }
   return n;
 }
+
+// Respostas do Klismann à conferência com a planilha (11/10/2026) — aplicadas uma vez
+function ajustesDaConferencia() {
+  let n = 0;
+  const P = id => (S.processos || []).find(x => x.id === id);
+  const feito = (p, k) => { p.docs = p.docs || {}; p.docs._ajustes = p.docs._ajustes || {}; if (p.docs._ajustes[k]) return true; p.docs._ajustes[k] = true; n++; return false; };
+  // 2. FS260112: PIX de R$ 720,90 para a Cooperativa Mineral da Bahia = imposto COOP (não é produto)
+  const p12 = P('FS260112');
+  if (p12 && !feito(p12, 'impostoCoop')) {
+    const l = (S.lancamentos || []).find(x => x.vinculoId === 'FS260112' && /COOPERATIVA MINERAL/i.test(x.empresa || '') && Math.abs((Number(x.valor) || 0) - 720.9) < 0.01);
+    if (l) { l.categoria = 'Impostos'; l.descricao = 'Imposto COOP — ' + (l.empresa || ''); }
+    const reg = (p12.docs._custoDocs || {}).custoProduto;
+    const b = reg && (reg.pagos || []).find(d => d.tipo === 'banco' && Math.abs((Number(d.valor) || 0) - 720.9) < 0.01);
+    if (b) {
+      reg.pagos = reg.pagos.filter(d => d !== b); recalcularCustos(p12, 'custoProduto');
+      p12.docs._custoDocs.custoImpostos = { fiscais: [], pagos: [Object.assign({}, b, { nome: 'Imposto COOP (extrato)' })] };
+      p12.docs._costBanco = Object.assign({}, p12.docs._costBanco, { custoImpostos: b.k.replace(/^banco:/, '') });
+      recalcularCustos(p12, 'custoImpostos');
+    }
+    logAction('editar', 'PROCESSOS', 'FS260112', 'R$ 720,90 Cooperativa Mineral da Bahia: imposto COOP (não é produto)');
+  }
+  // 3. FS260104: assessoria R$ 1.200 por processo, paga (o comprovante dos outros R$ 600 não é necessário)
+  const p4 = P('FS260104');
+  if (p4 && !feito(p4, 'assessoria1200')) {
+    p4.docs._valorManual = Object.assign({}, p4.docs._valorManual, { custoServTerceiros: 1200 });
+    p4.docs._statusManual = Object.assign({}, p4.docs._statusManual, { custoServTerceiros: 'Pago' });
+    if (p4.docs._custoDocs && p4.docs._custoDocs.custoServTerceiros) recalcularCustos(p4, 'custoServTerceiros'); else { p4.custoServTerceiros = 1200; p4.custoServTerceiros_status = 'Pago'; }
+    logAction('editar', 'PROCESSOS', 'FS260104', 'Assessoria: R$ 1.200 pago (R$ 1.200 por processo)');
+  }
+  // 6. FS260107 e FS260118 não foram para o armazém
+  ['FS260107', 'FS260118'].forEach(id => { const p = P(id); if (!p || feito(p, 'semArmazem')) return;
+    p.docs._armazem = false; p.docs._previstoOff = Object.assign({}, p.docs._previstoOff, { custoArmazem: true });
+    if (p.docs._previsto && p.docs._previsto.custoArmazem) { delete p.docs._previsto.custoArmazem; if (!(p.docs._custoDocs || {}).custoArmazem) { p.custoArmazem = ''; p.custoArmazem_status = ''; } }
+    logAction('editar', 'PROCESSOS', id, 'Não foi para o armazém: sem custo de armazém');
+  });
+  return n;
+}
+// 7. decisões sobre arquivos da Caixa de Entrada (nome do arquivo → processo)
+const DECISOES_ENTRADA = [[/Recibo\s+Minera[cç][aã]o\s+WL/i, 'FS260096']];
