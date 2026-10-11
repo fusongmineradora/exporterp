@@ -464,3 +464,30 @@ function listaArquivos(p) {
       <span style="font-size:11.5px;color:var(--muted2)">${[f.emitente, f.valor ? brl(f.valor) : '', f.data ? (String(f.data).includes('-') ? isoToBr(f.data) : f.data) : '', f.atalho ? 'atalho (arquivo em outro processo)' : ''].filter(Boolean).map(escHtml).join(' · ')}</span></span>
       <span style="color:var(--accent);white-space:nowrap;font-size:13px">Abrir ↗</span></a>`).join('')}</div>`).join('')}</div>`;
 }
+
+// O Dashboard antigo saiu: o Início é a tela principal (o botão flutuante e o logo levam ao Início)
+(function () {
+  const st = document.createElement('style'); st.textContent = '#dash-fab{display:none!important}'; document.head.appendChild(st);
+  const navBase = nav;
+  nav = function (page, sub) { return navBase(page === 'dashboard' ? 'inicio' : page, sub); };
+  if (S.page === 'dashboard') S.page = 'inicio';
+})();
+
+// Editar dados do processo (formulário antigo): custo ou status mudado à mão passa a valer sobre os documentos
+document.addEventListener('click', ev => {
+  const b = ev.target && ev.target.closest && ev.target.closest('#btn-save-proc'); if (!b || !S.sub) return;
+  const p = S.sub, antes = {};
+  Object.keys(PROCESS_COST_FIELDS).forEach(c => { antes[c] = [Number(p[c]) || 0, p[c + '_status'] || ''] });
+  setTimeout(() => {
+    const q = (S.processos || []).find(x => x.id === p.id); if (!q) return;
+    let mud = false; q.docs = q.docs || {};
+    Object.keys(PROCESS_COST_FIELDS).forEach(c => {
+      const v = Number(q[c]) || 0, st = q[c + '_status'] || '';
+      if (Math.abs(v - antes[c][0]) > 0.009) { q.docs._valorManual = Object.assign({}, q.docs._valorManual, { [c]: v }); if (q.docs._previsto && q.docs._previsto[c]) q.docs._previsto[c] = { valor: v, regra: 'alterado por você', editado: true }; mud = true; }
+      if (st === 'Em Aberto' && !antes[c][1]) { q[c + '_status'] = ''; return; }
+      if (st !== antes[c][1] && st) { q.docs._statusManual = Object.assign({}, q.docs._statusManual, { [c]: st }); mud = true; }
+    });
+    if (q.cambioTaxa) { const t = Math.round(Number(q.cambioTaxa) * 10000) / 10000; if (t !== q.cambioTaxa) { q.cambioTaxa = t; mud = true; } }
+    if (mud && typeof scheduleAutoSave === 'function') scheduleAutoSave();
+  }, 0);
+}, true);
