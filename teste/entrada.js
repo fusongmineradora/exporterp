@@ -100,6 +100,7 @@ saveToSheets = async function () {
     }
   }
   // antes de gravar: junta processo renumerado e atualiza os custos previstos (containers, certificado, armazém, valor real)
+  try { if (typeof lancamentosDeCustoViramBaixa === 'function' && lancamentosDeCustoViramBaixa() && typeof salvarBanco === 'function') salvarBanco().catch(() => {}); if (typeof ajustarInvoiceTransferida === 'function') ajustarInvoiceTransferida(); } catch (e) { console.warn('baixas', e); }
   try { if (typeof juntarProcessosRenumerados === 'function') juntarProcessosRenumerados(); if (typeof aplicarPrevistos === 'function') (S.processos || []).forEach(p => aplicarPrevistos(p)); } catch (e) { console.warn('previstos', e); }
   const r = await _saveToSheetsBase.apply(this, arguments);
   await _gravarMarca();
@@ -744,6 +745,8 @@ function identificarItem(item) {
     else if (ehCusto) { item.confianca = 'media'; item.aviso = `Confira: este arquivo de custo estava nas pastas ${item.pastaProcessos.join(' e ')}. Escolha o processo (para o custo não entrar duas vezes).`; }
     else item.processosExtras = item.pastaProcessos.filter(id => id !== item.processo);
   }
+  { const certo = typeof processoDoPagamento === 'function' ? processoDoPagamento(item.info.pagamento && item.info.pagamento.idTransacao) : '';
+    if (certo && (S.processos || []).some(p => p.id === certo)) { item.processo = certo; delete item.pastaErrada; delete item.corrigido; item.processosExtras = []; } }
   // Comprovante de pagamento sem nenhuma pista de processo → sugere "despesa do mês" (confira)
   if (!item.processo && item.tipo === 'pagamento' && !(item.candidatos || []).length) {
     item.processo = '__ADM'; item.admAuto = true; if (item.confianca === 'alta') item.confianca = 'media';
