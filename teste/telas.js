@@ -46,6 +46,8 @@ const CHECKLIST = [
 const OPCIONAIS = [['certOrigem', 'Certificado de origem'], ['pesagem', 'Pesagem / laudo'], ['packingList', 'Packing list'], ['fotos', 'Fotos']];
 const CUSTOS_OBRIGATORIOS = [{ fase: 0, campo: 'custoProduto' }, { fase: 0, campo: 'custoFrete' }, { fase: 2, campo: 'custoDespachante' }, { fase: 3, campo: 'custoMaritimo' }];
 
+// marítimo, armazém e serviços de terceiros: basta o comprovante do PIX + a saída no extrato (a fatura é opcional)
+const CUSTO_SO_COMPROVANTE = ['custoMaritimo', 'custoArmazem', 'custoServTerceiros'];
 function estadoCusto(p, campo) {
   const reg = (p.docs && p.docs._custoDocs && p.docs._custoDocs[campo]) || { fiscais: [], pagos: [] };
   const valor = Number(p[campo]) || 0;
@@ -71,7 +73,7 @@ function pendenciasProcesso(p) {
   Object.keys(PROCESS_COST_FIELDS).forEach(c => {
     const e = estadoCusto(p, c);
     // marítimo e armazém: a fatura costuma chegar depois — com comprovante e saída no extrato, conta como pago e não cobra a nota
-    const faturaDepois = (c === 'custoMaritimo' || c === 'custoArmazem') && e.banco && e.compArquivo;
+    const faturaDepois = CUSTO_SO_COMPROVANTE.includes(c) && e.banco && e.compArquivo;
     if (e.valor > 0 && e.status === 'Pago' && !e.nota && !e.soRecibo && !faturaDepois && c !== 'custoImpostos') out.push({ tipo: 'nota', texto: PROCESS_COST_FIELDS[c] + ' pago sem nota/fatura' });
     if (e.valor > 0 && e.status === 'Pago' && !e.comp) out.push({ tipo: 'comprovante', texto: PROCESS_COST_FIELDS[c] + ' sem comprovante' });
   });
@@ -220,7 +222,7 @@ function renderProcesso2() {
   const docsOk = CHECKLIST.filter(x => temDoc(p, ...x.tipos)).length;
   const linhasCusto = Object.keys(PROCESS_COST_FIELDS).map(k => ({ k, e: estadoCusto(p, k) })).filter(x => x.e.valor > 0);
   const faltaCusto = CUSTOS_OBRIGATORIOS.filter(x => f >= x.fase && !(Number(p[x.campo]) > 0));
-  const manuais = (S.lancamentos || []).filter(l => l.vinculo === 'processo' && l.vinculoId === p.id && l.tipo === 'Despesa' && l.status !== 'Cancelado');
+  const manuais = (S.lancamentos || []).filter(l => l.vinculo === 'processo' && l.vinculoId === p.id && l.tipo === 'Despesa' && l.status !== 'Cancelado' && l.categoria !== 'Tarifa de câmbio');
   const cambios = (S.lancamentos || []).filter(l => l.vinculo === 'processo' && l.vinculoId === p.id && l.categoria === 'Câmbio');
   const cambDocs = Object.values((p.docs && p.docs._cambioDocs) || {});
   const nfSaida = arquivos(p, 'nfeSaida').reduce((m, x) => Math.max(m, Number(x.valor) || 0), 0);
@@ -264,7 +266,8 @@ function renderProcesso2() {
       ${linhasCusto.map(({ k, e }) => `<div style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px solid var(--border)">
         <div style="display:flex;flex-direction:column;gap:3px;min-width:0"><b style="font-size:14px">${escHtml(PROCESS_COST_FIELDS[k])}</b><span style="font-size:12.5px;color:var(--muted2)">${escHtml(e.empresa || '—')}</span>
           ${e.previsto ? `<span style="font-size:12px;color:var(--yellow)">previsto · ${escHtml(e.previsto.regra || '')}</span>
-          <span style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" onclick="alterarPrevisto('${escHtml(p.id)}','${k}')">Alterar valor</button>${k === 'custoArmazem' ? `<button class="btn btn-secondary btn-xs" onclick="setArmazemPrevisto('${escHtml(p.id)}',false)">Não vai para o armazém</button>` : ''}</span>` : `<span style="font-size:12px">${e.soRecibo ? '<span style="color:var(--yellow)">recibo sem nota (não dedutível)</span>' : sel(e.nota, k === 'custoMaritimo' ? 'fatura' : 'nota')} · ${sel(e.comp, 'comprovante')}${e.banco ? ' · <span style="color:var(--green)">banco ✓</span>' : ''}</span>`}</div>
+          <span style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" onclick="alterarPrevisto('${escHtml(p.id)}','${k}')">Alterar valor</button>${k === 'custoArmazem' ? `<button class="btn btn-secondary btn-xs" onclick="setArmazemPrevisto('${escHtml(p.id)}',false)">Não vai para o armazém</button>` : ''}</span>` : `<span style="font-size:12px">${e.soRecibo ? '<span style="color:var(--yellow)">recibo sem nota (não dedutível)</span>' : CUSTO_SO_COMPROVANTE.includes(k) && !e.nota ? '<span style="color:var(--muted2)">' + (k === 'custoMaritimo' ? 'fatura' : 'nota') + ' opcional</span>' : sel(e.nota, k === 'custoMaritimo' ? 'fatura' : 'nota')} · ${sel(e.comp, 'comprovante')}${e.banco ? ' · <span style="color:var(--green)">banco ✓</span>' : ''}${p.docs && p.docs._valorManual && p.docs._valorManual[k] != null ? ' · <span style="color:var(--yellow)">valor alterado por você</span>' : ''}</span>
+          <span><button class="btn btn-secondary btn-xs" onclick="alterarValorCusto('${escHtml(p.id)}','${k}')">Alterar valor</button></span>`}</div>
         <div style="text-align:right;display:flex;flex-direction:column;gap:3px"><span style="font-family:'JetBrains Mono',monospace;font-size:13.5px">${m2(e.valor)}</span><span style="font-size:12px;font-weight:600;color:${e.status === 'Pago' ? 'var(--green)' : 'var(--yellow)'}">${e.previsto ? 'Previsto' : e.status === 'Pago' ? 'Pago' : e.aberto < e.valor ? 'falta ' + m2(e.aberto) : 'Em aberto'}</span></div>
       </div>`).join('')}
       ${manuais.map(l => `<div style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px solid var(--border)"><div style="display:flex;flex-direction:column;gap:3px;min-width:0"><b style="font-size:14px">${escHtml(l.categoria || 'Outro custo')}</b><span style="font-size:12.5px;color:var(--muted2)">${escHtml(l.empresa || l.descricao || '')} · ${escHtml(l.data || '')}</span><span style="font-size:12px">${l.docs && l.docs._banco ? '<span style="color:var(--green)">banco ✓</span>' : ''}${l.docs && l.docs.comprovante ? ' <span style="color:var(--green)">comprovante ✓</span>' : ''}</span></div><div style="text-align:right;display:flex;flex-direction:column;gap:3px"><span style="font-family:'JetBrains Mono',monospace;font-size:13.5px">${m2(l.valor)}</span><span style="font-size:12px;font-weight:600;color:${l.status === 'Pago' ? 'var(--green)' : 'var(--yellow)'}">${escHtml(l.status)}</span></div></div>`).join('')}

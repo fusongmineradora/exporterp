@@ -381,13 +381,15 @@ function recalcularCustos(p, campo) {
   const quitaTudo = recibo > 0 && (!fiscal || recibo + 0.01 >= fiscal * 0.98);
   const pago = !recibo ? pix : quitaTudo ? Math.max(pix, recibo) : pix + reciboSoma;
   const total = fiscal || pago;
-  p[campo] = Math.round(total * 100) / 100;
+  const manual = p.docs._valorManual && p.docs._valorManual[campo] != null ? Number(p.docs._valorManual[campo]) : null;
+  p[campo] = Math.round((manual != null ? manual : total) * 100) / 100;
   const peloBanco = p.docs._costBanco && p.docs._costBanco[campo];
   // adiantamento ao fornecedor sem a nota ainda: fica "Em Aberto" até chegar a nota (e o saldo, se houver)
   const adiant = (reg.pagos || []).filter(d => d.adiant).reduce((a, d) => a + (Number(d.valor) || 0), 0);
   p.docs._costAdiant = p.docs._costAdiant || {};
   if (adiant > 0 && !fiscal) p.docs._costAdiant[campo] = Math.round(adiant * 100) / 100; else delete p.docs._costAdiant[campo];
-  p[campo + '_status'] = adiant > 0 && !fiscal ? 'Em Aberto' : peloBanco || (pago > 0 && pago + 0.01 >= total) ? 'Pago' : 'Em Aberto';
+  const alvo = manual != null ? manual : total;
+  p[campo + '_status'] = adiant > 0 && !fiscal && manual == null ? 'Em Aberto' : (peloBanco && manual == null) || (pago > 0 && pago + 0.01 >= alvo) ? 'Pago' : 'Em Aberto';
   const datas = (reg.pagos || []).map(d => d.data).filter(Boolean).sort();
   if (datas.length) { p.docs._costData = p.docs._costData || {}; p.docs._costData[campo] = datas[datas.length - 1]; }
   const comp = (reg.pagos || []).find(d => d.url);
@@ -953,6 +955,7 @@ setTimeout(async function esperarDados() {
     mudou += corrigirFaturasDigitadas();
     mudou += moverPagamentosMarcados();
     mudou += notasDuplicadasEmCustos();
+    { const t = tarifasCambioForaDosProcessos(); if (t) { mudou += t; try { if (typeof salvarBanco === 'function') await salvarBanco(); } catch (e) {} } }
     mudou += lancamentosDeCustoViramBaixa();
     { const t = transferirCambiosPeloNome(); if (t) { mudou += t; try { if (typeof salvarBanco === 'function') await salvarBanco(); } catch (e) {} } }
     mudou += ajustarInvoiceTransferida();
@@ -1659,5 +1662,38 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '45';
+const VERSAO_TESTE = '46';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
+
+// Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
+function tarifasCambioForaDosProcessos() {
+  const tar = (S.lancamentos || []).filter(l => l.categoria === 'Tarifa de câmbio' && l.vinculo === 'processo');
+  if (!tar.length) return 0;
+  const porContrato = {};
+  tar.forEach(l => { const m = String(l.descricao || '').match(/c[âa]mbio\s+(\d{6,})/i); const k = m ? m[1] : l.id; (porContrato[k] = porContrato[k] || []).push(l); });
+  const novos = Object.entries(porContrato).map(([k, ls]) => ({
+    id: ls[0].id, tipo: 'Despesa', status: 'Pago', descricao: `Tarifa de câmbio ${k} (${ls.map(l => l.vinculoId).join(' + ')})`,
+    valor: Math.round(ls.reduce((a, l) => a + (Number(l.valor) || 0), 0) * 100) / 100, data: ls[0].data, empresa: 'ITAU UNIBANCO', categoria: 'Tarifa de câmbio',
+    vinculo: 'avulso', vinculoId: 'ADM', observacao: ls[0].observacao, docs: { _banco: (ls[0].docs || {})._banco, _cambio: { contrato: k, processos: ls.map(l => l.vinculoId) } },
+  }));
+  S.lancamentos = S.lancamentos.filter(l => !tar.includes(l)).concat(novos);
+  ((S.banco && S.banco.linhas) || []).forEach(b => { if (b.categoria === 'Tarifa de câmbio') b.centro = 'ADM'; });
+  return tar.length;
+}
+
+// Valor do custo alterado por você (vale sobre a nota/comprovantes até você limpar)
+async function alterarValorCusto(id, campo) {
+  const p = (S.processos || []).find(x => x.id === id); if (!p) return;
+  if (p.docs && p.docs._previsto && p.docs._previsto[campo]) return alterarPrevisto(id, campo);
+  const atual = Number(p[campo]) || 0, manual = p.docs && p.docs._valorManual && p.docs._valorManual[campo] != null;
+  const v = await uiPrompt(`Valor de ${PROCESS_COST_FIELDS[campo]} no ${id} (R$).` + (manual ? ' Deixe em branco para voltar ao valor dos documentos.' : ''), fmtBR2(atual), 'Alterar valor');
+  if (v == null) return;
+  p.docs = p.docs || {}; p.docs._valorManual = p.docs._valorManual || {};
+  if (!String(v).trim()) delete p.docs._valorManual[campo];
+  else p.docs._valorManual[campo] = numBR(String(v).replace(/[^\d.,]/g, '')) || 0;
+  if (p.docs._custoDocs && p.docs._custoDocs[campo]) recalcularCustos(p, campo);
+  else if (p.docs._valorManual[campo] != null) { p[campo] = p.docs._valorManual[campo]; p[campo + '_status'] = p[campo + '_status'] || 'Em Aberto'; }
+  logAction('editar', 'PROCESSOS', id, `${PROCESS_COST_FIELDS[campo]}: valor ${p.docs._valorManual[campo] != null ? 'alterado para R$ ' + p.docs._valorManual[campo] : 'volta aos documentos'}`);
+  try { await saveToSheets(); showToast('✅ Valor salvo'); } catch (e) { showToast('⚠️ ' + e.message); }
+  render();
+}
