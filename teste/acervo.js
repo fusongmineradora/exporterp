@@ -631,6 +631,7 @@ async function executarImportacaoTudo() {
     (await driveListAll(`'${entradaId}' in parents and trashed=false`, 'md5Checksum')).forEach(f => f.md5Checksum && ja.add(f.md5Checksum));
     (S.processos || []).forEach(p => Object.values(((p.docs || {})._files) || {}).forEach(arr => (arr || []).forEach(f => f.md5 && ja.add(f.md5))));
     ((S.banco && S.banco.docs) || []).forEach(d => d.md5 && ja.add(d.md5));
+    try { const pc = await getTesteFolder('🏦 Câmbio'); (await driveListAll(`'${pc}' in parents and trashed=false`, 'md5Checksum')).forEach(f => f.md5Checksum && ja.add(f.md5Checksum)); } catch (e) {}
     const porMd5 = {};
     arquivos.forEach(f => { if (f.md5Checksum) (porMd5[f.md5Checksum] = porMd5[f.md5Checksum] || new Set()).add(f.contexto); });
     const copiadoMd5 = new Set();
@@ -833,10 +834,12 @@ function cadastrosPelosArquivos() {
   });
   return (S.fornecedores || []).length + (S.clientes || []).length - antes;
 }
-setTimeout(function esperarDados() {
+setTimeout(async function esperarDados() {
   if (!S.processos || !S.processos.length || typeof saveToSheets !== 'function') { if (!window._cadastrosTentativas || window._cadastrosTentativas++ < 40) { window._cadastrosTentativas = window._cadastrosTentativas || 1; setTimeout(esperarDados, 3000); } return; }
   try {
     let mudou = 0;
+    // planilha do banco (contrato → processo) manda sobre a pasta
+    try { if (typeof carregarBanco === 'function' && !(S.banco && S.banco.carregado)) await carregarBanco(); mudou += aplicarMapaCambio(mapaCambioGuardado()); } catch (e) { console.warn('mapa câmbio', e); }
     // contratos de câmbio antigos (sem "FATURA: FS…") anexados com USD 0: divide o contrato entre os processos onde ele está
     const semFatura = {};
     (S.processos || []).forEach(p => ((((p.docs || {})._files || {}).comprovantes) || []).forEach(f => {
@@ -909,4 +912,114 @@ async function setCategoriaAdm(i, v) {
     try { if (typeof ensureTabs2 === 'function') await ensureTabs2(); await gravarAba2('REGRAS', S.banco.regras); } catch (e) { console.warn('regra categoria', e); }
   }
   render();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Planilha de câmbio enviada ao banco (Nº Bacen → Nº processo) = a verdade sobre qual contrato paga qual processo.
+// Lida da Caixa de Entrada (xlsx/csv); guarda em REGRAS (tipo 'cambioProc') e corrige os processos.
+// ═══════════════════════════════════════════════════════════════
+async function planilhaParaCsv(fileId, nome) {
+  const pasta = await getTesteFolder('🧪 OCR temporário');
+  const cp = await driveAPI('POST', '/files/' + fileId + '/copy', { name: 'planilha - ' + (nome || fileId), mimeType: 'application/vnd.google-apps.spreadsheet', parents: [pasta] }, 'fields=id');
+  try {
+    const token = await getAccessToken();
+    const r = await fetch(DRIVE_API + '/files/' + cp.id + '/export?mimeType=text/csv', { headers: { Authorization: 'Bearer ' + token } });
+    if (!r.ok) throw new Error('planilha ' + r.status);
+    return await r.text();
+  } finally {
+    try { await fetch(DRIVE_API + '/files/' + cp.id, { method: 'DELETE', headers: { Authorization: 'Bearer ' + (await getAccessToken()) } }); } catch (e) {}
+  }
+}
+function linhasCsv(txt) {
+  const out = []; let row = [], cel = '', q = false;
+  for (let i = 0; i < txt.length; i++) {
+    const ch = txt[i];
+    if (q) { if (ch === '"' && txt[i + 1] === '"') { cel += '"'; i++; } else if (ch === '"') q = false; else cel += ch; }
+    else if (ch === '"') q = true; else if (ch === ',') { row.push(cel); cel = ''; } else if (ch === '\n' || ch === '\r') { if (ch === '\r' && txt[i + 1] === '\n') i++; row.push(cel); out.push(row); row = []; cel = ''; } else cel += ch;
+  }
+  if (cel || row.length) { row.push(cel); out.push(row); }
+  return out;
+}
+function lerPlanilhaCambio(csv) {
+  const L = linhasCsv(String(csv || ''));
+  const h = L.findIndex(r => r.some(c => /N[UÚ]MERO\s+BACEN/i.test(c)) && r.some(c => /N[ºo°]?\s*PROCESSO/i.test(c)));
+  if (h < 0) return null;
+  const cab = L[h].map(c => semAcento(c));
+  const col = re => cab.findIndex(c => re.test(c));
+  const cRef = col(/NUMERO BACEN/), cProc = col(/PROCESSO/), cVal = col(/VALOR DO CONTRATO/);
+  const mapa = [];
+  L.slice(h + 1).forEach(r => {
+    const ref = String(r[cRef] || '').replace(/\D/g, ''); const procs = (String(r[cProc] || '').toUpperCase().match(/FS\s?\d{6}S?/g) || []).map(x => x.replace(/\s/g, ''));
+    if (ref.length >= 6 && procs.length) mapa.push({ ref, processos: procs, usd: Number(String(r[cVal] || '').replace(/,/g, '')) || 0 });
+  });
+  return mapa.length ? mapa : null;
+}
+// recalcula o câmbio do processo a partir de _cambioDocs (depois de tirar um contrato)
+function recalcularCambio(p) {
+  const cs = Object.values((p.docs && p.docs._cambioDocs) || {});
+  if (!cs.length) { p.cambioRecebido = ''; p.cambioReais = ''; p.cambioTaxa = ''; p.cambioFechamento = ''; p.cambioRecebimento = ''; p.cambioStatus = 'Em Aberto'; return; }
+  const usd = cs.reduce((a, x) => a + x.usd, 0), reais = cs.reduce((a, x) => a + x.reais, 0);
+  p.cambioRecebido = Math.round(usd * 100) / 100; p.cambioReais = Math.round(reais * 100) / 100; p.cambioTaxa = usd ? reais / usd : 0;
+}
+// aplica o mapa contrato → processos: move o contrato para o processo certo e acerta lançamentos e extrato
+function aplicarMapaCambio(mapa) {
+  let n = 0;
+  (mapa || []).forEach(({ ref, processos }) => {
+    const alvo = processos.filter(id => (S.processos || []).some(p => p.id === id));
+    if (!alvo.length) return;
+    // onde o contrato está anexado hoje
+    let modelo = null;
+    (S.processos || []).forEach(p => {
+      const arr = (((p.docs || {})._files || {}).comprovantes) || [];
+      arr.filter(f => f.cambio && f.cambio.referencia === ref).forEach(f => { if (!modelo || !f.atalho) modelo = f; });
+    });
+    if (!modelo) return;
+    const c = modelo.cambio;
+    const jaCerto = (c.faturas || []).length === alvo.length && alvo.every(id => (c.faturas || []).some(x => x.processo === id && x.usd > 0)) && !c.faturas.some(x => !alvo.includes(x.processo));
+    if (jaCerto) return;
+    const usd = Math.round((Number(c.usdTotal) || 0) / alvo.length * 100) / 100;
+    const faturas = alvo.map(id => ({ processo: id, usd, pelaPlanilha: true }));
+    // tira dos processos errados
+    (S.processos || []).forEach(p => {
+      const arr = (((p.docs || {})._files || {}).comprovantes) || [];
+      const tem = arr.some(f => f.cambio && f.cambio.referencia === ref);
+      if (!tem) return;
+      if (!alvo.includes(p.id)) {
+        p.docs._files.comprovantes = arr.filter(f => !(f.cambio && f.cambio.referencia === ref));
+        if (!p.docs._files.comprovantes.length) delete p.docs.comprovantes;
+        if (p.docs._cambioDocs) { delete p.docs._cambioDocs[ref]; Object.keys(p.docs._cambioDocs).forEach(k => { if (p.docs._cambioDocs[k] && p.docs._cambioDocs[k].url === modelo.url && k !== ref) delete p.docs._cambioDocs[k]; }); }
+        recalcularCambio(p);
+        logAction('editar', 'PROCESSOS', p.id, 'Câmbio ' + ref + ' retirado (planilha do banco: ' + alvo.join(' + ') + ')');
+      }
+    });
+    // coloca nos certos
+    alvo.forEach((id, i) => {
+      const p = S.processos.find(x => x.id === id);
+      p.docs = p.docs || {}; p.docs._files = p.docs._files || {}; p.docs._files.comprovantes = (p.docs._files.comprovantes || []).filter(f => !(f.cambio && f.cambio.referencia === ref));
+      p.docs._files.comprovantes.push(Object.assign({}, modelo, { atalho: i > 0 ? true : undefined, cambio: Object.assign({}, c, { faturas, usdFatura: usd }) }));
+      if (!p.docs.comprovantes) p.docs.comprovantes = modelo.url;
+      aplicarCambioNoProcesso(p, { referencia: ref, taxa: c.taxa, valorReais: c.reaisTotal, valorMoeda: c.usdTotal, data: c.data, contratoExtrato: c.contratoExtrato, faturas }, modelo.url);
+      logAction('editar', 'PROCESSOS', id, 'Câmbio ' + ref + ' ligado pela planilha do banco');
+    });
+    // lançamentos e extrato já ligados a esse contrato
+    (S.lancamentos || []).forEach(l => {
+      const lr = l.docs && l.docs._cambio && (l.docs._cambio.referencia === ref || (c.contratoExtrato && String(l.docs._cambio.contrato) === String(c.contratoExtrato)));
+      if (lr && alvo.length === 1 && l.vinculoId !== alvo[0]) { l.vinculoId = alvo[0]; l.vinculo = 'processo'; l.descricao = String(l.descricao || '').replace(/FS\d{6}S?/, alvo[0]); }
+    });
+    if (S.banco && c.contratoExtrato) (S.banco.linhas || []).forEach(l => { if (l.lancId === 'cambio:' + c.contratoExtrato) l.centro = alvo.map(id => 'P:' + id).join(' '); });
+    n++;
+  });
+  return n;
+}
+async function guardarMapaCambio(mapa) {
+  if (!S.banco) return;
+  S.banco.regras = S.banco.regras || [];
+  mapa.forEach(m => {
+    S.banco.regras = S.banco.regras.filter(r => !(r.tipo === 'cambioProc' && r.valor === m.ref));
+    S.banco.regras.push({ id: genId(), tipo: 'cambioProc', valor: m.ref, categoria: m.processos.join('+'), centro: '', criadoEm: new Date().toISOString() });
+  });
+  try { if (typeof ensureTabs2 === 'function') await ensureTabs2(); await gravarAba2('REGRAS', S.banco.regras); } catch (e) { console.warn('mapa câmbio', e); }
+}
+function mapaCambioGuardado() {
+  return ((S.banco && S.banco.regras) || []).filter(r => r.tipo === 'cambioProc').map(r => ({ ref: r.valor, processos: String(r.categoria || '').split('+').filter(Boolean) }));
 }
