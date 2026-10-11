@@ -462,8 +462,11 @@ function aplicarDocNoProcesso(item, p, upd) {
       || (d.tipo !== item.tipo && (d.tipo === 'faturaFrete' || item.tipo === 'faturaFrete') && nf(d.de) && nf(d.de) === nf(info.emitNome) && Math.abs((Number(d.valor) || 0) - valor) <= Math.max(5, valor * 0.05)));
     if (!lista.some(d => d.k === chave) && !mesmaNota) {
       lista.push({ k: chave, url, valor, tipo: item.tipo, data: info.data ? isoToBr(info.data) : (info.pagamento && info.pagamento.data) || '', nome: (upd && upd.name) || item.nome, de: info.emitNome || (info.pagamento && info.pagamento.recebedor) || '' });
+      // pago com o cartão / conta pessoal do sócio: conta como pago no processo e vira reembolso a fazer
+      if (!pago && item.pagoPor === 'socio' && !reg.pagos.some(d => d.k === 'socio:' + chave)) reg.pagos.push({ k: 'socio:' + chave, url, valor, tipo: 'socio', data: info.data ? isoToBr(info.data) : '', nome: 'pago pelo sócio (reembolsar)', de: info.emitNome || '' });
       recalcularCustos(p, campo);
       mud.push(PROCESS_COST_FIELDS[campo] + (pago ? ' pago' : ' devido') + ' R$ ' + valor.toFixed(2));
+      if (item.pagoPor === 'socio') lancarReembolsoSocio(item, p, upd);
     }
   } else if (item.tipo === 'pagamento' && valor > 0 && !campo) {
     // pagamento sem custo definido: lançamento avulso do processo (aparece no financeiro do processo)
@@ -1039,3 +1042,28 @@ async function guardarMapaCambio(mapa) {
 function mapaCambioGuardado() {
   return ((S.banco && S.banco.regras) || []).filter(r => r.tipo === 'cambioProc').map(r => ({ ref: r.valor, processos: String(r.categoria || '').split('+').filter(Boolean) }));
 }
+
+
+// ═══════════════════════════════════════════════════════════════
+// Despesa paga pelo sócio (cartão de crédito / conta pessoal): a empresa deve o reembolso.
+// Vira lançamento "Reembolso ao sócio" em aberto; quando a empresa paga o sócio (PIX no extrato), a conciliação baixa.
+// ═══════════════════════════════════════════════════════════════
+function lancarReembolsoSocio(item, p, upd) {
+  const valor = Number(item.info && item.info.valor) || 0; if (!valor) return null;
+  S.lancamentos = S.lancamentos || [];
+  const url = upd && upd.webViewLink;
+  if (S.lancamentos.some(x => x.docs && x.docs.reembolsoSocio && (x.docs.comprovante === url || (item.md5 && x.docs.md5 === item.md5)))) return null;
+  const quem = (item.info && item.info.emitNome) || item.nome.replace(/^ADM\s*-\s*/i, '').replace(/\.[a-z0-9]+$/i, '');
+  const obj = {
+    id: genId(), tipo: 'Despesa', status: 'Em Aberto', descricao: 'Reembolso ao sócio — ' + quem,
+    valor, data: item.info.data ? isoToBr(item.info.data) : '', empresa: quem, categoria: item.categoria || (p ? 'Outros custos do processo' : 'Outras despesas'),
+    vinculo: p ? 'processo' : 'avulso', vinculoId: p ? p.id : 'ADM',
+    observacao: 'Pago com cartão / conta pessoal do sócio — a empresa deve reembolsar' + (upd ? ' · ' + upd.name : ''),
+    docs: { comprovante: url || '', reembolsoSocio: true, md5: item.md5 || '', _origem: 'entrada' },
+  };
+  S.lancamentos.unshift(obj);
+  logAction('criar', 'EXTRATO_CAIXA', obj.id, 'Reembolso ao sócio R$ ' + valor.toFixed(2) + ' — ' + quem);
+  return obj;
+}
+function reembolsosAbertos() { return (S.lancamentos || []).filter(l => l.docs && l.docs.reembolsoSocio && l.status !== 'Pago'); }
+function setPagoPor(i, v) { const it = S.entrada.itens[i]; if (!it) return; it.pagoPor = v; render(); }
