@@ -467,6 +467,9 @@ function lerNomeArquivo(nome) {
   const p = N.match(/^(20\d{2}-\d{2}-\d{2})\s+-\s+([^-]+?)\s+-\s+R\$/i); if (p) r.favorecido = p[2].trim();
   if (/REEMBOLSAR\s+KLISMANN/i.test(N)) r.reembolsar = true;
   if (/\(CANCELAD[AO]\)/i.test(N)) r.cancelada = true;
+  // câmbio transferido de um processo para outro: "Adiantamento transferido para FS260107" / "Adiantamento do FS260103"
+  { const m = N.toUpperCase().match(/TRANSFERID[OA]\s+PARA\s+(?:O\s+)?(FS\s?\d{6}S?)/); if (m) r.transferePara = m[1].replace(/\s/g, ''); }
+  { const m = N.toUpperCase().match(/ADIANTAMENTO\s+DO\s+(FS\s?\d{6}S?)/); if (m) r.transfereDe = m[1].replace(/\s/g, ''); }
   return r;
 }
 function normTxt(s) { return String(s || '').toUpperCase().replace(/\s+/g, ' '); }
@@ -675,6 +678,9 @@ function identificarItem(item) {
     const m = {};
     item.info.cambio.faturas.forEach(f => { const id = base(f.processo); if (m[id]) m[id].usd = Math.round((m[id].usd + (Number(f.usd) || 0)) * 100) / 100; else m[id] = Object.assign({}, f, { processo: id }); });
     item.info.cambio.faturas = Object.values(m);
+    // nome do arquivo diz que o câmbio foi transferido (processo cancelado → outro): a fatura passa para o processo novo
+    const tr = typeof transferenciaCambioDoNome === 'function' ? transferenciaCambioDoNome(item.nome, item.info.cambio) : null;
+    if (tr) item.info.cambio.faturas = item.info.cambio.faturas.map(f => f.processo === tr.de ? Object.assign({}, f, { processo: tr.para, transferidoDe: tr.de }) : f);
   }
   // contrato de câmbio sem "FATURA": a planilha do banco diz de qual processo é
   if (item.info && item.info.cambio && !(item.info.cambio.faturas || []).some(x => !x.pelaPasta) && typeof mapaCambioGuardado === 'function') {
