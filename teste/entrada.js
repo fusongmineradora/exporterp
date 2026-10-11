@@ -131,7 +131,7 @@ const ENTRADA_TIPOS = [
   ['due', 'DU-E'], ['nfe', 'NF-E Entrada'], ['nfeSaida', 'NF-E Saída'], ['cte', 'CT-e (frete)'],
   ['mdfe', 'MDF-e'], ['nfse', 'NFS-e (serviço)'], ['recibo', 'Recibo / RPA'], ['comprovantes', 'Comprovantes Câmbio'], ['certOrigem', 'Cert. Origem'],
   ['seguro', 'Seguro de Carga'], ['pesagem', 'Pesagem'], ['pagamento', 'Comprovante de Pagamento'],
-  ['faturaFrete', 'Fatura de frete (agente)'], ['planilhaCambio', 'Planilha de câmbio (banco)'], ['outros', 'Outros Documentos'],
+  ['faturaFrete', 'Fatura de frete (agente)'], ['planilhaCambio', 'Planilha de câmbio (banco)'], ['boleto', 'Boleto (cobrança)'], ['outros', 'Outros Documentos'],
 ];
 const tipoLabel = k => (ENTRADA_TIPOS.find(t => t[0] === k) || [k, k])[1];
 
@@ -424,6 +424,10 @@ function classificarDocumento(texto, nome) {
   const C = T.replace(/\s+/g, '');
   if (/WAYBILL|BILLOFLADING/.test(C) && /SHIPPEDONBOARD|BOOKINGNO|PORTOFLOADING/.test(C) && !chavesDoTexto(String(texto || '')).length) {
     return { tipo: 'bl', confianca: 'alta', motivo: 'BL / waybill' };
+  }
+  // boleto de cobrança (conta a pagar) — diferente do comprovante de pagamento do boleto
+  if (/REPRESENTA[CÇ][AÃ]O NUM[EÉ]RICA|PAG[AÁ]VEL (?:EM QUALQUER BANCO|PREFERENCIALMENTE)|LINHA DIGIT[AÁ]VEL/.test(T) && !/VALOR DO PAGAMENTO|COMPROVANTE DE PAGAMENTO|AUTENTICA[CÇ][AÃ]O NO COMPROVANTE/.test(T)) {
+    return { tipo: 'boleto', confianca: 'alta', motivo: 'boleto de cobrança' };
   }
   // 1) chave de acesso → nota/CT-e/MDF-e
   const chaves = chavesDoTexto(String(texto || '') + ' ' + String(nome || ''));
