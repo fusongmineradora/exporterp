@@ -235,7 +235,7 @@ const CAMPO_POR_CATEG = {
   'Armazém': 'custoArmazem', 'Porto / Taxas': 'custoPorto', 'Despachante': 'custoDespachante',
   'Serviços de Terceiros': 'custoServTerceiros', 'Impostos': 'custoImpostos', 'Produto': 'custoProduto',
 };
-const DOCS_COM_CUSTO = ['pagamento', 'recibo', 'nfe', 'cte', 'nfse'];
+const DOCS_COM_CUSTO = ['pagamento', 'recibo', 'nfe', 'cte', 'nfse', 'faturaFrete'];
 const MESES_PT = { janeiro: '01', fevereiro: '02', marco: '03', 'março': '03', abril: '04', maio: '05', junho: '06', julho: '07', agosto: '08', setembro: '09', outubro: '10', novembro: '11', dezembro: '12' };
 const titulo = s => String(s || '').toLowerCase().replace(/(^|[\s\/-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase()).replace(/\b(Ltda|S\.?a\.?|Me|Epp)\b/gi, x => x.toUpperCase()).replace(/([\s\/-])([A-Za-z]{2})$/, (m, a, b) => a + b.toUpperCase());
 const dataBrDe = t => { const m = String(t || '').match(/\b(\d{2}\/\d{2}\/\d{4})\b/); return m ? m[1] : ''; };
@@ -274,6 +274,23 @@ function enriquecerInfo(item) {
     if (!info.emitNome) info.emitNome = mx(/RAZ\s?[AÃ]O SOCIAL\s+(.+?)\s+CNPJ/i) || mx(/RECEBI(?:\(EMOS\))?\s+DE\s+(.+?)\s+(?:A|O)\s+(?:QUANTIA|IMPORT)/i);
     if (!info.data) { const m = U.match(/(\d{1,2}) de ([A-Za-zçÇ]+) de (\d{4})/); if (m && MESES_PT[m[2].toLowerCase()]) info.data = `${m[3]}-${MESES_PT[m[2].toLowerCase()]}-${m[1].padStart(2, '0')}`; else { const d = dataBrDe(U); if (d) info.data = brToIso(d); } }
   }
+  if (item.tipo === 'faturaFrete') {
+    if (!info.valor) info.valor = numBR(mx(/Total\s+em\s*:?\s*R\$\s*([\d.]+,\d{2})/i) || mx(/TOTAL\s*(?:GERAL|A PAGAR)?\s*:?\s*R\$\s*([\d.]+,\d{2})/i));
+    if (!info.emitNome) info.emitNome = mx(/\b([A-Z][A-Za-zÀ-ú .&-]{3,60}?(?:Log[ií]stic[as]?|Logistics|Shipping|Transportes?)[A-Za-zÀ-ú .&-]{0,40}?(?:Ltda|LTDA|S\.?A\.?))/) || mx(/\b([A-Z][A-Za-zÀ-ú .&-]{3,60}?\s(?:Ltda|LTDA))\s+CNPJ/);
+    if (!info.data) { const d = mx(/Data de emiss[aã]o:?\s*(\d{2}\/\d{2}\/\d{4})/i) || dataBrDe(U); if (d) info.data = brToIso(d); }
+    info.vencimento = mx(/Vencimento:?\s*(\d{2}\/\d{2}\/\d{4})/i);
+    info.refAgente = mx(/\b(EMIT[A-Z]?\d+\/\d{2})\b/);
+    const conts = [...new Set(U.match(/[A-Z]{3}U\d{7}(?!\d)/g) || [])];
+    info.containers = conts; if (conts[0]) info.container = conts[0];
+    const toks = (U.match(/\b[A-Z]{2,5}\d{7,12}\b/g) || []).filter(t => !conts.includes(t) && !/^ACCESS/i.test(t) && !/^EMIT/i.test(t));
+    info.booking = info.booking || toks[0] || '';
+    const navio = U.match(/\b((?:MSC|MAERSK|COSCO|CMA CGM|HAPAG|EVERGREEN|ONE|HMM|ZIM|YANG MING|X-PRESS)\s+[A-Z][A-Z]+(?:\s+[A-Z]+)?)\b/);
+    info.navio = navio ? navio[1] : '';
+    const datas = (U.replace(/Vencimento:?\s*\d{2}\/\d{2}\/\d{4}/i, '').replace(/Data de emiss[aã]o:?\s*\d{2}\/\d{2}\/\d{4}/i, '').match(/\b\d{2}\/\d{2}\/\d{4}\b/g) || []);
+    if (/\bATD\b/i.test(U) && datas[0]) info.embarque = datas[0];   // ATD = saída real do navio
+    if (/\bETA\b/i.test(U) && datas[1]) info.eta = datas[1];
+    info.armador = /\bMSC\b/.test(info.navio) ? 'MSC' : /MAERSK/.test(info.navio) ? 'MAERSK' : /COSCO/.test(info.navio) ? 'COSCO' : /CMA/.test(info.navio) ? 'CMA CGM' : /HAPAG/.test(info.navio) ? 'Hapag-Lloyd' : /EVERGREEN/.test(info.navio) ? 'Evergreen' : '';
+  }
   if (item.tipo === 'bl') {
     const C = T.replace(/\s+/g, '');
     const cx = re => { const m = C.match(re); return m ? m[1] : ''; };
@@ -297,13 +314,14 @@ function enriquecerInfo(item) {
   {
     const ct = U.match(/\b(FS\d{6})S?\s+(\d{9,10})\s+([A-Z]{4}\d{7})\b/);   // "FS260097 271229537 SEKU1633624"
     if (ct) { info.refProcesso = ct[1]; info.booking = ct[2]; info.container = ct[3]; }
-    else { const c = U.match(/\b([A-Z]{3}U\d{7})\b/); if (c) info.container = info.container || c[1]; }
+    else { const c = U.match(/([A-Z]{3}U\d{7})(?!\d)/); if (c) info.container = info.container || c[1]; }
   }
   if (DOCS_COM_CUSTO.includes(item.tipo) && item.campoCusto === undefined) item.campoCusto = campoCustoSugerido(item);
 }
 
 function campoCustoSugerido(item) {
   if (item.tipo === 'cte') return 'custoFrete';
+  if (item.tipo === 'faturaFrete') return 'custoMaritimo';
   const info = item.info || {};
   const quem = normTxt([item.nomeOriginal || item.nome, info.emitNome, info.pagamento && info.pagamento.recebedor, String(item.texto || '').slice(0, 800)].filter(Boolean).join(' '));
   const cat = categoriaPeloNome(normTxt([info.emitNome, info.pagamento && info.pagamento.recebedor].filter(Boolean).join(' ')))
@@ -380,31 +398,39 @@ function aplicarDocNoProcesso(item, p, upd) {
     if (info.dueNumero && !p.dueNumero) { p.dueNumero = info.dueNumero; mud.push('dueNumero'); }
     if (info.dueChave && !p.dueChave) { p.dueChave = info.dueChave; mud.push('dueChave'); }
   }
+  if (item.tipo === 'faturaFrete') {
+    const set = (k, v) => { if (v && !p[k]) { p[k] = v; mud.push(k); } };
+    set('booking', info.booking);
+    set('saida', info.embarque);
+    if (info.armador && (!p.companhia || p.companhia === 'MAERSK') && p.companhia !== info.armador && !(p.docs._bl)) { p.companhia = info.armador; mud.push('companhia'); }
+    if (somarContainers(p, info.containers)) mud.push('container');
+    p.docs._viagem = Object.assign({}, p.docs._viagem, { navio: info.navio, eta: info.eta, atd: info.embarque, refAgente: info.refAgente });
+  }
   if (item.tipo === 'bl') {
     const set = (k, v) => { if (v && !p[k]) { p[k] = v; mud.push(k); } };
     set('booking', info.booking);
     set('saida', info.embarque);
     set('dueNumero', info.dueNumero);
     if (info.armador && (!p.companhia || p.companhia === 'MAERSK')) { if (p.companhia !== info.armador) mud.push('companhia'); p.companhia = info.armador; }
-    if ((info.containers || []).length && !(p.containers || []).some(Boolean)) {
-      p.containers = info.containers.slice(); p.container = info.containers[0]; p.qtdContainer = String(info.containers.length); mud.push('container');
-    }
+    if (somarContainers(p, info.containers)) mud.push('container');
     p.docs._bl = { booking: info.booking, embarque: info.embarque, navio: info.navio, lacre: info.lacre, containers: info.containers, due: info.dueNumero };
   }
   if (info.refProcesso === p.id && item.tipo !== 'bl') {
     if (info.booking && !p.booking) { p.booking = info.booking; mud.push('booking'); }
-    if (info.container && !(p.containers || []).some(Boolean)) { p.containers = [info.container]; p.container = info.container; mud.push('container'); }
+    if (somarContainers(p, [info.container])) mud.push('container');
   }
   // custos
   const campo = item.campoCusto !== undefined ? item.campoCusto : campoCustoSugerido(item);
-  const valor = Number(info.valor) || 0;
+  const valor = Math.round((Number(info.valor) || 0) / (item.divisao > 1 ? item.divisao : 1) * 100) / 100;
   if (campo && valor > 0 && DOCS_COM_CUSTO.includes(item.tipo)) {
     p.docs._custoDocs = p.docs._custoDocs || {};
     const reg = p.docs._custoDocs[campo] = p.docs._custoDocs[campo] || { fiscais: [], pagos: [] };
     const pago = item.tipo === 'pagamento' || item.tipo === 'recibo';
     const lista = pago ? reg.pagos : reg.fiscais;
     const chave = (!pago && info.chave) || url || item.fileId;
-    const mesmaNota = !pago && lista.some(d => Math.abs((Number(d.valor) || 0) - valor) < 0.01 && (!info.chave || !/^\d{44}$/.test(d.k)));
+    const nf = x => String(x || '').toUpperCase().normalize('NFD').replace(/[^A-Z0-9]/g, '').slice(0, 10);
+    const mesmaNota = !pago && lista.some(d => (Math.abs((Number(d.valor) || 0) - valor) < 0.01 && (!info.chave || !/^\d{44}$/.test(d.k)))
+      || (d.tipo !== item.tipo && (d.tipo === 'faturaFrete' || item.tipo === 'faturaFrete') && nf(d.de) && nf(d.de) === nf(info.emitNome) && Math.abs((Number(d.valor) || 0) - valor) <= Math.max(5, valor * 0.05)));
     if (!lista.some(d => d.k === chave) && !mesmaNota) {
       lista.push({ k: chave, url, valor, tipo: item.tipo, data: info.data ? isoToBr(info.data) : (info.pagamento && info.pagamento.data) || '', nome: (upd && upd.name) || item.nome, de: info.emitNome || (info.pagamento && info.pagamento.recebedor) || '' });
       recalcularCustos(p, campo);
@@ -437,13 +463,14 @@ async function atualizarProcessosPelosDocs(ids, silencioso) {
     for (const [tipo, arr] of Object.entries(files)) {
       if (['invoice', 'contrato', 'outros'].includes(tipo)) continue;
       for (const f of arr || []) {
-        if (!f.id || (f.atalho && tipo !== 'comprovantes')) continue;
+        if (!f.id || (f.atalho && !f.divisao && tipo !== 'comprovantes')) continue;
         if (!f.nomeOriginal) { try { const m = await driveAPI('GET', '/files/' + f.id, null, 'fields=description'); const o = String(m.description || '').match(/Nome original:\s*(.+?)\s*(?:·|$)/); if (o) f.nomeOriginal = o[1].trim(); } catch (e) {} }
         if (!silencioso && S.entrada) { S.entrada.progresso = `Relendo ${p.id}: ${f.name}`; render(); }
         try {
           const it = await analisarArquivo({ id: f.id, name: f.name, mimeType: /\.xml$/i.test(f.name) ? 'application/xml' : /\.pdf$/i.test(f.name) ? 'application/pdf' : /\.(png|jpe?g)$/i.test(f.name) ? 'image/png' : '', size: 1000 });
           it.tipo = tipo;                       // o tipo já foi confirmado ao anexar
           if (f.nomeOriginal) it.nomeOriginal = f.nomeOriginal;
+          if (f.divisao) it.divisao = f.divisao;
           if ((!Number(it.info.valor) || f.valorManual) && Number(f.valor)) it.info.valor = Number(f.valor);
           if (!it.info.data && f.data) it.info.data = /^\d{4}-/.test(f.data) ? f.data : brToIso(f.data);
           delete it.campoCusto; enriquecerInfo(it);   // reler com o tipo confirmado
@@ -490,4 +517,13 @@ function vincularCambiosExistentes(p) {
   });
   if (n) logAction('editar', 'PROCESSOS', p.id, `câmbio vinculado a partir de ${n} contrato(s) já anexado(s)`);
   return n;
+}
+
+// Um processo pode ter vários containers (e um só BL): junta sem repetir
+function somarContainers(p, novos) {
+  const atuais = (p.containers || [p.container]).filter(Boolean).map(c => String(c).toUpperCase().replace(/[\s-]/g, ''));
+  const add = (novos || []).filter(Boolean).map(c => String(c).toUpperCase().replace(/[\s-]/g, '')).filter(c => !atuais.includes(c));
+  if (!add.length) return false;
+  p.containers = atuais.concat(add); p.container = p.containers[0]; p.qtdContainer = String(p.containers.length);
+  return true;
 }

@@ -128,7 +128,7 @@ const ENTRADA_TIPOS = [
   ['due', 'DU-E'], ['nfe', 'NF-E Entrada'], ['nfeSaida', 'NF-E Saída'], ['cte', 'CT-e (frete)'],
   ['mdfe', 'MDF-e'], ['nfse', 'NFS-e (serviço)'], ['recibo', 'Recibo / RPA'], ['comprovantes', 'Comprovantes Câmbio'], ['certOrigem', 'Cert. Origem'],
   ['seguro', 'Seguro de Carga'], ['pesagem', 'Pesagem'], ['pagamento', 'Comprovante de Pagamento'],
-  ['outros', 'Outros Documentos'],
+  ['faturaFrete', 'Fatura de frete (agente)'], ['outros', 'Outros Documentos'],
 ];
 const tipoLabel = k => (ENTRADA_TIPOS.find(t => t[0] === k) || [k, k])[1];
 
@@ -288,6 +288,7 @@ function valorDanfe(texto) {
 
 // Documento comum (PDF ou nome do arquivo): ordem importa
 const REGRAS_TIPO = [
+  ['faturaFrete', /FATURA\s+(?:DE\s+)?EXPORTA[CÇ][AÃ]O\s+MAR[IÍ]TIMA|FATURA\s+DE\s+FRETE|FREIGHT\s+INVOICE|DEBIT\s+NOTE|NUMER[AÁ]RIO/],
   ['nfse', /NOTA\s+FISCAL\s+(ELETR[OÔ]NICA\s+)?DE\s+SERVI[CÇ]OS?|\bNFS-?E\b|DANFSE/],
   ['recibo', /^\s*RECIBO\b|RECIBO\s+DE\s+PAGAMENTO|\bRPA\b|RECIBO\s+DE\s+PAGAMENTO\s+A\s+AUT[OÔ]NOMO/],
   ['bl', /BILL\s+OF\s+LADING|\bB\/L\s*(NO|N[º°])/],
@@ -386,7 +387,10 @@ function completarPagamento(pag, texto) {
     if (m) pag.data = m[1].padStart(2, '0') + '/' + M[m[2].toLowerCase()] + '/' + m[3];
   }
   if (!pag.recebedor) { const m = T.match(/(?:^|\n)\s*para\s*\n\s*([A-ZÀ-Ú0-9][^\n]{2,70})/i); if (m) pag.recebedor = m[1].trim(); }
-  if (pag.identificacao) pag.identificacao = pag.identificacao.replace(/\s+/g, '').toUpperCase();
+  if (pag.identificacao) {
+    pag.processos = [...new Set((pag.identificacao.toUpperCase().match(/FS\s?\d{6}/g) || []).map(x => x.replace(/\s/g, '')))];
+    pag.identificacao = pag.identificacao.replace(/\s+/g, '').toUpperCase();
+  }
   if (!pag.recebedor) { const m = T.match(/(?:recebedor|favorecido|para|destinat[aá]rio)\s*:?\s*\n?\s*([A-ZÀ-Ú][^\n]{2,60})/i); if (m) pag.recebedor = m[1].trim(); }
   return pag;
 }
@@ -596,6 +600,15 @@ async function analisarArquivo(f) {
   if (item.info.cambio && item.info.cambio.faturas.length && item.info.cambio.faturas.some(f => !(S.processos || []).some(p => p.id === f.processo))) {
     item.aviso = (item.aviso ? item.aviso + ' ' : '') + 'Fatura sem processo no ERP: ' + item.info.cambio.faturas.filter(f => !(S.processos || []).some(p => p.id === f.processo)).map(f => f.processo).join(', ');
   }
+  // comprovante com mais de um processo na identificação ("FS260096 FS260097"): divide igualmente
+  const ids = ((item.info.pagamento && item.info.pagamento.processos) || []).filter(id => (S.processos || []).some(p => p.id === id));
+  if (ids.length > 1 && (item.tipo === 'pagamento' || item.tipo === 'recibo')) {
+    item.processo = ids.includes(item.processo) ? item.processo : ids[0];
+    item.processosExtras = ids.filter(id => id !== item.processo);
+    item.divisao = ids.length;
+    const parte = (Number(item.info.valor) || 0) / ids.length;
+    item.aviso = (item.aviso ? item.aviso + ' ' : '') + `Pagamento de ${ids.join(' + ')}: dividido igualmente (R$ ${parte.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} cada).`;
+  }
   item.duplicado = procurarDuplicado(item);
   return item;
 }
@@ -727,7 +740,7 @@ async function confirmarEntrada(i, silencioso) {
         cambio: item.info.cambio ? { faturas: item.info.cambio.faturas, referencia: item.info.cambio.referencia, contratoExtrato: item.info.cambio.contratoExtrato, taxa: item.info.cambio.taxa, usdFatura: fatura ? fatura.usd : null, usdTotal: item.info.cambio.valorMoeda, reaisTotal: item.info.cambio.valorReais, data: item.info.cambio.data } : undefined,
         pagamento: item.info.pagamento || undefined,
         origem: 'entrada', em: new Date().toISOString(), nomeOriginal: item.nome,
-        atalho: proc.id !== p.id ? true : undefined,
+        atalho: proc.id !== p.id && !item.divisao ? true : undefined, divisao: item.divisao || undefined,
         campoCusto: item.campoCusto !== undefined ? item.campoCusto : undefined, valorManual: item.valorManual ? true : undefined,
         pastaOriginal: item.pastaErrada && proc.id === item.pastaErrada.certo ? item.pastaErrada.estava.join('+') : undefined,
       });
@@ -746,7 +759,7 @@ async function confirmarEntrada(i, silencioso) {
         try { await driveAPI('POST', '/files', { name: upd.name, mimeType: 'application/vnd.google-apps.shortcut', parents: [fx], shortcutDetails: { targetId: upd.id } }, 'fields=id'); } catch (e) {}
       }
       registro(px);
-      if (item.info.cambio && typeof aplicarDocNoProcesso === 'function') aplicarDocNoProcesso(item, px, upd);
+      if ((item.info.cambio || item.divisao) && typeof aplicarDocNoProcesso === 'function') aplicarDocNoProcesso(item, px, upd);
     }
     E.itens.splice(i, 1);
     reidentificarPendentes();
