@@ -592,6 +592,7 @@ async function analisarArquivo(f) {
   }
   if (typeof enriquecerInfo === 'function') { try { enriquecerInfo(item); } catch (e) { console.warn('enriquecer', e); } }
   if (/ADIANTAMENTO|ANTECIPA/i.test(nome + ' ' + ((item.info.pagamento && item.info.pagamento.identificacao) || ''))) item.info.adiantamento = true;
+  if (['nfse', 'boleto', 'recibo'].includes(item.tipo) && Number(item.info.valor) > 0 && item.info.emitNome && item.info.data && item.confianca !== 'alta') { item.confianca = 'alta'; item.motivo = (item.motivo ? item.motivo + ' · ' : '') + 'valor, data e emitente lidos'; }
   item._base = { tipo: item.tipo, confianca: item.confianca, motivo: item.motivo };
   return identificarItem(item);
 }
@@ -885,6 +886,7 @@ function lancarFinanceiroDoDoc(item, p, upd) {
   if (!valor) return;
   S.lancamentos = S.lancamentos || [];
   if (S.lancamentos.some(x => x.docs && (x.docs.comprovante === upd.webViewLink || (pag.idTransacao && x.docs.idTransacao === pag.idTransacao)))) return;
+  if (!p && typeof lancamentoParecido === 'function') { const ja = lancamentoParecido(valor, item.info.data, pag.recebedor || item.info.emitNome); if (ja) { ja.docs = ja.docs || {}; ja.docs.comprovante = ja.docs.comprovante || upd.webViewLink; return; } }
   const centroAdm = !p;
   const categoria = item.categoria || (centroAdm ? 'Despesas administrativas' : 'Outros custos do processo');
   const obj = {
@@ -934,7 +936,9 @@ async function confirmarAdm(i, silencioso) {
     }
     logAction('anexar', 'DOCUMENTOS', upd.id, 'ADM: ' + upd.name + ' (Caixa de Entrada)');
     if (typeof cadastrarPeloDoc === 'function') { try { cadastrarPeloDoc(item); } catch (e) { console.warn('cadastro', e); } }
-    if (item.pagoPor === 'socio' && typeof lancarReembolsoSocio === 'function') lancarReembolsoSocio(item, null, upd); else lancarFinanceiroDoDoc(item, null, upd);
+    if (item.pagoPor === 'socio' && typeof lancarReembolsoSocio === 'function') lancarReembolsoSocio(item, null, upd);
+    else if (['nfse', 'recibo'].includes(item.tipo) && typeof lancarDespesaDaNota === 'function') lancarDespesaDaNota(item, upd);
+    else lancarFinanceiroDoDoc(item, null, upd);
     E.itens.splice(i, 1);
     if (!silencioso) { showToast('✅ Guardado como despesa do mês ' + mes.slice(5) + '/' + mes.slice(0, 4)); render(); }
     return true;
