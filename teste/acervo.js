@@ -957,7 +957,7 @@ setTimeout(async function esperarDados() {
     try { mudou += await criarProcessoSFaltando(); } catch (e) { console.warn('processo S', e); }
     try { mudou += await devolverArquivosDoS(); } catch (e) { console.warn('arquivos S', e); }
     try { mudou += await corrigirPartesPeloNome(); } catch (e) { console.warn('partes', e); }
-    try { if ((S.processos || []).some(p => PLANILHA_CUSTOS[p.id] && !(p.docs || {})._planilhaV1)) mudou += aplicarPlanilhaCustos(); } catch (e) { console.warn('planilha', e); }
+    // (a planilha de custos do Ademir é só para conferência: não é aplicada no ERP)
     try { mudou += await corrigirCambioDossie(); } catch (e) { console.warn('dossiê', e); }
     mudou += corrigirFaturasDigitadas();
     mudou += moverPagamentosMarcados();
@@ -1669,7 +1669,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '48';
+const VERSAO_TESTE = '49';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -1780,49 +1780,3 @@ async function criarProcessoSFaltando() {
   return n;
 }
 
-// Planilha de custos do Ademir (11/10/2026): cinza = pago, rosa = a pagar, amarelo = pago aguardando comprovante.
-// Aplicada uma vez por processo. Documento do ERP com valor diferente (CT-e, nota, comprovante só deste processo) é mantido e listado.
-const PLANILHA_CUSTOS = {"FS260096":{"custoMaritimo":[5889.99,"pago"],"custoFrete":[11500.0,"pago"],"custoArmazem":[3112.06,"pago"],"custoDespachante":[550.0,"pago"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"pago"],"custoProduto":[4050.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260097":{"custoMaritimo":[7254.75,"pago"],"custoFrete":[11500.0,"pago"],"custoArmazem":[3112.06,"pago"],"custoDespachante":[550.0,"pago"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"pago"],"custoProduto":[3240.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260098":{"custoMaritimo":[6625.87,"pago"],"custoFrete":[11500.0,"pago"],"custoArmazem":[3112.06,"pago"],"custoDespachante":[550.0,"pago"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"pago"],"custoProduto":[3240.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260099":{"custoMaritimo":[6744.32,"pago"],"custoFrete":[11500.0,"pago"],"custoArmazem":[3112.06,"pago"],"custoDespachante":[550.0,"pago"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"pago"],"custoProduto":[3240.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260101":{"custoMaritimo":[6676.46,"pago"],"custoFrete":[11500.0,"pago"],"custoArmazem":[3112.06,"pago"],"custoDespachante":[550.0,"pago"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"pago"],"custoProduto":[3240.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260100":{"custoMaritimo":[6772.94,"pago"],"custoFrete":[11500.0,"pago"],"custoArmazem":[3112.06,"pago"],"custoDespachante":[550.0,"pago"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"pago"],"custoProduto":[3240.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260102":{"custoMaritimo":[5720.48,"pago"],"custoFrete":[11500.0,"pago"],"custoArmazem":[3112.06,"pago"],"custoDespachante":[550.0,"pago"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"pago"],"custoProduto":[3240.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260104":{"custoMaritimo":[6833.2,"pago"],"custoFrete":[11500.0,"pago"],"custoArmazem":[3133.68,"pago"],"custoDespachante":[550.0,"pago"],"custoPorto":[572.24,"pago"],"custoServTerceiros":[1200.0,"pago"],"custoProduto":[3240.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260106":{"custoMaritimo":[11018.59,"pago"],"custoFrete":[20000.0,"pago"],"custoArmazem":[6341.26,"pago"],"custoDespachante":[550.0,"pago"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[2400.0,"pago"],"custoProduto":[81000.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260107":{"custoMaritimo":[6616.6,"pago"],"custoFrete":[26000.0,"pago"],"custoArmazem":[0.0,"pago"],"custoDespachante":[550.0,"pago"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"pago"],"custoProduto":[335450.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260108":{"custoMaritimo":[5788.81,"pago"],"custoFrete":[11500.0,"pago"],"custoArmazem":[2540.39,"pago"],"custoDespachante":[550.0,"pago"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"pago"],"custoProduto":[3240.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260112":{"custoMaritimo":[23760.2,"pago"],"custoFrete":[18860.0,"pago"],"custoArmazem":[0.0,"pago"],"custoDespachante":[500.0,"pago"],"custoPorto":[6083.84,"pago"],"custoServTerceiros":[2400.0,"pago"],"custoProduto":[51300.0,"pago"],"custoImpostos":[720.9,"pago"]},"FS260111":{"custoMaritimo":[5718.95,"pago"],"custoFrete":[11500.0,"pago"],"custoArmazem":[3126.84,"pago"],"custoDespachante":[550.0,"pago"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"pago"],"custoProduto":[20250.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260109":{"custoMaritimo":[6310.02,"pago"],"custoFrete":[20000.0,"pago"],"custoArmazem":[3513.68,"pago"],"custoDespachante":[550.0,"pago"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"pago"],"custoProduto":[81000.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260109S":{"custoMaritimo":[5787.88,"pago"],"custoFrete":[0.0,"pago"],"custoArmazem":[3513.68,"pago"],"custoDespachante":[550.0,"aPagar"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"pago"],"custoProduto":[0.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260114":{"custoMaritimo":[10850.2,"pago"],"custoFrete":[11800.0,"pago"],"custoArmazem":[0.0,"pago"],"custoDespachante":[550.0,"aPagar"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"aPagar"],"custoProduto":[43200.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260113":{"custoMaritimo":[7550.0,"aPagar"],"custoFrete":[11500.0,"pago"],"custoArmazem":[3112.63,"pago"],"custoDespachante":[550.0,"aPagar"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"aPagar"],"custoProduto":[3240.0,"pago"],"custoImpostos":[0.0,"pago"]},"FS260116":{"custoMaritimo":[13000.0,"aPagar"],"custoFrete":[20000.0,"pago"],"custoArmazem":[6400.0,"aPagar"],"custoDespachante":[550.0,"aPagar"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[2400.0,"aPagar"],"custoProduto":[48600.0,"aguardando"],"custoImpostos":[0.0,"pago"]},"FS260118":{"custoMaritimo":[8000.0,"aPagar"],"custoFrete":[11500.0,"aPagar"],"custoArmazem":[3200.0,"aPagar"],"custoDespachante":[550.0,"aPagar"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"aPagar"],"custoProduto":[22500.0,"aguardando"],"custoImpostos":[0.0,"pago"]},"FS260115":{"custoMaritimo":[7500.0,"aPagar"],"custoFrete":[25000.0,"pago"],"custoArmazem":[1700.0,"aPagar"],"custoDespachante":[550.0,"aPagar"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[1200.0,"aPagar"],"custoProduto":[388000.0,"aguardando"],"custoImpostos":[0.0,"pago"]},"FS260110":{"custoMaritimo":[13000.0,"aPagar"],"custoFrete":[20000.0,"aPagar"],"custoArmazem":[6400.0,"aPagar"],"custoDespachante":[550.0,"aPagar"],"custoPorto":[0.0,"pago"],"custoServTerceiros":[2400.0,"aPagar"],"custoProduto":[0.0,"aPagar"],"custoImpostos":[0.0,"pago"]},"FS260117":{"custoMaritimo":[7550.0,"aPagar"],"custoFrete":[11500.0,"aPagar"],"custoArmazem":[3200.0,"aPagar"],"custoDespachante":[550.0,"aPagar"],"custoPorto":[0.0,"aPagar"],"custoServTerceiros":[1200.0,"aPagar"],"custoProduto":[0.0,"aPagar"],"custoImpostos":[0.0,"pago"]}};
-function aplicarPlanilhaCustos() {
-  const rel = [];
-  Object.entries(PLANILHA_CUSTOS).forEach(([id, campos]) => {
-    const p = (S.processos || []).find(x => x.id === id); if (!p) return;
-    p.docs = p.docs || {}; if (p.docs._planilhaV1) return;
-    const outros = (S.lancamentos || []).filter(l => l.vinculo === 'processo' && l.vinculoId === id && l.tipo === 'Despesa' && /Outros custos|Porto/.test(l.categoria || ''));
-    Object.entries(campos).forEach(([campo, [v, cor]]) => {
-      const reg = (p.docs._custoDocs || {})[campo];
-      const pagos = ((reg && reg.pagos) || []).filter(d => d.tipo !== 'socio');
-      const temDoc = reg && ((reg.fiscais || []).length || pagos.length);
-      const dividido = pagos.length && pagos.every(d => (S.processos || []).some(q => q !== p && Object.values(((q.docs || {})._custoDocs) || {}).some(r => (r.pagos || []).some(x => x.url && x.url === d.url))));
-      const atual = Number(p[campo]) || 0, pv = p.docs._previsto = p.docs._previsto || {};
-      const nome = PROCESS_COST_FIELDS[campo];
-      if (campo === 'custoPorto' && outros.length) { if (Math.abs(outros.reduce((a, l) => a + (Number(l.valor) || 0), 0) - v) > 0.5) rel.push(`${id} · ${nome}: planilha R$ ${fmtBR2(v)}, ERP tem lançamentos de porto/outros de R$ ${fmtBR2(outros.reduce((a, l) => a + (Number(l.valor) || 0), 0))} — confira`); return; }
-      if (cor === 'aPagar') {
-        if (pagos.length || (p.docs._costBanco || {})[campo]) { if (Math.abs(atual - v) > 0.5) rel.push(`${id} · ${nome}: planilha a pagar R$ ${fmtBR2(v)}, mas o ERP já tem pagamento de R$ ${fmtBR2(atual)}`); return; }
-        if (v <= 0) { if (pv[campo]) { delete pv[campo]; p[campo] = ''; p[campo + '_status'] = ''; } (p.docs._previstoOff = p.docs._previstoOff || {})[campo] = true; return; }
-        if (campo === 'custoArmazem') p.docs._armazem = true;
-        if (p.docs._previstoOff) delete p.docs._previstoOff[campo];
-        pv[campo] = { valor: v, regra: 'planilha (a pagar)', editado: true }; p[campo] = v; p[campo + '_status'] = 'Em Aberto';
-        return;
-      }
-      // pago (cinza) ou pago aguardando comprovante (amarelo)
-      if (temDoc && !dividido && Math.abs(atual - v) > 0.5 && !(v <= 0 && !pagos.length)) { rel.push(`${id} · ${nome}: planilha R$ ${fmtBR2(v)}, documento no ERP R$ ${fmtBR2(atual)} — ficou o do documento`); }
-      else if (Math.abs(atual - v) > 0.5 || (pv[campo] && v > 0)) {
-        if (v <= 0) { if (pv[campo]) delete pv[campo]; (p.docs._previstoOff = p.docs._previstoOff || {})[campo] = true; if (!temDoc) { p[campo] = ''; p[campo + '_status'] = ''; } }
-        else { delete pv[campo]; (p.docs._valorManual = p.docs._valorManual || {})[campo] = v; p[campo] = v; }
-      }
-      if (v > 0) {
-        (p.docs._statusManual = p.docs._statusManual || {})[campo] = 'Pago'; p[campo + '_status'] = 'Pago';
-        if (cor === 'aguardando' && !pagos.length) (p.docs._aguardandoComp = p.docs._aguardandoComp || {})[campo] = true;
-        else if (p.docs._aguardandoComp) delete p.docs._aguardandoComp[campo];
-        if (cor === 'aguardando' && pagos.length) rel.push(`${id} · ${nome}: estava amarelo (aguardando comprovante) — o ERP já tem o comprovante`);
-      }
-      if (reg) recalcularCustos(p, campo);
-    });
-    if (!Object.keys(p.docs._previsto || {}).length) delete p.docs._previsto;
-    p.docs._planilhaV1 = true;
-    logAction('editar', 'PROCESSOS', id, 'Custos acertados pela planilha de custos (pago / a pagar / aguardando comprovante)');
-  });
-  if (rel.length) { S._relPlanilha = rel; rel.forEach(t => logAction('editar', 'PROCESSOS', t.slice(0, 8), 'Planilha × ERP: ' + t)); }
-  return rel.length + 1;
-}
