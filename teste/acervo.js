@@ -688,6 +688,8 @@ async function executarImportacaoTudo() {
           fila.push({ id: f.id, nome: pasta.nome + ' / ' + f.name.trim(), cancelado: pasta.cancelado, extrato: pasta.extrato || t === 'extrato', contexto: fs || (t === 'cambio' ? '' : t === 'comprovantes' ? 'ADM' : pasta.contexto) });
         } else if (/\.ofx$/i.test(f.name) || f.mimeType === 'application/x-ofx') {
           ofx.push(f);
+        } else if (pasta.extrato && /\.(xlsx|xls|csv)$/i.test(f.name)) {
+          arquivos.push({ ...f, contexto: '', pasta: pasta.nome });   // planilha do banco (contrato → processo / DU-E)
         } else if (pasta.extrato) {
           // extratos mensais em PDF: ficam só guardados no Drive (o OFX já traz os movimentos)
         } else if (!/^application\/vnd\.google-apps/.test(f.mimeType) && !ACERVO_IGNORAR_ARQ.test(f.name)) {
