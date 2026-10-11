@@ -341,8 +341,11 @@ function recalcularCustos(p, campo) {
   const reg = p.docs._custoDocs[campo]; if (!reg) return;
   const fiscal = (reg.fiscais || []).reduce((a, d) => a + (Number(d.valor) || 0), 0);
   const pix = (reg.pagos || []).filter(d => d.tipo !== 'recibo').reduce((a, d) => a + (Number(d.valor) || 0), 0);
-  const recibo = Math.max(0, ...(reg.pagos || []).filter(d => d.tipo === 'recibo').map(d => Number(d.valor) || 0));
-  const pago = Math.max(pix, recibo);   // recibo é quitação: já inclui os PIX daquele pagamento
+  const recibos = (reg.pagos || []).filter(d => d.tipo === 'recibo').map(d => Number(d.valor) || 0);
+  const recibo = Math.max(0, ...recibos), reciboSoma = recibos.reduce((a, v) => a + v, 0);
+  // recibo do valor total = quitação (já inclui os PIX); recibo menor que a nota = parte paga em dinheiro → soma com os PIX
+  const quitaTudo = recibo > 0 && (!fiscal || recibo + 0.01 >= fiscal * 0.98);
+  const pago = !recibo ? pix : quitaTudo ? Math.max(pix, recibo) : pix + reciboSoma;
   const total = fiscal || pago;
   p[campo] = Math.round(total * 100) / 100;
   const peloBanco = p.docs._costBanco && p.docs._costBanco[campo];
@@ -823,7 +826,16 @@ function cadastrosPelosArquivos() {
 }
 setTimeout(function esperarDados() {
   if (!S.processos || !S.processos.length || typeof saveToSheets !== 'function') { if (!window._cadastrosTentativas || window._cadastrosTentativas++ < 40) { window._cadastrosTentativas = window._cadastrosTentativas || 1; setTimeout(esperarDados, 3000); } return; }
-  try { if (cadastrosPelosArquivos() > 0) saveToSheets().catch(() => {}); } catch (e) { console.warn('cadastros', e); }
+  try {
+    // refaz os totais de custo com a regra atual (ex.: recibo em dinheiro soma com os PIX)
+    let mudou = 0;
+    (S.processos || []).forEach(p => Object.keys(((p.docs || {})._custoDocs) || {}).forEach(campo => {
+      const antes = p[campo] + '|' + p[campo + '_status'];
+      recalcularCustos(p, campo);
+      if (p[campo] + '|' + p[campo + '_status'] !== antes) mudou++;
+    }));
+    if (cadastrosPelosArquivos() > 0 || mudou) saveToSheets().catch(() => {});
+  } catch (e) { console.warn('cadastros', e); }
 }, 4000);
 
 // ═══════════════════════════════════════════════════════════════
