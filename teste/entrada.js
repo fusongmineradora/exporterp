@@ -99,6 +99,8 @@ saveToSheets = async function () {
       if (recarregar) { await loadFromSheets(); showToast('Dados recarregados'); render(); return; }
     }
   }
+  // célula do Google Sheets aceita até 50.000 caracteres: os dados de arquivos de cada processo são enxugados antes de passar disso
+  try { (S.processos || []).forEach(p => enxugarDocs(p)); } catch (e) { console.warn('enxugar', e); }
   // antes de gravar: junta processo renumerado e atualiza os custos previstos (containers, certificado, armazém, valor real)
   try { if (typeof lancamentosDeCustoViramBaixa === 'function' && lancamentosDeCustoViramBaixa() && typeof salvarBanco === 'function') salvarBanco().catch(() => {}); if (typeof ajustarInvoiceTransferida === 'function') ajustarInvoiceTransferida(); } catch (e) { console.warn('baixas', e); }
   try { if (typeof juntarProcessosRenumerados === 'function') juntarProcessosRenumerados(); if (typeof aplicarPrevistos === 'function') (S.processos || []).forEach(p => aplicarPrevistos(p)); } catch (e) { console.warn('previstos', e); }
@@ -1246,3 +1248,16 @@ saveConfig = async function (key, value) {
     if (rep.length) { const unicos = rows.filter((x, j) => j === 0 || !x[0] || rows.findIndex(y => y[0] === x[0]) === j); await sheetsAPI('POST', `/${SHEET_ID}/values:batchClear`, { ranges: ['CONFIG!A2:B200'] }); await sheetsAPI('PUT', `/${SHEET_ID}/values/CONFIG!A1:B${unicos.length}?valueInputOption=RAW`, { values: unicos.map(x => [x[0] || '', x[1] || '']) }); }
   } catch (e) {}
 };
+
+function enxugarDocs(p) {
+  if (!p || !p.docs) return;
+  const tam = () => JSON.stringify(p.docs).length;
+  if (tam() < 40000) return;
+  Object.values(p.docs._files || {}).forEach(arr => (arr || []).forEach(f => {
+    delete f.em; delete f.origem; delete f.formato; if (!f.chave) delete f.chave; if (!f.numero) delete f.numero; if (!f.emitente) delete f.emitente; if (!f.categoria) delete f.categoria;
+    if (f.pagamento) f.pagamento = { valor: f.pagamento.valor, data: f.pagamento.data, recebedor: f.pagamento.recebedor, identificacao: f.pagamento.identificacao, idTransacao: f.pagamento.idTransacao };
+    if (f.cambio && f.atalho) f.cambio = { referencia: f.cambio.referencia, contratoExtrato: f.cambio.contratoExtrato, faturas: f.cambio.faturas, usdFatura: f.cambio.usdFatura, usdTotal: f.cambio.usdTotal, reaisTotal: f.cambio.reaisTotal, taxa: f.cambio.taxa, data: f.cambio.data };
+  }));
+  Object.values(p.docs._custoDocs || {}).forEach(reg => ['fiscais', 'pagos'].forEach(k => (reg[k] || []).forEach(d => { if (d.nome && d.nome.length > 60) d.nome = d.nome.slice(0, 60); })));
+  if (tam() > 48000 && typeof showToast === 'function') showToast('⚠️ ' + p.id + ': muitos arquivos para uma célula da planilha — avise o suporte');
+}
