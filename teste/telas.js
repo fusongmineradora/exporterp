@@ -170,7 +170,7 @@ function renderInicio() {
       ${chip(entradaN, 'na Caixa de Entrada', 'var(--accent)', "nav('entrada')")}
     </div>
     <div id="falta-lista" style="display:flex;flex-direction:column;gap:8px;font-size:13.5px">
-      ${pend.length ? pend.slice(0, 12).map(x => `<div style="display:flex;gap:10px;align-items:flex-start"><span style="flex:none;width:8px;height:8px;border-radius:50%;background:${x.tipo === 'cambio' ? 'var(--green)' : 'var(--orange)'};margin-top:6px"></span><div>${linkProc(x.p.id)} ${escHtml(x.texto)}</div></div>`).join('') + (pend.length > 12 ? `<div style="color:var(--muted2);font-size:12.5px">+ ${pend.length - 12} outras pendências</div>` : '') : '<div style="color:var(--muted2)">Nada faltando nos processos.</div>'}
+      ${pend.length ? pend.slice(0, S._todasPend ? pend.length : 12).map(x => `<div style="display:flex;gap:10px;align-items:flex-start"><span style="flex:none;width:8px;height:8px;border-radius:50%;background:${x.tipo === 'cambio' ? 'var(--green)' : 'var(--orange)'};margin-top:6px"></span><div>${linkProc(x.p.id)} ${escHtml(x.texto)}</div></div>`).join('') + (pend.length > 12 ? `<button class="btn btn-secondary btn-sm" style="align-self:flex-start;min-height:40px" onclick="S._todasPend=!S._todasPend;render()">${S._todasPend ? 'Mostrar menos' : `Ver todas as pendências (+ ${pend.length - 12})`}</button>` : '') : '<div style="color:var(--muted2)">Nada faltando nos processos.</div>'}
     </div>`);
 
   const blocoCargas = card(`
