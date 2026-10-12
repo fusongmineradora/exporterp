@@ -1371,13 +1371,19 @@ const PREVISTOS_PADRAO = [
   { campo: 'custoServTerceiros', nome: 'Assessoria (Ademir / FFA)', valor: 1200, por: 'container' },
   { campo: 'custoDespachante', nome: 'Despachante (CGA)', valor: 500, por: 'processo', certificado: 50 },
   { campo: 'custoArmazem', nome: 'Armazém (estimado)', valor: 3200, por: 'container', soArmazem: true },
+  // frete marítimo (CFR/CIF): depende do porto de embarque — Santos R$ 6.500, Salvador R$ 11.500 por container (12/10/2026)
+  { campo: 'custoMaritimo', nome: 'Frete marítimo (estimado)', valor: 6500, valorSalvador: 11500, por: 'container', porPorto: true },
 ];
+const ehSalvador = p => /SALVADOR/i.test(String((p && (p.pol || '')) + ' ' + ((p && p.logPorto) || '')));
+const valorDaRegra = (r, p) => r.porPorto && ehSalvador(p) ? r.valorSalvador : r.valor;
+const freteDoComprador = p => /\b(FOB|FCA|EXW)\b/i.test(String((p && p.incoterm) || ''));
 function regrasPrevisto() {
   const rs = ((S.banco && S.banco.regras) || []).filter(r => r.tipo === 'previsto');
   return PREVISTOS_PADRAO.map(d => {
     const r = rs.find(x => x.valor === d.campo); if (!r) return Object.assign({}, d);
     const o = Object.assign({}, d, { valor: Number(r.categoria) || 0 });
     if (d.certificado != null && r.centro !== '' && r.centro != null) o.certificado = Number(r.centro) || 0;
+    if (d.porPorto && r.centro !== '' && r.centro != null) o.valorSalvador = Number(r.centro) || 0;
     return o;
   });
 }
@@ -1386,6 +1392,7 @@ function temCertificadoOrigem(p) { const d = p.docs || {}; if (d._semCertificado
 function vaiProArmazem(p) { const d = p.docs || {}; if (d._armazem != null) return !!d._armazem; return !!(p.logArmazem || /ARMAZ/i.test(p.logModalidade || '')); }
 function textoPrevisto(r, p) {
   const q = qtdContainers(p);
+  if (r.porPorto) return `R$ ${fmtBR2(valorDaRegra(r, p))} × ${q} container${q > 1 ? 's' : ''} (${ehSalvador(p) ? 'Salvador' : 'Santos'})`;
   return r.por === 'container' ? `R$ ${fmtBR2(r.valor)} × ${q} container${q > 1 ? 's' : ''}` : `R$ ${fmtBR2(r.valor)} por processo` + (r.certificado && temCertificadoOrigem(p) ? ` + R$ ${fmtBR2(r.certificado)} (certificado de origem)` : '');
 }
 function fmtBR2(v) { return (Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -1400,14 +1407,14 @@ function aplicarPrevistos(p) {
     const real = (reg && ((reg.fiscais || []).length || (reg.pagos || []).length)) || (p.docs._costBanco && p.docs._costBanco[r.campo])
       || (S.lancamentos || []).some(l => l.vinculo === 'processo' && l.vinculoId === p.id && l.categoria === PROCESS_COST_FIELDS[r.campo] && l.status !== 'Cancelado');
     if (real) { if (pv[r.campo]) { delete pv[r.campo]; mud++; } return; }   // chegou o valor real: deixa de ser previsto
-    if (p.status === 'Cancelado' || off[r.campo] || r.valor <= 0 || (r.soArmazem && !vaiProArmazem(p))) { tirar(r.campo); return; }
+    if (p.status === 'Cancelado' || off[r.campo] || valorDaRegra(r, p) <= 0 || (r.soArmazem && !vaiProArmazem(p)) || (r.porPorto && freteDoComprador(p))) { tirar(r.campo); return; }
     if (Number(p[r.campo]) > 0 && !pv[r.campo]) return;                    // valor digitado por você antes: não mexe
     if (pv[r.campo] && Math.abs((Number(p[r.campo]) || 0) - (Number(pv[r.campo].valor) || 0)) >= 0.01) {  // você alterou o valor
       if (!(Number(p[r.campo]) > 0)) { tirar(r.campo); return; }
       pv[r.campo] = { valor: Number(p[r.campo]), regra: 'alterado por você', editado: true }; mud++; return;
     }
     if (pv[r.campo] && pv[r.campo].editado) return;
-    const valor = Math.round(((r.por === 'container' ? r.valor * qtdContainers(p) : r.valor) + (r.certificado && temCertificadoOrigem(p) ? r.certificado : 0)) * 100) / 100;
+    const valor = Math.round(((r.por === 'container' ? valorDaRegra(r, p) * qtdContainers(p) : valorDaRegra(r, p)) + (r.certificado && temCertificadoOrigem(p) ? r.certificado : 0)) * 100) / 100;
     const regra = textoPrevisto(r, p);
     if (!pv[r.campo] || pv[r.campo].valor !== valor || Number(p[r.campo]) !== valor) mud++;
     pv[r.campo] = { valor, regra }; p[r.campo] = valor; p[r.campo + '_status'] = 'Em Aberto';
@@ -1439,9 +1446,10 @@ async function setArmazemPrevisto(id, sim) {
 async function editarPadroesPrevistos() {
   const rs = regrasPrevisto(), novas = [];
   for (const r of rs) {
-    const v = await uiPrompt(`${r.nome}: valor padrão em R$ ${r.por === 'container' ? 'por container' : 'por processo'}${r.soArmazem ? ' (só quando o container vai para o armazém)' : ''}.`, fmtBR2(r.valor), 'Custos previstos');
+    const v = await uiPrompt(`${r.nome}: valor padrão em R$ ${r.por === 'container' ? 'por container' : 'por processo'}${r.soArmazem ? ' (só quando o container vai para o armazém)' : ''}${r.porPorto ? ' — embarque por Santos' : ''}.`, fmtBR2(r.valor), 'Custos previstos');
     if (v == null) return;
     let cert = '';
+    if (r.porPorto) { const c = await uiPrompt(`${r.nome}: valor por container quando embarca por Salvador (R$). O valor anterior é o de Santos.`, fmtBR2(r.valorSalvador), 'Custos previstos'); if (c == null) return; cert = String(numBR(String(c).replace(/[^\d.,]/g, '')) || 0); }
     if (r.certificado != null) { const c = await uiPrompt(`${r.nome}: valor a mais quando tem certificado de origem (R$).`, fmtBR2(r.certificado), 'Custos previstos'); if (c == null) return; cert = String(numBR(String(c).replace(/[^\d.,]/g, '')) || 0); }
     novas.push({ id: genId(), tipo: 'previsto', valor: r.campo, categoria: String(numBR(String(v).replace(/[^\d.,]/g, '')) || 0), centro: cert, criadoEm: new Date().toISOString() });
   }
@@ -1738,7 +1746,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '67';
+const VERSAO_TESTE = '68';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
