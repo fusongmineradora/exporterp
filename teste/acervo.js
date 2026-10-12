@@ -988,7 +988,7 @@ function cadastrarPeloDoc(item) {
     cnpj = docs[0] || '';
   }
   const campo = item.campoCusto || (typeof campoCustoSugerido === 'function' ? campoCustoSugerido(item) : '') || CAMPO_POR_CATEG[item.categoria] || '';
-  const tipo = item.tipo === 'cte' || item.tipo === 'mdfe' ? 'Transportadora' : item.tipo === 'faturaFrete' ? 'Agente de Carga' : item.tipo === 'nfe' ? 'Fornecedor' : (TIPO_FORN_POR_CAMPO[campo] || 'Serviço de Terceiros');
+  const tipo = item._adm ? 'Despesas gerais (ADM)' : item.tipo === 'cte' || item.tipo === 'mdfe' ? 'Transportadora' : item.tipo === 'faturaFrete' ? 'Agente de Carga' : item.tipo === 'nfe' ? 'Fornecedor' : (TIPO_FORN_POR_CAMPO[campo] || 'Serviço de Terceiros');
   return garantirFornecedor({ nome, cnpj, tipo, ie: info.emitIE, cep: info.emitCep, end: info.emitEnd, origem: tipoLabel(item.tipo) });
 }
 // Completa os cadastros com o que já está anexado nos processos (roda ao abrir; não duplica)
@@ -1059,6 +1059,7 @@ setTimeout(async function esperarDados() {
     try { mudou += assessoriaPeloSaldo(); } catch (e) { console.warn('assessoria', e); }
     try { mudou += await pastasOficiais(); } catch (e) { console.warn('pastas oficiais', e); }
     const novosCad = cadastrosPelosArquivos();
+    try { if (typeof organizarCadastro === 'function') mudou += organizarCadastro(); } catch (e) { console.warn('cadastro organizado', e); }
     // só grava se algo mudou de verdade (evita regravar a planilha inteira a cada vez que abre)
     if (novosCad > 0 || (f0 == null ? mudou : foto() !== f0)) saveToSheets().catch(() => {});
     if (b0 != null && fotoBanco() !== b0 && typeof salvarBanco === 'function') salvarBanco().catch(() => {});
@@ -1804,7 +1805,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '69';
+const VERSAO_TESTE = '70';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
