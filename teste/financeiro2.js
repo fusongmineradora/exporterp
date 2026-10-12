@@ -148,7 +148,7 @@ async function importarOFXDrive() {
     const q = `'${ent}' in parents and trashed=false and (name contains '.ofx' or name contains '.OFX' or mimeType='application/x-ofx')`;
     const r = await driveAPI('GET', '/files', null, 'q=' + encodeURIComponent(q) + '&fields=files(id,name,createdTime)&orderBy=createdTime&pageSize=50');
     const files = r.files || [];
-    if (!files.length) { B.msg = { tipo: 'erro', texto: 'Nenhum arquivo OFX na pasta 📥 Entrada. Baixe o extrato no app do Itaú e salve (Compartilhar → Drive) na pasta "Fu Song ERP — TESTE / 📥 Entrada".' }; render(); return; }
+    if (!files.length) { B.msg = { tipo: 'erro', texto: 'Nenhum arquivo OFX na pasta 📥 Entrada. Baixe o extrato (OFX) no app do Itaú ou do Bradesco e salve (Compartilhar → Drive) na pasta ' + ENTRADA_FOLDER + '.' }; render(); return; }
     const pastaExtratos = await getTesteFolder('🏦 Extratos');
     const msgs = []; let erro = false;
     for (const f of files) {
@@ -170,7 +170,7 @@ async function importarOFXDrive() {
 async function importarOFXBytes(bytes, nome) {
   const B = S.banco;
   if (!window.FusongOFX) { B.msg = { tipo: 'erro', texto: 'Leitor de OFX não carregado. Recarregue a página.' }; return false; }
-  if (!ehOFX(bytes)) { B.msg = { tipo: 'erro', texto: `"${nome}" não é um extrato OFX. No app do Itaú escolha Extrato → Exportar → formato OFX (Money/Quicken).` }; return false; }
+  if (!ehOFX(bytes)) { B.msg = { tipo: 'erro', texto: `"${nome}" não é um extrato OFX. No app do banco (Itaú ou Bradesco) escolha Extrato → Exportar → formato OFX (Money/Quicken).` }; return false; }
   try {
     await carregarBanco();
     const hoje = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);
@@ -734,7 +734,7 @@ function renderConciliacao() {
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
         <div style="min-width:0;flex:1">
           <div style="font-weight:700;font-size:13px">${escHtml(l.favorecido || l.memo)}</div>
-          <div style="font-size:10.5px;color:var(--muted)">${isoToBr(l.data)} · ${escHtml(l.memo)}</div>
+          <div style="font-size:10.5px;color:var(--muted)">${isoToBr(l.data)}${/^0*237-/.test(String(l.conta || '')) ? ' · <b style="color:#CC092F">Bradesco</b>' : ''} · ${escHtml(l.memo)}</div>
         </div>
         <div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:13px;color:${cor};white-space:nowrap">${l.valor < 0 ? '−' : '+'} R$ ${fmt(Math.abs(l.valor))}</div>
       </div>
@@ -812,7 +812,7 @@ function renderConciliacao() {
   ${B.filtro === 'pendente' && lista.length ? `<div class="sec-divider"><div class="sec-divider-line"></div><div class="sec-divider-label">Pagamentos e outros</div><div class="sec-divider-line"></div></div>` : ''}
   ${lista.map(cardLinha).join('')}
   ${total > lista.length ? `<div style="text-align:center;margin:12px 0"><button class="btn btn-secondary btn-sm" onclick="S.banco.limite+=40;render()">Mostrar mais (${total - lista.length})</button></div>` : ''}
-  ${B.carregado && !B.linhas.length ? `<div class="card" style="text-align:center;padding:30px;color:var(--muted)">Nenhum extrato importado ainda. Baixe o OFX no app do Itaú e toque em "Importar extrato OFX".</div>` : ''}
+  ${B.carregado && !B.linhas.length ? `<div class="card" style="text-align:center;padding:30px;color:var(--muted)">Nenhum extrato importado ainda. Baixe o OFX no app do Itaú ou do Bradesco e toque em "Importar extrato OFX".</div>` : ''}
   ${typeof blocoFixos === 'function' && B.carregado ? `<div style="margin-top:18px">${blocoFixos()}</div>` : ''}`;
 }
 
