@@ -436,6 +436,18 @@ function aplicarDocNoProcesso(item, p, upd) {
   const info = item.info || {}, url = (upd && upd.webViewLink) || item.url || '';
   const mud = [];
   if (info.cambio) { if (aplicarCambioNoProcesso(p, info.cambio, url)) mud.push('câmbio'); }
+  // invoice / sales contract da Fu Song (a "versão Ademir" não vale): invoice dá o valor; o contrato só confirma
+  if ((item.tipo === 'invoice' || item.tipo === 'contrato') && !/ADEMIR/i.test(semAcento(item.nome || (upd && upd.name) || ''))) {
+    const d = docVendaDoItem(item);
+    if (d && d.totalUsd && (!d.numero || processoAtual(d.numero) === p.id || d.numero === p.id)) {
+      if (d.contrato) { p.docs._contratoUsd = d.totalUsd; }
+      else {
+        p.docs._invoiceUsd = d.totalUsd;
+        if (!(Number(p.cambioInvoice) > 0)) { p.cambioInvoice = d.totalUsd; mud.push('cambioInvoice'); }
+        ['cliente', 'produto', 'ncm', 'pol', 'pod', 'incoterm', 'pagamento', 'peso'].forEach(k => { if (d[k] && !p[k]) { p[k] = d[k]; mud.push(k); } });
+      }
+    }
+  }
   // logística
   if (item.tipo === 'cte' || item.tipo === 'mdfe') {
     const set = (k, v) => { if (v && (!p[k] || (v.length > p[k].length && v.toUpperCase().startsWith(p[k].toUpperCase())))) { p[k] = v; mud.push(k); } };
@@ -1605,7 +1617,8 @@ function ajustarInvoiceTransferida() {
   (S.processos || []).forEach(p => {
     const rec = (p.docs && p.docs._cambioRecebidoDe) || {}; if (!Object.keys(rec).length) return;
     if (p.docs._invoiceBase == null) p.docs._invoiceBase = Number(p.cambioInvoice) || 0;
-    const extra = Object.keys(rec).reduce((a, ref) => { const c = (p.docs._cambioDocs || {})[ref]; return a + (c ? Number(c.usd) || 0 : 0); }, 0);
+    // vale a invoice da Fu Song do processo de origem (ex.: FS260103 cancelado, USD 102.600); sem ela, o USD do contrato
+    const extra = Object.entries(rec).reduce((a, [ref, de]) => { const c = (p.docs._cambioDocs || {})[ref]; const o = (S.processos || []).find(x => x.id === de); const vi = o && Number(o.cambioInvoice) > 0 ? Number(o.cambioInvoice) : 0; return a + (vi || (c ? Number(c.usd) || 0 : 0)); }, 0);
     const novo = Math.round((p.docs._invoiceBase + extra) * 100) / 100;
     if (Number(p.cambioInvoice) !== novo) { p.cambioInvoice = novo; n++; }
   });
@@ -1693,7 +1706,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '59';
+const VERSAO_TESTE = '60';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -2039,6 +2052,8 @@ const ASSESSORIA_DECISAO = '2026-10-11';
 const ASSESSORIA_VIA_SOCIO = ['0341-8262994992|2026-08-20|-300000|PIX ENVIADO KLISMANN LAI 070.929.029-24|1'];
 // custos confirmados por você (11/10/2026): FS260112 tem mais de uma carga e todos os produtos já estão pagos (COOP R$ 8.100 + Thomazini R$ 43.200)
 const DECISOES_CUSTO = [['FS260112', 'custoProduto', 'Pago']];
+// valor das invoices da Fu Song conferido nos PDFs (a do FS260115 não tinha entrado no processo)
+const INVOICES_CONFERIDAS = { FS260115: 65880 };
 function ehLinhaAssessoria(l) { return l && l.valor < 0 && (l.lancId === 'saldo:ASSESSORIA' || ASSESSORIA_RE.test(semAcento((l.favorecido || '') + ' ' + (l.memo || '')))); }
 function assessoriaPeloSaldo() {
   let n = 0;
@@ -2061,6 +2076,7 @@ function assessoriaPeloSaldo() {
     const velho = l.lancId; if (velho) S.lancamentos = (S.lancamentos || []).filter(x => x.id !== velho);
     l.status = 'conciliado'; l.lancId = 'saldo:ASSESSORIA'; l.categoria = 'Serviços de Terceiros'; l.centro = 'Assessoria (saldo)'; l.obs = 'Assessoria Ademir/FFA paga pelo Klismann (PIX da empresa para o sócio, repassado ao Ademir)'; n++;
   });
+  Object.entries(INVOICES_CONFERIDAS).forEach(([id, v]) => { const p = (S.processos || []).find(x => x.id === id); if (p && !(Number(p.cambioInvoice) > 0)) { p.cambioInvoice = v; p.docs = p.docs || {}; p.docs._invoiceUsd = v; n++; } });
   DECISOES_CUSTO.forEach(([id, c, st]) => {
     const p = (S.processos || []).find(x => x.id === id); if (!p) return; p.docs = p.docs || {};
     if (p.docs._statusManual && p.docs._statusManual[c] === st && p[c + '_status'] === st) return;

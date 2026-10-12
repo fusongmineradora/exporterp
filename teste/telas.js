@@ -50,6 +50,8 @@ const CUSTOS_OBRIGATORIOS = [{ fase: 0, campo: 'custoProduto' }, { fase: 0, camp
 const CUSTO_SO_COMPROVANTE = ['custoMaritimo', 'custoArmazem', 'custoServTerceiros', 'custoDespachante'];
 // diferença pequena entre a invoice e o câmbio recebido = taxa do banco intermediador (ex.: USD 30), não é pendência
 const TAXA_INTERMEDIARIO_USD = 60;
+// tolerância por contrato de câmbio (cada remessa paga a tarifa do banco intermediário)
+function tolIntermediario(p) { return TAXA_INTERMEDIARIO_USD * Math.max(1, Object.keys((p && p.docs && p.docs._cambioDocs) || {}).length); }
 function estadoCusto(p, campo) {
   const reg = (p.docs && p.docs._custoDocs && p.docs._custoDocs[campo]) || { fiscais: [], pagos: [] };
   const valor = Number(p[campo]) || 0;
@@ -83,8 +85,9 @@ function pendenciasProcesso(p) {
     if (e.valor > 0 && e.status === 'Pago' && !e.comp && !(c === 'custoServTerceiros' && p.docs && p.docs._assessoriaSaldo)) out.push({ tipo: 'comprovante', texto: PROCESS_COST_FIELDS[c] + ' sem comprovante' });
   });
   Object.entries((p.docs && p.docs._costAdiant) || {}).forEach(([c, v]) => out.push({ tipo: 'nota', texto: `${PROCESS_COST_FIELDS[c]}: adiantamento de ${brl(v)} — aguardando a nota e o saldo` }));
+  { const ci = Number(p.docs && p.docs._contratoUsd) || 0, ii = Number(p.docs && p.docs._invoiceUsd) || 0; if (ci && ii && Math.abs(ci - ii) > 1) out.push({ tipo: 'doc', texto: `Sales Contract (USD ${fmt(ci)}) diferente da invoice (USD ${fmt(ii)})` }); }
   const inv = Number(p.cambioInvoice) || 0, rec = Number(p.cambioRecebido) || 0;
-  if (f >= 3 && inv > 0 && rec + TAXA_INTERMEDIARIO_USD < inv) out.push({ tipo: 'cambio', texto: rec ? `câmbio parcial: falta ${usd(inv - rec)}` : 'câmbio não recebido' });
+  if (f >= 3 && inv > 0 && rec + tolIntermediario(p) < inv) out.push({ tipo: 'cambio', texto: rec ? `câmbio parcial: falta ${usd(inv - rec)}` : 'câmbio não recebido' });
   return out;
 }
 function custosAbertos(p) { return Object.keys(PROCESS_COST_FIELDS).map(c => ({ campo: c, ...estadoCusto(p, c) })).filter(e => e.aberto > 0.009); }
@@ -131,7 +134,7 @@ function renderInicio() {
   const totalPrevisto = previstos.reduce((a, x) => a + x.aberto, 0);
   pagar.sort((a, b) => (b.dias || 0) - (a.dias || 0));
   const totalPagar = pagar.reduce((a, x) => a + x.aberto, 0);
-  const receber = ativos.map(p => ({ p, falta: (Number(p.cambioInvoice) || 0) - (Number(p.cambioRecebido) || 0) })).filter(x => x.falta > TAXA_INTERMEDIARIO_USD || (x.falta > 0.009 && !(Number(x.p.cambioRecebido) > 0)));
+  const receber = ativos.map(p => ({ p, falta: (Number(p.cambioInvoice) || 0) - (Number(p.cambioRecebido) || 0) })).filter(x => x.falta > tolIntermediario(x.p) || (x.falta > 0.009 && !(Number(x.p.cambioRecebido) > 0)));
   const totalReceberUsd = receber.reduce((a, x) => a + x.falta, 0);
   const pend = []; ativos.forEach(p => pendenciasProcesso(p).forEach(x => pend.push({ p, ...x })));
   const nDocs = pend.filter(x => x.tipo === 'doc' || x.tipo === 'custo').length, nComp = pend.filter(x => x.tipo === 'comprovante' || x.tipo === 'nota').length;
@@ -295,7 +298,7 @@ function renderProcesso2() {
 
     ${card(`${titulo2('Receita')}
       ${cambDocs.length ? cambDocs.map(x => `<div style="display:flex;justify-content:space-between;font-size:13.5px;gap:8px"><span>Câmbio ${escHtml(x.data || '')}</span><span style="font-family:'JetBrains Mono',monospace">${m2(x.reais)}</span></div><div style="font-size:12.5px;color:var(--muted2)">${usd(x.usd)} × ${(Number(x.taxa) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 4 })}${cambios.some(l => l.docs && l.docs._banco) ? ' · conciliado no extrato ✓' : ''}</div>`).join('') : (Number(p.cambioReais) ? `<div style="display:flex;justify-content:space-between;font-size:13.5px"><span>Câmbio</span><span style="font-family:'JetBrains Mono',monospace">${m2(p.cambioReais)}</span></div>` : '<div style="font-size:13.5px;color:var(--muted2)">Câmbio ainda não recebido.</div>')}
-      ${Number(p.cambioInvoice) && Number(p.cambioRecebido) > 0 && (Number(p.cambioRecebido) || 0) + 0.01 < Number(p.cambioInvoice) && Number(p.cambioInvoice) - Number(p.cambioRecebido) <= TAXA_INTERMEDIARIO_USD ? `<div style="font-size:12.5px;color:var(--muted2)">Taxa do banco intermediador: ${usd(p.cambioInvoice - p.cambioRecebido)}</div>` : Number(p.cambioInvoice) && (Number(p.cambioRecebido) || 0) + 0.01 < Number(p.cambioInvoice) ? `<div style="font-size:12.5px;color:var(--yellow)">Invoice ${usd(p.cambioInvoice)} · falta ${usd(p.cambioInvoice - (p.cambioRecebido || 0))}${S._ptax && S._ptax.venda ? ' (≈ ' + brl((p.cambioInvoice - (p.cambioRecebido || 0)) * S._ptax.venda) + ' hoje)' : ''}</div>` : ''}
+      ${Number(p.cambioInvoice) && Number(p.cambioRecebido) > 0 && (Number(p.cambioRecebido) || 0) + 0.01 < Number(p.cambioInvoice) && Number(p.cambioInvoice) - Number(p.cambioRecebido) <= tolIntermediario(p) ? `<div style="font-size:12.5px;color:var(--muted2)">Taxa do banco intermediador: ${usd(p.cambioInvoice - p.cambioRecebido)}</div>` : Number(p.cambioInvoice) && (Number(p.cambioRecebido) || 0) + 0.01 < Number(p.cambioInvoice) ? `<div style="font-size:12.5px;color:var(--yellow)">Invoice ${usd(p.cambioInvoice)} · falta ${usd(p.cambioInvoice - (p.cambioRecebido || 0))}${S._ptax && S._ptax.venda ? ' (≈ ' + brl((p.cambioInvoice - (p.cambioRecebido || 0)) * S._ptax.venda) + ' hoje)' : ''}</div>` : ''}
       ${nfSaida ? `<div style="display:flex;justify-content:space-between;font-size:13.5px;padding-top:8px;border-top:1px solid var(--border)"><span>NF-e de saída</span><span style="font-family:'JetBrains Mono',monospace">${m2(nfSaida)}</span></div>` : ''}`)}
 
     <section style="background:#0F2A5C;color:#FFFFFF;border-radius:14px;padding:16px;margin-bottom:24px;display:flex;flex-direction:column;gap:8px">
