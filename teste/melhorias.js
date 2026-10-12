@@ -454,7 +454,7 @@ const CAMPO_DO_TIPO = { 'Fornecedor': 'custoProduto', 'Transportadora': 'custoFr
 // [tipo, nome, CNPJ, outros nomes, custo (quando diferente do padrão do tipo)]
 const CADASTRO_REVISADO = [
   ['Fornecedor', 'Omar Mineracao', '42.918.857/0001-35', ['Omar Mineração LTDA']],
-  ['Fornecedor', 'Mineracao Terra Branca', '47.170.772/0001-35', ['AWM Mineracao', 'AWM Mineracao LTDA']],
+  ['Fornecedor', 'AWM Mineração (Terra Branca)', '47.170.772/0001-35', ['Mineracao Terra Branca', 'AWM Mineracao', 'AWM Mineracao LTDA']],   // mesma empresa (mesmo CNPJ); nome AWM — decidido em 12/10
   ['Fornecedor', 'Cooperativa Dos Garimpeiros De Novo Horizonte', '13.215.054/0001-16', []],
   ['Fornecedor', 'Mineracao Thomazini', '36.346.393/0001-37', ['Mineracao Thomazini LTDA']],
   ['Fornecedor', 'Cooperativa Mineral Da Bahia - Cmb', '08.020.967/0001-47', []],
@@ -568,6 +568,9 @@ function organizarCadastro() {
       (reg.pagos || []).forEach(d => { if (/^chave$/i.test(String(d.de || '').trim()) && emissores.length === 1) { d.de = emissores[0]; n++; } });
       const emp = p.docs._costEmpresa && p.docs._costEmpresa[campo];
       if (emissores.length === 1 && emp && !/ADEMIR|FFA|ASSESSORIA|PREVIST|ESTIMAD/i.test(semAcento(emp)) && chaveNome(nomeCanonico(emp)) !== chaveNome(emissores[0])) { p.docs._costEmpresa[campo] = emissores[0]; n++; }
+      // nome da empresa no custo igual ao do cadastro (ex.: "Mineracao Terra Branca" → "AWM Mineração (Terra Branca)")
+      const emp2 = p.docs._costEmpresa && p.docs._costEmpresa[campo], rv = emp2 && !(p.docs._previsto && p.docs._previsto[campo]) && !/ADEMIR|FFA|ASSESSORIA|PREVIST|ESTIMAD/i.test(semAcento(emp2)) ? revisadoDe(emp2, '') : null;
+      if (rv && emp2 !== rv[1]) { p.docs._costEmpresa[campo] = rv[1]; n++; }
     });
   });
   // 5) lançamentos: engenheiro de minas (Henrique) = serviço de terceiros; nome limpo
