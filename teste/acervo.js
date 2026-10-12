@@ -165,7 +165,7 @@ function numeroProcessoDoItem(it) {
 function podeCriarProcesso(it) {
   if (!it || !['invoice', 'contrato'].includes(it.tipo)) return '';
   const id = numeroProcessoDoItem(it);
-  if (!id || (S.processos || []).some(p => p.id === id)) return '';
+  if (!id || PROCESSOS_EXCLUIDOS[id] || (S.processos || []).some(p => p.id === id)) return '';
   return id;
 }
 
@@ -756,7 +756,7 @@ async function executarImportacaoTudo() {
     E.itens.forEach(it => { const id = podeCriarProcesso(it); if (id && !ids.includes(id)) ids.push(id); });
     const novos = [];
     for (const id of ids.sort()) {
-      if ((S.processos || []).some(p => p.id === id)) continue;
+      if ((S.processos || []).some(p => p.id === id) || PROCESSOS_EXCLUIDOS[id]) continue;
       etapa('Criando o processo ' + id + '...');
       const iDoc = E.itens.findIndex(it => podeCriarProcesso(it) === id);
       let p = iDoc >= 0 ? await criarProcessoDoDoc(iDoc, true) : null;
@@ -1730,7 +1730,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '62';
+const VERSAO_TESTE = '63';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -2078,6 +2078,8 @@ const ASSESSORIA_VIA_SOCIO = ['0341-8262994992|2026-08-20|-300000|PIX ENVIADO KL
 const DECISOES_CUSTO = [['FS260112', 'custoProduto', 'Pago']];
 // valor das invoices da Fu Song conferido nos PDFs (a do FS260115 não tinha entrado no processo)
 const INVOICES_CONFERIDAS = { FS260115: 65880 };
+// processos que não existem (informado por você): saem do sistema e a importação não os recria pela pasta do Drive
+const PROCESSOS_EXCLUIDOS = { FS260110: 'não existe (informado em 11/10/2026)' };
 // valor certo informado por você (11/10/2026): FS260117 é USD 13.500 de invoice e contrato (os PDFs de 27/09 dizem 21.600)
 const INVOICES_CORRIGIDAS = { FS260117: 13500 };
 function ehLinhaAssessoria(l) { return l && l.valor < 0 && (l.lancId === 'saldo:ASSESSORIA' || ASSESSORIA_RE.test(semAcento((l.favorecido || '') + ' ' + (l.memo || '')))); }
@@ -2101,6 +2103,12 @@ function assessoriaPeloSaldo() {
     if (!ASSESSORIA_VIA_SOCIO.includes(l.chave) || l.lancId === 'saldo:ASSESSORIA') return;
     const velho = l.lancId; if (velho) S.lancamentos = (S.lancamentos || []).filter(x => x.id !== velho);
     l.status = 'conciliado'; l.lancId = 'saldo:ASSESSORIA'; l.categoria = 'Serviços de Terceiros'; l.centro = 'Assessoria (saldo)'; l.obs = 'Assessoria Ademir/FFA paga pelo Klismann (PIX da empresa para o sócio, repassado ao Ademir)'; n++;
+  });
+  Object.keys(PROCESSOS_EXCLUIDOS).forEach(id => {
+    const i = (S.processos || []).findIndex(x => x.id === id); if (i < 0) return;
+    S.processos.splice(i, 1); n++;
+    logAction('excluir', 'PROCESSOS', id, 'Processo excluído: ' + PROCESSOS_EXCLUIDOS[id]);
+    if (S.sub && S.sub.id === id) S.sub = null;
   });
   Object.entries(INVOICES_CORRIGIDAS).forEach(([id, v]) => { const p = (S.processos || []).find(x => x.id === id); if (!p) return; p.docs = p.docs || {}; if (Number(p.cambioInvoice) !== v || p.docs._invoiceCorrigida !== v) { p.cambioInvoice = v; p.docs._invoiceCorrigida = v; p.docs._invoiceUsd = v; p.docs._contratoUsd = v; n++; } });
   Object.entries(INVOICES_CONFERIDAS).forEach(([id, v]) => { const p = (S.processos || []).find(x => x.id === id); if (p && !(Number(p.cambioInvoice) > 0)) { p.cambioInvoice = v; p.docs = p.docs || {}; p.docs._invoiceUsd = v; n++; } });
