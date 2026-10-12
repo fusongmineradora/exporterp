@@ -302,6 +302,7 @@ function lerXmlFiscal(txt) {
     munFim: [first('xMunFim'), first('UFFim')].filter(Boolean).join(' / '),
     transpNome: (() => { const t = doc.getElementsByTagNameNS('*', 'transporta')[0]; return t ? first('xNome', t) : ''; })(),
     infCpl: first('infCpl').slice(0, 500),
+    ncm: first('NCM'),   // NCM do primeiro produto (usado na invoice / contrato)
   };
   info.tipo = tipoPorModelo(info.modelo);
   if (info.tipo === 'nfe' && (info.emitCnpj === FU_SONG_CNPJ || /^7/.test(info.cfop))) info.tipo = 'nfeSaida';

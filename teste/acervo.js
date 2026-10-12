@@ -295,6 +295,11 @@ const MESES_PT = { janeiro: '01', fevereiro: '02', marco: '03', 'março': '03', 
 const titulo = s => String(s || '').toLowerCase().replace(/(^|[\s\/-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase()).replace(/\b(Ltda|S\.?a\.?|Me|Epp)\b/gi, x => x.toUpperCase()).replace(/([\s\/-])([A-Za-z]{2})$/, (m, a, b) => a + b.toUpperCase());
 const dataBrDe = t => { const m = String(t || '').match(/\b(\d{2}\/\d{2}\/\d{4})\b/); return m ? m[1] : ''; };
 
+// NCM do produto no DANFE: "PEGMATITO 25291000 0102 6501 KG" (NCM · CST · CFOP · unidade)
+function ncmDoDanfe(U) {
+  const m = String(U || '').match(/\b(\d{4}\.?\d{2}\.?\d{2})\s+\d{2,4}\s+[1-7]\d{3}\s+[A-Z³]{1,6}\b/);
+  return m ? m[1].replace(/\D/g, '') : '';
+}
 function enriquecerInfo(item) {
   const T = String(item.texto || ''), U = T.replace(/\s+/g, ' ');
   const info = item.info = item.info || {};
@@ -315,6 +320,7 @@ function enriquecerInfo(item) {
     if (!info.emitNome) info.emitNome = mx(/RECEBEMOS DE\s+(.+?)\s+OS PRODUTOS/i);
     if (!info.valor) info.valor = valorDanfe(T);
     if (!info.data) { const d = mx(/DATA (?:DA )?EMISS[AÃ]O[\s\S]{0,120}?(\d{2}\/\d{2}\/\d{4})/i) || dataBrDe(U); if (d) info.data = brToIso(d); }
+    if (!info.ncm) info.ncm = ncmDoDanfe(U);
     if (!info.transpNome) info.transpNome = mx(/TRANSPORTADOR[\s\S]{0,140}?CNPJ \/ CPF\s+([A-ZÀ-Ú][A-ZÀ-Ú .&-]{3,60}?)\s+\d-/i);
   }
   if (item.tipo === 'nfse') {
@@ -1805,7 +1811,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '72';
+const VERSAO_TESTE = '73';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
