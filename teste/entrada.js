@@ -1107,6 +1107,7 @@ async function confirmarAdm(i, silencioso) {
       if (S.banco) S.banco.docs = docs;
     }
     logAction('anexar', 'DOCUMENTOS', upd.id, 'ADM: ' + upd.name + ' (Caixa de Entrada)');
+    item._adm = true;   // despesa geral: quem emitiu vira cadastro de "Despesas gerais (ADM)" (se ainda não existe)
     if (typeof cadastrarPeloDoc === 'function') { try { cadastrarPeloDoc(item); } catch (e) { console.warn('cadastro', e); } }
     if (item.pagoPor === 'socio' && typeof lancarReembolsoSocio === 'function') lancarReembolsoSocio(item, null, upd);
     else if (['nfse', 'recibo'].includes(item.tipo) && typeof lancarDespesaDaNota === 'function') lancarDespesaDaNota(item, upd);
