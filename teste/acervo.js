@@ -994,6 +994,7 @@ setTimeout(async function esperarDados() {
     (S.processos || []).forEach(p => { mudou += aplicarPrevistos(p); });
     try { mudou += lancamentosRepetidos(); mudou += vinculosDoBanco(); } catch (e) { console.warn('vínculos do banco', e); }
     try { mudou += assessoriaPeloSaldo(); } catch (e) { console.warn('assessoria', e); }
+    try { mudou += await pastasOficiais(); } catch (e) { console.warn('pastas oficiais', e); }
     const novosCad = cadastrosPelosArquivos();
     // só grava se algo mudou de verdade (evita regravar a planilha inteira a cada vez que abre)
     if (novosCad > 0 || (f0 == null ? mudou : foto() !== f0)) saveToSheets().catch(() => {});
@@ -1730,8 +1731,8 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '65';
-setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
+const VERSAO_TESTE = '66';
+setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
 function tarifasCambioForaDosProcessos() {
@@ -2155,6 +2156,22 @@ function blocoContaAssessoria() {
       ${dif < -0.009 ? `<div style="color:var(--yellow);padding-top:6px">A diferença de ${m(-dif)} pode ter sido paga por outra conta, em dinheiro, ou ainda não foi paga.</div>` : ''}
     </div>` : ''}
   </div>`;
+}
+// Sistema oficial: a pasta de cada processo é a sua pasta em "Processos Unificados" (FS - booking - cliente…)
+async function pastasOficiais() {
+  const E = window.ERP_ENV || {}; if (E.nome !== 'oficial' || !E.rootFolderId) return 0;
+  const flag = E.flagPasta || '_pastaOficial';
+  const falta = (S.processos || []).filter(p => !(p.docs && p.docs[flag] && p.docs._folderId)); if (!falta.length) return 0;
+  const pastas = await driveListAll(`'${E.rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`, 'id,name');
+  const canc = pastas.find(f => /^99\s*CANCELADOS/i.test(semAcento(f.name)));
+  if (canc) (await driveListAll(`'${canc.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`, 'id,name')).forEach(f => pastas.push(f));
+  let n = 0;
+  falta.forEach(p => {
+    const f = pastas.find(x => new RegExp('^' + p.id + '(?![0-9S])').test(String(x.name).trim()));
+    if (!f) return;
+    p.docs = p.docs || {}; p.docs._folderId = f.id; p.docs._folderUrl = 'https://drive.google.com/drive/folders/' + f.id; p.docs._nomePasta = String(f.name).trim(); p.docs[flag] = true; n++;
+  });
+  return n;
 }
 // câmbio: taxa com 4 casas
 function arredondarTaxas() { let n = 0; (S.processos || []).forEach(p => { const t = Number(p.cambioTaxa); if (t && String(p.cambioTaxa).length > 6) { p.cambioTaxa = Math.round(t * 10000) / 10000; n++; } }); return n; }

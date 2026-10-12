@@ -13,11 +13,17 @@
 S.processos = []; S.clientes = []; S.fornecedores = []; S.lancamentos = []; S.custosMensais = [];
 // Geração 3 (11/10/2026): recomeço do zero para importar a organização nova (Processos Unificados + Despesas Gerais + OFX);
 // planilha e pasta novas — as das gerações 1 e 2 ficam no Drive sem uso
-const TESTE_SHEET_NAME = 'Fu Song ERP Database — TESTE 3';
+// Ambiente (definido no index.html): oficial = planilha e pasta fixas; teste = cópia própria (TESTE 4)
+const ERP_ENV = window.ERP_ENV || {};
+const TESTE_SHEET_NAME = ERP_ENV.sheetName || 'Fu Song ERP Database — TESTE 3';
+const GERACAO = ERP_ENV.geracao || '3';
+const FLAG_PASTA = ERP_ENV.flagPasta || '_testeOk';
+if (ERP_ENV.rootFolderId) window._rootFolderId = ERP_ENV.rootFolderId;
 let _ensureTestSheetPromise = null;
 
 function ensureTestSheet() {
   if (SHEET_ID !== TESTE_SENTINEL) return Promise.resolve(SHEET_ID);
+  if (ERP_ENV.sheetId) { SHEET_ID = ERP_ENV.sheetId; return Promise.resolve(SHEET_ID); }
   if (!_ensureTestSheetPromise) {
     _ensureTestSheetPromise = _ensureTestSheet().catch(e => { _ensureTestSheetPromise = null; throw e; });
   }
@@ -26,10 +32,10 @@ function ensureTestSheet() {
 
 async function _ensureTestSheet() {
   // recomeço (geração 3): o backup local da planilha antiga não pode voltar
-  try { if (localStorage.getItem('teste:geracao') !== '3') { localStorage.removeItem('teste:erp-local-backup'); localStorage.setItem('teste:geracao', '3'); } } catch (e) {}
+  try { if (localStorage.getItem('teste:geracao') !== GERACAO) { localStorage.removeItem('teste:erp-local-backup'); localStorage.setItem('teste:geracao', GERACAO); } } catch (e) {}
   // a) já usada neste aparelho
   let saved = null;
-  try { saved = localStorage.getItem('teste:sheet-id-3'); } catch (e) {}
+  try { saved = localStorage.getItem('teste:sheet-id-' + GERACAO); } catch (e) {}
   if (saved && saved !== PROD_SHEET_ID) {
     try {
       const f = await driveAPI('GET', '/files/' + saved, null, 'fields=id,trashed');
@@ -51,7 +57,7 @@ async function _ensureTestSheet() {
     showToast('✅ Planilha de testes criada');
   }
   if (SHEET_ID === PROD_SHEET_ID) throw new Error('Bloqueado: planilha de testes igual à de produção.');
-  try { localStorage.setItem('teste:sheet-id-3', SHEET_ID); } catch (e) {}
+  try { localStorage.setItem('teste:sheet-id-' + GERACAO, SHEET_ID); } catch (e) {}
   return SHEET_ID;
 }
 
@@ -61,7 +67,7 @@ async function loadFromSheets() {
   await _loadFromSheetsBase();
   let changed = 0;
   (S.processos || []).forEach(p => {
-    if (p.docs && p.docs._folderId && !p.docs._testeOk) {
+    if (p.docs && p.docs._folderId && !p.docs[FLAG_PASTA]) {
       p.docs._prodFolderId = p.docs._folderId;
       p.docs._prodFolderUrl = p.docs._folderUrl || '';
       delete p.docs._folderId;
@@ -148,7 +154,7 @@ function docFilesHtml(p, k) {
 }
 
 // ── 3. CAIXA DE ENTRADA ─────────────────────────────────────
-const ENTRADA_FOLDER = '📥 Entrada';
+const ENTRADA_FOLDER = (window.ERP_ENV && ERP_ENV.entradaNome) || '📥 Entrada';
 const DUPLICADOS_FOLDER = '🔁 Duplicados';
 const ENTRADA_TIPOS = [
   ['invoice', 'Invoice'], ['contrato', 'Contrato'], ['packingList', 'Packing List'], ['bl', 'BL'],
@@ -167,7 +173,10 @@ async function getTesteFolder(name) {
   // duas chamadas ao mesmo tempo criavam DUAS pastas "📥 Entrada" (uma recebia os arquivos e a outra era lida): guarda a promessa
   window._testeFoldersP = window._testeFoldersP || {};
   if (!window._testeFoldersP[name]) window._testeFoldersP[name] = (async () => {
-    const root = await getRootFolderId();
+    // oficial: a Caixa de Entrada é a sua pasta "00 Entrada"; as pastas de trabalho do sistema ficam juntas numa subpasta
+    if (name === ENTRADA_FOLDER && ERP_ENV.entradaId) { window._testeFolders[name] = ERP_ENV.entradaId; return ERP_ENV.entradaId; }
+    let root = await getRootFolderId();
+    if (name !== ENTRADA_FOLDER && ERP_ENV.sistemaNome) root = await getOrCreateFolder(ERP_ENV.sistemaNome, root);
     const id = await getOrCreateFolder(name, root);
     window._testeFolders[name] = id;
     return id;
@@ -952,6 +961,8 @@ function nomePadrao(item, p) {
   return partes.join('_').replace(/-+/g, '-') + ext;
 }
 
+// pasta do processo (oficial): cada documento vai para a subpasta de sempre
+const SUBPASTA_DO_TIPO = { invoice: '01 Comercial', contrato: '01 Comercial', packingList: '01 Comercial', nfe: '02 Fiscal', nfeSaida: '02 Fiscal', nfse: '02 Fiscal', cte: '03 Transporte', mdfe: '03 Transporte', pesagem: '03 Transporte', bl: '04 Embarque', due: '04 Embarque', certOrigem: '04 Embarque', seguro: '04 Embarque', pagamento: '05 Financeiro', comprovantes: '05 Financeiro', recibo: '05 Financeiro', faturaFrete: '05 Financeiro', outros: '06 Fotos' };
 async function confirmarEntrada(i, silencioso) {
   const E = S.entrada, item = E.itens[i];
   if (!item || item.salvando) return;
@@ -965,7 +976,8 @@ async function confirmarEntrada(i, silencioso) {
     let folderId = p.docs && p.docs._folderId;
     if (!folderId) { const r = await criarPastaProcesso(p); folderId = r && r.folderId; }
     if (!folderId) throw new Error('Não foi possível criar a pasta do processo');
-    if (item.tipo === 'pagamento') folderId = await getOrCreateFolder('Comprovantes', folderId);
+    if (ERP_ENV.subpastas) { const sub = SUBPASTA_DO_TIPO[item.tipo] || '05 Financeiro'; folderId = await getOrCreateFolder(sub, folderId); }
+    else if (item.tipo === 'pagamento') folderId = await getOrCreateFolder('Comprovantes', folderId);
     const novoNome = nomePadrao(item, p);
     const upd = await driveAPI('PATCH', '/files/' + item.fileId,
       { name: novoNome, description: 'Nome original: ' + item.nome + ' · anexado pela Caixa de Entrada em ' + new Date().toLocaleString('pt-BR') },
@@ -1250,8 +1262,8 @@ function renderEntrada() {
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       ${E.folderUrl ? `<a class="btn btn-secondary btn-sm" href="${sanitizeUrl(E.folderUrl)}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">📂 Abrir pasta</a>` : ''}
-      <button class="btn btn-primary btn-sm" onclick="importarTudo()" ${E.carregando || (E.tudo && E.tudo.rodando) ? 'disabled' : ''}>🗂️ Importar tudo de uma pasta</button>
-      <button class="btn btn-secondary btn-sm" onclick="importarPastaProcesso()" ${E.carregando ? 'disabled' : ''}>📂 Importar pasta de um processo</button>
+      ${ERP_ENV.nome === 'oficial' ? '' : `<button class="btn btn-primary btn-sm" onclick="importarTudo()" ${E.carregando || (E.tudo && E.tudo.rodando) ? 'disabled' : ''}>🗂️ Importar tudo de uma pasta</button>
+      <button class="btn btn-secondary btn-sm" onclick="importarPastaProcesso()" ${E.carregando ? 'disabled' : ''}>📂 Importar pasta de um processo</button>`}
       <button class="btn btn-secondary btn-sm" onclick="S.entrada.lido=false;lerEntrada()" ${E.carregando ? 'disabled' : ''}>🔄 Atualizar</button>
       <button class="btn btn-primary btn-sm" onclick="confirmarTodosEntrada()" ${prontos ? '' : 'disabled'}>✅ Anexar identificados (${prontos})</button>
       ${prontosTodos > prontos ? `<button class="btn btn-secondary btn-sm" onclick="confirmarTodosEntrada(true)">Anexar todos com processo (${prontosTodos})</button>` : ''}
