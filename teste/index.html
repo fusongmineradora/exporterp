@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
+<script>window.ERP_ENV={nome:'teste',sheetId:'1b9jBP8PUceHUYymYCIbKXTl9GRBEJAfAZgUTTwsor_I',sheetName:'Fu Song ERP Database — TESTE 4',geracao:'4',flagPasta:'_pastaTeste4',rootFolderName:'Fu Song ERP — TESTE 4'};</script>
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
@@ -4518,6 +4519,7 @@ async function sheetsAPI(method, endpoint, body=null, _retry=false) {
     endpoint = String(endpoint).split(TESTE_SENTINEL).join(SHEET_ID);
   }
   if (String(endpoint).includes(PROD_SHEET_ID)) throw new Error('Bloqueado: o ambiente de testes não grava na planilha de produção.');
+  if (window.ERP_ENV && ERP_ENV.nome === 'teste' && String(endpoint).includes('1JYKfcws3T9839njEjlYAT9v3NKpHNG0G9psK5uF-qf4')) throw new Error('Bloqueado: o ambiente de testes não grava na planilha oficial.');
   const token = await getAccessToken();
   const opts = {
     method,
@@ -4886,7 +4888,7 @@ function hideSyncIndicator() {
 // ═══════════════════════════════════════════════════════════
 const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
-const ROOT_FOLDER_NAME = 'Fu Song ERP — TESTE 3';
+const ROOT_FOLDER_NAME = (window.ERP_ENV && ERP_ENV.rootFolderName) || 'Fu Song ERP — TESTE 3';
 
 async function driveAPI(method, endpoint, body=null, params='') {
   const token = await getAccessToken();
@@ -4952,7 +4954,7 @@ async function criarPastaProcesso(processo) {
       if (!p.docs) p.docs = {};
       p.docs._folderId = folderId;
       p.docs._folderUrl = folderUrl;
-      p.docs._testeOk = true;
+      p.docs[(window.ERP_ENV && ERP_ENV.flagPasta) || '_testeOk'] = true;
     }
 
     hideSyncIndicator();
@@ -5592,10 +5594,10 @@ if (!checkSession()) {
   applyTheme();
 }
 </script>
-<script src="entrada.js?v=30418dc533"></script>
+<script src="entrada.js?v=a5d5c88a57"></script>
 <script src="ofx.js?v=fb95a29ab3"></script>
 <script src="financeiro2.js?v=eee13e56f1"></script>
-<script src="acervo.js?v=66bc3e556e"></script>
-<script src="telas.js?v=c35cd0bb35"></script>
+<script src="acervo.js?v=f621f793d9"></script>
+<script src="telas.js?v=79fcf1cb5f"></script>
 </body>
 </html>

@@ -511,7 +511,7 @@ criarPastaProcesso = async function (processo) {
     const folderId = ja ? ja.id : await getOrCreateFolder(nome, rootId);
     if (!ja) for (const sub of ['01 Comercial', '02 Fiscal', '03 Transporte', '04 Embarque', '05 Financeiro', '06 Fotos']) { try { await getOrCreateFolder(sub, folderId); } catch (e) {} }
     const p = (S.processos || []).find(x => x.id === processo.id);
-    if (p) { p.docs = p.docs || {}; p.docs._folderId = folderId; p.docs._folderUrl = 'https://drive.google.com/drive/folders/' + folderId; p.docs._testeOk = true; p.docs._nomePasta = ja ? ja.name : nome; }
+    if (p) { p.docs = p.docs || {}; p.docs._folderId = folderId; p.docs._folderUrl = 'https://drive.google.com/drive/folders/' + folderId; p.docs[typeof FLAG_PASTA !== 'undefined' ? FLAG_PASTA : '_testeOk'] = true; p.docs._nomePasta = ja ? ja.name : nome; }
     hideSyncIndicator(); scheduleAutoSave();
     return { folderId, folderUrl: 'https://drive.google.com/drive/folders/' + folderId };
   } catch (e) {
