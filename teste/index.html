@@ -4519,7 +4519,7 @@ async function sheetsAPI(method, endpoint, body=null, _retry=false) {
     endpoint = String(endpoint).split(TESTE_SENTINEL).join(SHEET_ID);
   }
   if (String(endpoint).includes(PROD_SHEET_ID)) throw new Error('Bloqueado: o ambiente de testes não grava na planilha de produção.');
-  if (window.ERP_ENV && ERP_ENV.nome === 'teste' && String(endpoint).includes('1JYKfcws3T9839njEjlYAT9v3NKpHNG0G9psK5uF-qf4')) throw new Error('Bloqueado: o ambiente de testes não grava na planilha oficial.');
+  if (window.ERP_ENV && ERP_ENV.nome === 'teste' && method !== 'GET' && String(endpoint).includes('1JYKfcws3T9839njEjlYAT9v3NKpHNG0G9psK5uF-qf4')) throw new Error('Bloqueado: o ambiente de testes não grava na planilha oficial.');
   const token = await getAccessToken();
   const opts = {
     method,
@@ -5595,9 +5595,10 @@ if (!checkSession()) {
 }
 </script>
 <script src="entrada.js?v=a5d5c88a57"></script>
-<script src="ofx.js?v=fb95a29ab3"></script>
-<script src="financeiro2.js?v=eee13e56f1"></script>
-<script src="acervo.js?v=f621f793d9"></script>
+<script src="ofx.js?v=a29f3f6ea6"></script>
+<script src="financeiro2.js?v=3a4670be59"></script>
+<script src="acervo.js?v=5e57e985a3"></script>
 <script src="telas.js?v=79fcf1cb5f"></script>
+<script src="melhorias.js?v=8e2f598ae6"></script>
 </body>
 </html>
