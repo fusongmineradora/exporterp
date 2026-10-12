@@ -164,6 +164,43 @@ function divergenciasDocs(p) {
       else if (!/FOB|FCA|EXW/.test(inc) && vmle > inv + 1) out.push(`VMLE da DU-E (USD ${fmt(vmle)}) maior que a invoice (USD ${fmt(inv)})`);
     }
   }
+  divergenciasVenda(p).forEach(t => out.push(t));
+  return out;
+}
+// invoice × contrato × BL: 27.000 kg por container, a conta da tabela, campo a campo e a conta bancária
+const CONTA_FU_SONG = { agencia: '8262', conta: '00994992' };
+const kgBR = n => Math.round(Number(n) || 0).toLocaleString('pt-BR');
+function divergenciasVenda(p) {
+  const d = p.docs || {}, out = [], inv = d._invoice, ct = d._contrato;
+  const temS = (S.processos || []).some(q => q.id === p.id + 'S');   // venda dividida com o processo "S": pesos e containers somam os dois
+  const nBl = ((d._bl && d._bl.containers) || []).filter(Boolean).length, nCt = Number(d._contratoCont) || 0;
+  if (!temS) {
+    const n = nBl || nCt;
+    const kgInv = (inv && inv.kg) || 0;
+    if (kgInv && n && Math.abs(kgInv - n * KG_POR_CONTAINER) > 1) out.push(`Invoice com ${kgBR(kgInv)} kg, mas ${n} container(s) ${nBl ? 'no BL' : 'no contrato'} = ${kgBR(n * KG_POR_CONTAINER)} kg`);
+    if (ct && ct.kg && nCt && Math.abs(ct.kg - nCt * KG_POR_CONTAINER) > 1) out.push(`Sales Contract com ${kgBR(ct.kg)} kg e ${nCt} container(s) (seria ${kgBR(nCt * KG_POR_CONTAINER)} kg)`);
+  }
+  // a conta da tabela: quantidade × preço por kg = total
+  [['Invoice', inv], ['Sales Contract', ct]].forEach(([nome, x]) => {
+    if (!x || !x.linhas) return;
+    // o preço impresso pode estar arredondado (0,383 de 0,38333…): tolera meia casa do último dígito
+    x.linhas.forEach(l => { const c = Math.round(l.kg * l.preco * 100) / 100, tol = Math.max(0.5, l.kg * 0.5 * Math.pow(10, -(l.dec == null ? 2 : l.dec))); if (Math.abs(c - l.total) > tol) out.push(`${nome}: ${kgBR(l.kg)} kg × USD ${String(l.preco).replace('.', ',')} = USD ${fmt(c)}, mas a linha diz USD ${fmt(l.total)}`); });
+    const soma = x.linhas.reduce((a, l) => a + l.total, 0);
+    if (x.total && Math.abs(soma - x.total) > 0.5) out.push(`${nome}: soma das linhas USD ${fmt(soma)} diferente do total USD ${fmt(x.total)}`);
+  });
+  // invoice × contrato, campo a campo (o valor total já é conferido à parte)
+  if (inv && ct) {
+    const nt = s => semAcento(String(s || '')).replace(/[^A-Z0-9%]/g, '');
+    if (inv.produto && ct.produto && nt(inv.produto) !== nt(ct.produto)) out.push(`Produto diferente: invoice "${inv.produto}" × contrato "${ct.produto}"`);
+    if (inv.kg && ct.kg && Math.abs(inv.kg - ct.kg) > 1) out.push(`Quantidade diferente: invoice ${kgBR(inv.kg)} kg × contrato ${kgBR(ct.kg)} kg`);
+    const pi = inv.linhas && inv.linhas[0] && inv.linhas[0].preco, pc = ct.linhas && ct.linhas[0] && ct.linhas[0].preco;
+    if (pi && pc && Math.abs(pi - pc) > 0.0001) out.push(`Preço por kg diferente: invoice USD ${String(pi).replace('.', ',')} × contrato USD ${String(pc).replace('.', ',')}`);
+    const cidade = s => nt(String(s || '').split(',')[0]);
+    if (inv.pod && ct.pod && cidade(inv.pod) !== cidade(ct.pod)) out.push(`Porto de destino diferente: invoice ${inv.pod} × contrato ${ct.pod}`);
+    if (inv.containers && nCt && inv.containers !== nCt) out.push(`Containers: invoice ${inv.containers} × contrato ${nCt}`);
+  }
+  // conta bancária impressa na invoice
+  if (inv && inv.conta && (inv.conta.agencia !== CONTA_FU_SONG.agencia || inv.conta.conta !== CONTA_FU_SONG.conta)) out.push(`Invoice com conta bancária diferente da Fu Song (agência ${inv.conta.agencia} / conta ${inv.conta.conta}; o certo é 8262 / 0099499-2)`);
   return out;
 }
 if (typeof pendenciasProcesso === 'function' && !pendenciasProcesso._div) {
@@ -177,7 +214,8 @@ async function conferirDocumentos() {
   const tarefas = [];
   ps.forEach(p => {
     const d = p.docs = p.docs || {};
-    if (!d._contratoCont) arquivos(p, 'contrato').filter(f => !/ADEMIR/i.test(semAcento(f.name || ''))).slice(0, 1).forEach(f => tarefas.push({ p, tipo: 'contrato', f }));
+    if (!d._contrato) arquivos(p, 'contrato').filter(f => !/ADEMIR/i.test(semAcento(f.name || ''))).slice(0, 1).forEach(f => tarefas.push({ p, tipo: 'contrato', f }));
+    if (!d._invoice) arquivos(p, 'invoice').filter(f => !/ADEMIR/i.test(semAcento(f.name || ''))).slice(0, 1).forEach(f => tarefas.push({ p, tipo: 'invoice', f }));
     arquivos(p, 'due').forEach(f => { const ja = Object.values(d._dues || {}).length && (d._duesLidos || []).includes(idDoArquivo(f.url)); if (!ja) tarefas.push({ p, tipo: 'due', f }); });
   });
   const lidos = tarefas.filter(t => idDoArquivo(t.f.url));
@@ -188,10 +226,15 @@ async function conferirDocumentos() {
     try {
       const id = idDoArquivo(t.f.url);
       const texto = await pdfTexto(await driveDownload(id));
-      if (t.tipo === 'contrato') {
+      if (t.tipo === 'contrato' || t.tipo === 'invoice') {
         const v = lerDocVenda(texto);
-        if (v && v.qtdContainer) t.p.docs._contratoCont = Number(v.qtdContainer) || 0;
-        if (v && v.totalUsd && !t.p.docs._contratoUsd && v.contrato) t.p.docs._contratoUsd = v.totalUsd;
+        if (v && (!v.numero || v.numero.replace(/S$/, '') === t.p.id.replace(/S$/, ''))) {
+          v.contrato = t.tipo === 'contrato';
+          guardarDadosVenda(t.p, v);
+          if (v.contrato && v.qtdContainer) t.p.docs._contratoCont = Number(v.qtdContainer) || 0;
+          if (v.contrato && v.totalUsd && !t.p.docs._contratoUsd) t.p.docs._contratoUsd = v.totalUsd;
+          ajustarContainersPelosDocs(t.p);
+        }
       } else {
         const it = { tipo: 'due', texto, info: {} }; enriquecerInfo(it);
         if (it.info.vmle || it.info.pesoLiq) { t.p.docs._dues = t.p.docs._dues || {}; t.p.docs._dues[it.info.dueNumero || id] = { vmle: Number(it.info.vmle) || 0, peso: Number(it.info.pesoLiq) || 0 }; }
@@ -204,7 +247,7 @@ async function conferirDocumentos() {
   await saveToSheets();
   const div = []; (S.processos || []).forEach(p => divergenciasDocs(p).forEach(t => div.push(p.id + ': ' + t)));
   render();
-  await uiAlert(`${feitos - erros} documento(s) lido(s)${erros ? `, ${erros} não puderam ser lidos (imagem ou PDF escaneado)` : ''}.\n\n${div.length ? 'Divergências encontradas:\n• ' + div.join('\n• ') : 'Nenhuma divergência entre contrato, BL, DU-E e invoice.'}`, 'Conferência de documentos');
+  await uiAlert(`${feitos - erros} documento(s) lido(s)${erros ? `, ${erros} não puderam ser lidos (imagem ou PDF escaneado)` : ''}.\n\n${div.length ? 'Divergências encontradas:\n• ' + div.join('\n• ') : 'Nenhuma divergência entre invoice, contrato, BL e DU-E.'}`, 'Conferência de documentos');
 }
 
 // ── 6. PACOTE DO CONTADOR ───────────────────────────────────
@@ -290,7 +333,9 @@ function textoCobranca(nome) {
     const bl = x.p.docs && x.p.docs._bl, emb = dEn(x.p.saida || (bl && bl.embarque));
     return `• Invoice ${x.p.id} — ${us(x.inv)}${emb ? ` — shipped on ${emb}` : ''}${x.p.booking ? ` (booking ${x.p.booking})` : ''}${x.rec ? ` — received ${us(x.rec)}` : ''} — outstanding ${us(x.falta)}`;
   });
-  return `Dear ${c.nome},
+  const outros = [...new Set(c.itens.flatMap(x => [x.p.docs && x.p.docs._comprador, x.p.docs && x.p.docs._consignatario]).filter(Boolean))];
+  const nomes = [...new Set([...outros, c.nome].map(n => n.trim()))].filter((n, i, a) => a.findIndex(m => semAcento(m).replace(/[^A-Z]/g, '') === semAcento(n).replace(/[^A-Z]/g, '')) === i);
+  return `Dear ${nomes.join(' / ')},
 
 I hope you are doing well. According to our records, the following invoice${c.itens.length > 1 ? 's are' : ' is'} still open:
 
@@ -357,6 +402,12 @@ if (typeof renderProcesso2 === 'function' && !renderProcesso2._mel) {
     const div = divergenciasDocs(p);
     const aviso = div.length ? `<div style="font-size:12.5px;color:var(--orange);background:rgba(251,146,60,.14);border-radius:8px;padding:8px 10px">⚠️ ${div.map(escHtml).join('<br>⚠️ ')}</div>` : '';
     let out = h.replace(`font-size:17px">Receita</h2></div>`, `font-size:17px">Receita</h2>${btn}</div>`);
+    const cp = p.docs && p.docs._comprador, cs = p.docs && p.docs._consignatario;
+    if (cp || cs) {
+      const iguais = cp && cs && semAcento(cp).replace(/[^A-Z]/g, '') === semAcento(cs).replace(/[^A-Z]/g, '');
+      const linha = iguais || !cs ? `Comprador: ${escHtml(cp)}` : !cp ? `Consignatário: ${escHtml(cs)}` : `Comprador: ${escHtml(cp)} · Consignatário (recebe): ${escHtml(cs)} — o câmbio pode vir de qualquer um dos dois`;
+      out = out.replace(`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">`, `<div style="font-size:12.5px;color:#E0E7FF">${linha}</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">`);
+    }
     if (aviso) out = out.replace(/(font-size:17px">Documentos<\/h2><span style="font-size:12.5px;color:var\(--muted2\)">\d+ de \d+<\/span><\/div>)/, (m) => m + aviso);
     return out;
   };
