@@ -4747,9 +4747,11 @@ async function saveToSheets() {
     });
     hideSyncIndicator();
     showToast('✅ Dados salvos no Google Sheets');
+    return true;
   } catch(e) {
     hideSyncIndicator();
     showToast('⚠️ Erro ao salvar: ' + e.message);
+    return false;
   }
 }
 
@@ -5590,10 +5592,10 @@ if (!checkSession()) {
   applyTheme();
 }
 </script>
-<script src="entrada.js?v=6d9a351204"></script>
+<script src="entrada.js?v=30418dc533"></script>
 <script src="ofx.js?v=fb95a29ab3"></script>
 <script src="financeiro2.js?v=eee13e56f1"></script>
-<script src="acervo.js?v=b318b1d892"></script>
+<script src="acervo.js?v=e040408337"></script>
 <script src="telas.js?v=3df232f1e5"></script>
 </body>
 </html>

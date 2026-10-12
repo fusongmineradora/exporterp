@@ -107,8 +107,26 @@ saveToSheets = async function () {
   const r = await _saveToSheetsBase.apply(this, arguments);
   await _gravarMarca();
   _carregadoEm = new Date().toISOString();
+  // gravou: o backup do navegador passa a ser a cópia do que está na planilha (não é mais oferecido para restaurar)
+  if (r === true) { try { localStorage.setItem('teste:erp-local-backup', JSON.stringify({ processos: S.processos, clientes: S.clientes, fornecedores: S.fornecedores, lancamentos: S.lancamentos, custosMensais: S.custosMensais, savedAt: Date.now(), sincronizado: true })); } catch (e) { try { localStorage.removeItem('teste:erp-local-backup'); } catch (_) {} } }
   return r;
 };
+
+// Backup do navegador: só oferece restaurar se ele for MAIS NOVO que a última gravação da planilha
+// (antes comparava só a quantidade de linhas: depois de apagar repetidos, o backup velho parecia "ter mais dados")
+if (typeof checkLocalBackup === 'function') {
+  const _checkBase = checkLocalBackup;
+  checkLocalBackup = async function () {
+    try {
+      const raw = localStorage.getItem('teste:erp-local-backup'); if (!raw) return;
+      const b = JSON.parse(raw);
+      if (!b || b.sincronizado) return;
+      const [, quando] = String(await _lerMarca() || '').split('|');
+      if (quando && new Date(quando).getTime() > (Number(b.savedAt) || 0)) { localStorage.removeItem('teste:erp-local-backup'); return; }
+    } catch (e) { return; }
+    return _checkBase.apply(this, arguments);
+  };
+}
 
 // ── 2. DOCUMENTOS COM VÁRIOS ARQUIVOS ───────────────────────
 function docCount(p, k) {
