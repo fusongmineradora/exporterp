@@ -1730,7 +1730,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '64';
+const VERSAO_TESTE = '65';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -2076,6 +2076,8 @@ const ASSESSORIA_DECISAO = '2026-10-11';
 const ASSESSORIA_VIA_SOCIO = ['0341-8262994992|2026-08-20|-300000|PIX ENVIADO KLISMANN LAI 070.929.029-24|1'];
 // custos confirmados por você (11/10/2026): FS260112 tem mais de uma carga e todos os produtos já estão pagos (COOP R$ 8.100 + Thomazini R$ 43.200)
 const DECISOES_CUSTO = [['FS260112', 'custoProduto', 'Pago']];
+// pago sem comprovante, confirmado por você: não cobra o comprovante
+const COMPROVANTE_DISPENSADO = { FS260118: ['custoProduto'], FS260096: ['custoProduto'] };
 // valor das invoices da Fu Song conferido nos PDFs (a do FS260115 não tinha entrado no processo)
 const INVOICES_CONFERIDAS = { FS260115: 65880 };
 // processos que não existem (informado por você): saem do sistema e a importação não os recria pela pasta do Drive
