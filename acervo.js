@@ -345,6 +345,9 @@ function enriquecerInfo(item) {
   if (item.tipo === 'due') {
     info.dueNumero = info.dueNumero || mx(/\b(\d{2}BR\d{9}-?\d)\b/i);
     info.dueChave = info.dueChave || mx(/Chave de acesso:?\s*([0-9A-Z]{14})\b/i);
+    // para conferir com a invoice: VMLE (na moeda da venda) e peso líquido
+    if (!info.vmle) info.vmle = numBR(mx(/VMLE\b[^0-9]{0,80}?([\d.]+,\d{2})/i)) || 0;
+    if (!info.pesoLiq) info.pesoLiq = numBR(mx(/Peso\s+l[ií]quido\s*\(?KG\)?\s*([\d.]+,\d+)/i)) || 0;
   }
   {
     const ct = U.match(/\b(FS\d{6})S?\s+(\d{9,10})\s+([A-Z]{4}\d{7})\b/);   // "FS260097 271229537 SEKU1633624"
@@ -440,7 +443,7 @@ function aplicarDocNoProcesso(item, p, upd) {
   if ((item.tipo === 'invoice' || item.tipo === 'contrato') && !/ADEMIR/i.test(semAcento(item.nome || (upd && upd.name) || ''))) {
     const d = docVendaDoItem(item);
     if (d && d.totalUsd && !p.docs._invoiceCorrigida && (!d.numero || processoAtual(d.numero) === p.id || d.numero === p.id)) {
-      if (d.contrato) { p.docs._contratoUsd = d.totalUsd; }
+      if (d.contrato) { p.docs._contratoUsd = d.totalUsd; if (d.qtdContainer) p.docs._contratoCont = Number(d.qtdContainer) || 0; }
       else {
         p.docs._invoiceUsd = d.totalUsd;
         if (!(Number(p.cambioInvoice) > 0)) { p.cambioInvoice = d.totalUsd; mud.push('cambioInvoice'); }
@@ -461,6 +464,8 @@ function aplicarDocNoProcesso(item, p, upd) {
   if (item.tipo === 'due') {
     if (info.dueNumero && !p.dueNumero) { p.dueNumero = info.dueNumero; mud.push('dueNumero'); }
     if (info.dueChave && !p.dueChave) { p.dueChave = info.dueChave; mud.push('dueChave'); }
+    // cada DU-E do processo (há processos com mais de uma carga): VMLE e peso para conferir com a invoice
+    if (info.vmle || info.pesoLiq) { p.docs._dues = p.docs._dues || {}; p.docs._dues[info.dueNumero || url || 'due'] = { vmle: Number(info.vmle) || 0, peso: Number(info.pesoLiq) || 0 }; }
   }
   if (item.tipo === 'faturaFrete') {
     const set = (k, v) => { if (v && !p[k]) { p[k] = v; mud.push(k); } };
@@ -1196,8 +1201,10 @@ async function guardarMapaCambio(mapa) {
 // 637051913 (USD 21.569, 29/09): Shenzhen Arts Huali mandou o FS260111 (8.100) junto com o FS260117 (13.500)
 const DIVISOES_CAMBIO = [{ ref: '637051913', processos: ['FS260111', 'FS260117'], pesos: { FS260111: 8100, FS260117: 13500 } }];
 function mapaCambioGuardado() {
-  const m = ((S.banco && S.banco.regras) || []).filter(r => r.tipo === 'cambioProc').map(r => ({ ref: r.valor, processos: String(r.categoria || '').split('+').filter(Boolean) }));
-  DIVISOES_CAMBIO.forEach(d => { const i = m.findIndex(x => x.ref === d.ref); if (i >= 0) m.splice(i, 1); m.push(d); });
+  // pesos (valor de cada processo) guardados no centro, em JSON — vêm da tela "Dividir câmbio entre processos"
+  const pesosDe = r => { try { const o = r.centro && String(r.centro).trim().startsWith('{') ? JSON.parse(r.centro) : null; return o && typeof o === 'object' ? o : undefined; } catch (e) { return undefined; } };
+  const m = ((S.banco && S.banco.regras) || []).filter(r => r.tipo === 'cambioProc').map(r => { const o = { ref: r.valor, processos: String(r.categoria || '').split('+').filter(Boolean) }; const pz = pesosDe(r); if (pz) o.pesos = pz; return o; });
+  DIVISOES_CAMBIO.forEach(d => { const i = m.findIndex(x => x.ref === d.ref); if (i >= 0 && m[i].pesos) return; if (i >= 0) m.splice(i, 1); m.push(d); });
   return m;
 }
 
@@ -1731,7 +1738,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '66';
+const VERSAO_TESTE = '67';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
