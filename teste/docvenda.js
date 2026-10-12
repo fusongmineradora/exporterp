@@ -387,6 +387,88 @@ async function dvSalvar(p, f, pdfs) {
 }
 const fmtKg = v => Math.round(Number(v) || 0).toLocaleString('pt-BR');
 
+// ── nome interno do processo (só para controle; não vai para invoice nem contrato) ──
+// "FS260113 - 276143168 - Thomas - Ematóide - Qingdao" = número · booking · intermediador · produto interno · destino
+function dvPartesDoNome(nome) {
+  const ps = String(nome || '').split(/\s+[-–—]\s+/).map(x => x.trim()).filter(Boolean);
+  if (ps.length < 4 || !FS_DE(ps[0])) return {};
+  return { inter: ps[2] || '', prod: ps.length >= 5 ? ps.slice(3, -1).join(' - ') : '' };
+}
+function dvInterno(p) {
+  const d = (p && p.docs) || {}, x = dvPartesDoNome(d._nomePasta);
+  return { inter: d._intermediador != null ? d._intermediador : (x.inter || ''), prod: d._produtoInterno != null ? d._produtoInterno : (x.prod || '') };
+}
+const dvGerenciado = p => !!(p && p.docs && (p.docs._intermediador != null || p.docs._produtoInterno != null));
+function dvNomeInterno(p) {
+  const i = dvInterno(p), dest = String(p.pod || '').split(',')[0].replace(/\s*port\b/i, '').trim();
+  const bk = p.status === 'Cancelado' ? 'Cancelado' : (String(p.booking || '').trim() || 'Booking pendente');
+  return [p.id, bk, i.inter, i.prod, dest].map(x => String(x || '').replace(/[\/\\:*?"<>|]/g, ' ').trim()).filter(Boolean).join(' - ').slice(0, 150);
+}
+function dvListaInterna(k) {
+  const vistos = {}, out = [];
+  (S.processos || []).slice().sort((a, b) => b.id.localeCompare(a.id)).forEach(p => { const v = dvInterno(p)[k]; const c = semAcento(v); if (v && !/^(BOOKING|CANCELADO)/.test(c) && !vistos[c]) { vistos[c] = 1; out.push(v); } });
+  return out;
+}
+const dvChaveComprador = p => chaveNome((p.docs && p.docs._comprador) || p.cliente || '');
+// sugestões: intermediador da última venda para o comprador; produto interno do último com a mesma descrição da invoice
+function dvSugerirInterno(compradorNome, produtoInvoice) {
+  const ps = (S.processos || []).filter(p => p.status !== 'Cancelado').sort((a, b) => b.id.localeCompare(a.id));
+  const kc = chaveNome(compradorNome || ''), kp = dvProd(produtoInvoice || '');
+  const a = kc && ps.find(p => dvChaveComprador(p) === kc && dvInterno(p).inter);
+  const b = kp && ps.find(p => dvProd(p.produto) === kp && dvInterno(p).prod);
+  return { inter: a ? dvInterno(a).inter : '', prod: b ? dvInterno(b).prod : '' };
+}
+// pasta no Drive com o mesmo nome do processo (só processos com nome interno definido pelo ERP)
+let _dvRenomeando = false;
+async function dvRenomearPastas(lista) {
+  if (_dvRenomeando) return 0; _dvRenomeando = true; let n = 0;
+  try {
+    for (const p of (lista || S.processos || []).filter(dvGerenciado)) {
+      const nome = dvNomeInterno(p);
+      if (!p.docs._folderId || p.docs._nomePasta === nome) continue;
+      try { await driveAPI('PATCH', '/files/' + p.docs._folderId, { name: nome }); logAction('renomear', 'PROCESSOS', p.id, 'Pasta: ' + (p.docs._nomePasta || '') + ' → ' + nome); p.docs._nomePasta = nome; n++; }
+      catch (e) { console.warn('renomear pasta', p.id, e); }
+    }
+  } finally { _dvRenomeando = false; }
+  if (n && typeof scheduleAutoSave === 'function') scheduleAutoSave();
+  return n;
+}
+// lista para escolher (com "Outro…" para digitar um nome novo)
+function dvSelecao(attr, valor, lista) {
+  const opts = lista.slice(); if (valor && !opts.some(x => semAcento(x) === semAcento(valor))) opts.unshift(valor);
+  return `<select ${attr} style="width:100%"><option value="">— escolha —</option>${opts.map(t => `<option ${semAcento(t) === semAcento(valor) ? 'selected' : ''}>${escHtml(t)}</option>`).join('')}<option value="__outro">➕ Outro (digitar)…</option></select>
+    <input ${attr.replace(/data-(\w+)=/, 'data-$1-outro=')} placeholder="Digite o novo nome" style="width:100%;margin-top:6px;display:none">`;
+}
+// liga o "Outro…": mostra a caixa de texto e devolve o valor escolhido/digitado
+function dvLigarSelecao(sel, inp, aoMudar) {
+  sel.addEventListener('change', () => { if (sel.value === '__outro') { inp.style.display = ''; inp.focus(); aoMudar(inp.value.trim()); } else { inp.style.display = 'none'; aoMudar(sel.value); } });
+  inp.addEventListener('input', () => aoMudar(inp.value.trim()));
+}
+function editarNomeInternoUI(procId) {
+  const p = (S.processos || []).find(x => x.id === procId); if (!p) return;
+  const i = dvInterno(p);
+  _uiCloseModal();
+  const modal = document.createElement('div'); modal.id = 'ui-modal'; modal.className = 'modal-overlay';
+  modal.innerHTML = `<div class="modal" style="max-width:460px;width:94%">
+    <div class="modal-title">Nome interno · ${escHtml(p.id)}</div>
+    <div style="font-size:12.5px;color:var(--muted2);margin-bottom:6px">Só para os seus registros e para achar o processo. Não aparece na invoice nem no contrato.</div>
+    <label style="display:block;font-size:12px;color:var(--muted2);margin:8px 0 4px">Intermediador</label>${dvSelecao('data-ni="inter"', i.inter, dvListaInterna('inter'))}
+    <label style="display:block;font-size:12px;color:var(--muted2);margin:8px 0 4px">Produto (nome interno)</label>${dvSelecao('data-ni="prod"', i.prod, dvListaInterna('prod'))}
+    <div id="ni-prev" style="font-size:12.5px;margin-top:10px;font-family:'JetBrains Mono',monospace"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn btn-secondary" id="ni-c">Cancelar</button><button class="btn btn-primary" id="ni-ok">Salvar</button></div></div>`;
+  document.body.appendChild(modal);
+  const v = { inter: i.inter, prod: i.prod };
+  const prev = () => { const t = Object.assign({}, p, { docs: Object.assign({}, p.docs, { _intermediador: v.inter, _produtoInterno: v.prod }) }); modal.querySelector('#ni-prev').textContent = dvNomeInterno(t); };
+  ['inter', 'prod'].forEach(k => dvLigarSelecao(modal.querySelector(`select[data-ni="${k}"]`), modal.querySelector(`input[data-ni-outro="${k}"]`), x => { v[k] = x; prev(); }));
+  prev();
+  modal.querySelector('#ni-c').onclick = () => _uiCloseModal();
+  modal.querySelector('#ni-ok').onclick = async () => {
+    p.docs = p.docs || {}; p.docs._intermediador = v.inter; p.docs._produtoInterno = v.prod;
+    logAction('editar', 'PROCESSOS', p.id, 'Nome interno: ' + dvNomeInterno(p));
+    _uiCloseModal(); await dvRenomearPastas([p]); await saveToSheets(); render(); showToast('✅ ' + dvNomeInterno(p));
+  };
+}
+
 // ── formulário ──
 let _dvForm = null;
 const dvProc = f => f && (f.novo || (S.processos || []).find(x => x.id === f.procId));
@@ -448,6 +530,14 @@ function dvDesenhar() {
     ${f.notifyOn ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px">
       <div>${lab('Consignee', 'recebe a carga')}<select data-dv="consignatario" style="width:100%">${dvOpcoes(f.consignatario)}</select></div>
       <div>${lab('Notify')}<select data-dv="notify" style="width:100%">${dvOpcoes(f.notify)}</select></div></div>` : ''}
+    ${f.novo ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--bg3)">
+      <div style="font-size:12px;font-weight:700">Nome interno do processo <span style="font-weight:400;color:var(--muted2)">· só para os seus registros, não sai na invoice nem no contrato</span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px">
+        <div>${lab('Intermediador')}${dvSelecao('data-dvsel="inter"', f.inter, dvListaInterna('inter'))}</div>
+        <div>${lab('Produto (nome interno)')}${dvSelecao('data-dvsel="prodInterno"', f.prodInterno, dvListaInterna('prod'))}</div>
+      </div>
+      <div id="dv-nome" style="font-size:12px;margin-top:8px;font-family:'JetBrains Mono',monospace;color:var(--muted2)"></div>
+    </div>` : ''}
     <div style="display:grid;grid-template-columns:2fr 1fr;gap:0 12px">
       <div>${lab('Produto (descrição)')}${inp('produto', 'list="dv-produtos"')}</div>
       <div>${lab('NCM / HS Code')}${inp('ncm', 'inputmode="numeric"')}</div>
@@ -479,6 +569,7 @@ function dvDesenhar() {
   const atualizar = () => {
     const kg = Number(String(f.kg).replace(/\D/g, '')) || 0, pr = numBR(String(f.preco)) || 0;
     modal.querySelector('#dv-total').textContent = kg && pr ? fmt(dvR2(kg * pr)) : '—';
+    const nm = modal.querySelector('#dv-nome'); if (nm && f.novo) nm.textContent = 'Fica assim: ' + dvNomeInterno(Object.assign({}, f.novo, { pod: f.pod, docs: { _intermediador: f.inter || '', _produtoInterno: f.prodInterno || '' } }));
     const pb = dvProblemas(f); modal.querySelector('#dv-prob').innerHTML = pb.map(t => '⚠️ ' + escHtml(t)).join('<br>');
   };
   modal.querySelectorAll('[data-dv]').forEach(el => {
@@ -489,6 +580,14 @@ function dvDesenhar() {
       if (k === 'containers') { const n = Math.max(1, parseInt(el.value, 10) || 1); f.containers = n; if (!f.kgManual) { f.kg = n * KG_POR_CONTAINER; const k2 = modal.querySelector('[data-dv="kg"]'); if (k2) k2.value = f.kg; } }
       if (k === 'comprador' && f.notifyOn && !f.notify) f.notify = el.value;
       if (k === 'ncm') f.ncmManual = true;
+      if (k === 'inter') f.interManual = true;
+      if (k === 'prodInterno') f.prodIntManual = true;
+      if (f.novo && (k === 'comprador' || k === 'produto')) {
+        const sg = dvSugerirInterno(f.comprador, f.produto);
+        const marcar = (k, val) => { const e = modal.querySelector(`select[data-dvsel="${k}"]`); if (e) { if (![...e.options].some(o => o.value === val)) e.insertAdjacentHTML('afterbegin', `<option>${escHtml(val)}</option>`); e.value = val; } };
+        if (!f.interManual && sg.inter) { f.inter = sg.inter; marcar('inter', sg.inter); }
+        if (!f.prodIntManual && sg.prod) { f.prodInterno = sg.prod; marcar('prodInterno', sg.prod); }
+      }
       if (k === 'pod') f.podManual = true;
       if (k === 'comprador' && f.novo && !f.podManual) { const d = dvUltimoDestino(el.value); if (d) { f.pod = d; const e2 = modal.querySelector('[data-dv="pod"]'); if (e2) e2.value = d; } }
       if (k === 'produto' && !f.ncmManual) {   // NCM sugerido pela última NF desse produto
@@ -499,6 +598,7 @@ function dvDesenhar() {
       atualizar();
     });
   });
+  ['inter', 'prodInterno'].forEach(k => { const sel = modal.querySelector(`select[data-dvsel="${k}"]`); if (sel) dvLigarSelecao(sel, modal.querySelector(`input[data-dvsel-outro="${k}"]`), x => { f[k] = x; if (k === 'inter') f.interManual = true; else f.prodIntManual = true; atualizar(); }); });
   modal.querySelector('#dv-cancelar').onclick = () => { _dvForm = null; _uiCloseModal(); };
   modal.querySelector('#dv-ver').onclick = () => dvExecutar(false);
   modal.querySelector('#dv-ok').onclick = () => dvExecutar(true);
@@ -540,6 +640,7 @@ async function dvExecutar(salvar) {
     if (!salvar) { Object.entries(pdfs).forEach(([t, b]) => window.open(URL.createObjectURL(new Blob([b], { type: 'application/pdf' })), '_blank')); return; }
     if (f.novo) dvCriarProcesso(p, f);
     const r = await dvSalvar(p, f, pdfs);
+    if (f.novo) { await dvRenomearPastas([p]); await saveToSheets(); }
     _dvForm = null; _uiCloseModal();
     if (f.novo) { S.page = 'processos'; S.sub = p; S.editMode = false; S.createMode = false; }
     render();
@@ -552,8 +653,9 @@ function dvCriarProcesso(p, f) {
   if ((S.processos || []).some(x => x.id === p.id)) throw new Error('O processo ' + p.id + ' já existe');
   const d = dvDadosDoForm(p, f), quem = d.consignatario || d.comprador, c = dvCliente(quem.nome) || {};
   Object.assign(p, { cliente: quem.nome, usci: c.usci || '', clienteTel: c.tel || '', clienteEmail: c.email || '', clienteAdd: c.end || '' });
+  p.docs = p.docs || {}; p.docs._intermediador = String(f.inter || '').trim(); p.docs._produtoInterno = String(f.prodInterno || '').trim();
   S.processos.push(p);
-  logAction('criar', 'PROCESSOS', p.id, `${quem.nome} · ${d.itens[0].desc} · embarque ${p.embarque} (pelo Novo processo com invoice e contrato)`);
+  logAction('criar', 'PROCESSOS', p.id, `${dvNomeInterno(p)} · ${quem.nome} · ${d.itens[0].desc} · embarque ${p.embarque} (pelo Novo processo com invoice e contrato)`);
 }
 function dvManterNcm(procId) {
   const p = (S.processos || []).find(x => x.id === procId), a = dvAvisoNcm(p); if (!a) return;
@@ -601,6 +703,9 @@ if (typeof renderProcesso2 === 'function' && !renderProcesso2._dv) {
     const aviso = a ? `<div style="font-size:12.5px;color:var(--orange);background:rgba(251,146,60,.14);border-radius:8px;padding:8px 10px;margin-top:6px">⚠️ A NF ${escHtml(a.numero)} de ${escHtml(a.emitente)} diz NCM <b>${escHtml(dvNcmFmt(a.nf))}</b>, mas ${a.gerado ? 'a invoice e o contrato gerados dizem' : 'o processo diz'} <b>${escHtml(dvNcmFmt(a.doc))}</b>.
       <span style="display:inline-flex;gap:6px;flex-wrap:wrap;margin-top:4px"><button class="btn btn-secondary btn-xs" onclick="gerarDocVendaUI('${escHtml(p.id)}','${a.nf}')">Gerar nova versão com ${escHtml(dvNcmFmt(a.nf))}</button><button class="btn btn-secondary btn-xs" onclick="dvManterNcm('${escHtml(p.id)}')">Manter ${escHtml(dvNcmFmt(a.doc))}</button></span></div>` : '';
     const info = g ? `<div style="font-size:11.5px;color:var(--muted2);margin-top:4px">Gerados pelo ERP: versão ${g.versao} · ${escHtml(g.comprador)}${g.notify ? ' (consignee ' + escHtml(g.consignatario) + ')' : ''} · ${fmtKg(g.kg)} kg × USD ${Number(g.preco).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })} = USD ${fmt(g.total)} · NCM ${escHtml(dvNcmFmt(g.ncm))}</div>` : '';
+    const ni = dvInterno(p);
+    const linhaNome = `<div style="font-size:12.5px;color:#E0E7FF;margin-top:2px">Interno: ${escHtml(ni.inter || '—')} · ${escHtml(ni.prod || '—')} <a href="#" onclick="editarNomeInternoUI('${escHtml(p.id)}');return false" style="color:#BFDBFE;font-size:12px">editar</a></div>`;
+    h = h.replace(`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">`, linhaNome + `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">`);
     const re = /(font-size:17px">Documentos<\/h2><span style="font-size:12\.5px;color:var\(--muted2\)">\d+ de \d+<\/span><\/div>)/;
     if (re.test(h)) h = h.replace(re, m => m + `<div style="margin:2px 0 8px">${btn}${info}${aviso}</div>`);
     return h;
@@ -619,4 +724,21 @@ if (typeof renderInicio === 'function' && !renderInicio._dv) {
     return re.test(h) ? h.replace(re, `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${btn}$1</div>`) : h;
   };
   renderInicio._dv = true;
+}
+
+// nome do processo na lista: processos com nome interno do ERP usam os campos (não dependem do nome da pasta)
+if (typeof restoNomeProcesso === 'function' && !restoNomeProcesso._dv) {
+  const base = restoNomeProcesso;
+  restoNomeProcesso = function (p) { if (dvGerenciado(p)) return '- ' + dvNomeInterno(p).split(' - ').slice(1).join(' - '); return base.apply(this, arguments); };
+  restoNomeProcesso._dv = true;
+}
+// depois de cada gravação: se o booking, o destino ou o status mudou, a pasta acompanha
+if (typeof saveToSheets === 'function' && !saveToSheets._dv) {
+  const base = saveToSheets; let t = null;
+  saveToSheets = async function () {
+    const r = await base.apply(this, arguments);
+    clearTimeout(t); t = setTimeout(() => { if ((S.processos || []).some(p => dvGerenciado(p) && p.docs._folderId && p.docs._nomePasta !== dvNomeInterno(p))) dvRenomearPastas(); }, 1500);
+    return r;
+  };
+  saveToSheets._dv = true;
 }
