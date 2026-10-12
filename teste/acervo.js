@@ -93,7 +93,31 @@ function lerDocVenda(texto) {
     emitida: dt ? `${dt[2].padStart(2, '0')}/${MESES_EN[dt[1].slice(0, 3).toLowerCase()]}/${dt[3]}` : '',
     qtdContainer: cont ? String(parseInt(cont[1], 10)) : '',
     tamanhoContainer: cont && cont[2] ? cont[2] : '',
+    ...lerDocVendaExtra(T),
   };
+}
+// Comprador × consignatário, linhas da tabela (kg × preço = total) e conta bancária impressa
+// Invoice: CONSIGNEE (recebe) + NOTIFY ou BUYER; Sales Contract: BUYER (compra) + NOTIFY PARTY (recebe)
+const RE_EMPRESA = /([A-Z][A-Za-z0-9&.,'()\- ]{2,90}?\b(?:LIMITED|Limited|LIMITE\s?D|LTD\.?|Ltd\.?|Co\.,?\s?Ltd\.?|CO\.,?\s?LTD\.?|INC\.?|Inc\.?|CORPORATION|Corporation|COMPANY|Company|S\.?A\.?))(?![A-Za-z])/;
+function empresaDepois(T, re, ultima) {
+  const ms = [...T.matchAll(re)]; if (!ms.length) return '';
+  const m = ultima ? ms[ms.length - 1] : ms[0];
+  const trecho = T.slice(m.index + m[0].length, m.index + m[0].length + 220).replace(/\bCEP\s*[\d.\-]+/g, ' ').replace(/\b(?:Vat\.?|Add\.?|Ad\s?dress|Address|TEL|E-?MAIL)\b[^A-Z]*/gi, ' ');
+  const e = trecho.match(RE_EMPRESA);
+  return e ? e[1].replace(/\s+/g, ' ').replace(/LIMITE\s?D\b/, 'LIMITED').replace(/^(?:The\s+)?(?:Buyer|Seller)\s*:?\s*/i, '').trim() : '';
+}
+function lerDocVendaExtra(T) {
+  const out = {};
+  const consig = empresaDepois(T, /CONSIGNEE\s*:/gi) || empresaDepois(T, /NOTIFY\s+PARTY\s*:/gi);
+  const comp = empresaDepois(T, /THE\s+BUYER\s*:/gi, true) || empresaDepois(T, /\bBUYER\s*:/gi) || (/CONSIGNEE\s*:/i.test(T) ? empresaDepois(T, /\bNOTIFY\s*:/gi) : '');
+  if (comp) out.comprador = comp;
+  if (consig) out.consignatario = consig;
+  // linhas: NCM (8 dígitos) · quantidade em kg · preço por kg · total da linha
+  const linhas = [...T.matchAll(/\b\d{8}\s+([\d.]+(?:,\d+)?)\s+(\d+(?:,\d+)?)\s*USD\s+([\d.]+,\d{2})\s*USD/gi)].map(m => ({ kg: numBR(m[1].includes(',') ? m[1] : m[1].replace(/\./g, '')), preco: numBR(m[2]), dec: (m[2].split(',')[1] || '').length, total: numBR(m[3]) }));
+  if (linhas.length) { out.linhas = linhas; out.qtdKg = linhas.reduce((a, l) => a + l.kg, 0); }
+  const ct = T.match(/BRANCH\s+NUMBER\s*\/\s*ACCOUNT\s+NUMBER\s*:?\s*(\d{3,5})\s*\/\s*([\d\s\-]{5,20}?)(?=\s*(?:IBAN|$|[A-Z]))/i);
+  if (ct) out.contaBanco = { agencia: ct[1], conta: ct[2].replace(/\D/g, '') };
+  return out;
 }
 
 // ── OCR pelo Google Drive (prints, fotos e PDFs escaneados) ──
@@ -151,6 +175,35 @@ function garantirCliente(p) {
 
 
 // ── Criar processo a partir da invoice / contrato que está na Entrada ──
+// guarda o que a invoice / o contrato dizem (para conferir um com o outro e com BL / DU-E)
+function guardarDadosVenda(p, d) {
+  if (!p || !d) return;
+  p.docs = p.docs || {};
+  const k = d.contrato ? '_contrato' : '_invoice';
+  const o = { kg: Number(d.qtdKg) || numBR(String(d.peso || '')) || 0, total: Number(d.totalUsd) || 0, produto: d.produto || '', pod: d.pod || '', pol: d.pol || '', containers: Number(d.qtdContainer) || 0 };
+  if (d.linhas && d.linhas.length) o.linhas = d.linhas.map(l => ({ kg: l.kg, preco: l.preco, dec: l.dec, total: l.total }));
+  if (d.contaBanco) o.conta = d.contaBanco;
+  p.docs[k] = o;
+  if (d.comprador) p.docs._comprador = d.comprador;
+  if (d.consignatario) p.docs._consignatario = d.consignatario;
+}
+// nº de containers: o contrato diz; sem contrato, o peso da invoice ÷ 27.000 kg. Só aumenta (nunca apaga container já informado).
+const KG_POR_CONTAINER = 27000;
+function ajustarContainersPelosDocs(p) {
+  const d = p.docs || {};
+  // venda dividida em processo principal + "S" (FS260109 / FS260109S): a invoice e o contrato somam os dois — não mexe
+  if (/S$/.test(p.id) || (S.processos || []).some(q => q.id === p.id + 'S')) return false;
+  // com BL, os containers do BL são a verdade (diferença vira aviso, não muda o processo)
+  if (((d._bl && d._bl.containers) || []).filter(Boolean).length) return false;
+  let n = Number(d._contratoCont) || 0;
+  if (!n) { const kg = (d._invoice && d._invoice.kg) || 0; if (kg && kg % KG_POR_CONTAINER === 0) n = kg / KG_POR_CONTAINER; }
+  if (!n) return false;
+  const atual = Math.max((p.containers || []).filter(Boolean).length, parseInt(p.qtdContainer, 10) || 0);
+  if (n <= atual) return false;
+  p.qtdContainer = String(n);
+  const cs = (p.containers || []).filter(Boolean); while (cs.length < n) cs.push(''); p.containers = cs; p.container = cs[0] || '';
+  return true;
+}
 function docVendaDoItem(it) {
   if (!it || !['invoice', 'contrato'].includes(it.tipo)) return null;
   if (it._venda === undefined) it._venda = lerDocVenda(it.texto) || null;
@@ -443,12 +496,17 @@ function aplicarDocNoProcesso(item, p, upd) {
   if ((item.tipo === 'invoice' || item.tipo === 'contrato') && !/ADEMIR/i.test(semAcento(item.nome || (upd && upd.name) || ''))) {
     const d = docVendaDoItem(item);
     if (d && d.totalUsd && !p.docs._invoiceCorrigida && (!d.numero || processoAtual(d.numero) === p.id || d.numero === p.id)) {
-      if (d.contrato) { p.docs._contratoUsd = d.totalUsd; if (d.qtdContainer) p.docs._contratoCont = Number(d.qtdContainer) || 0; }
-      else {
+      guardarDadosVenda(p, d);
+      if (d.contrato) {
+        p.docs._contratoUsd = d.totalUsd; if (d.qtdContainer) p.docs._contratoCont = Number(d.qtdContainer) || 0;
+        // a invoice manda; o contrato só completa o que ainda está vazio
+        ['produto', 'ncm', 'pod', 'peso'].forEach(k => { if (d[k] && !p[k]) { p[k] = d[k]; mud.push(k); } });
+      } else {
         p.docs._invoiceUsd = d.totalUsd;
         if (!(Number(p.cambioInvoice) > 0)) { p.cambioInvoice = d.totalUsd; mud.push('cambioInvoice'); }
         ['cliente', 'produto', 'ncm', 'pol', 'pod', 'incoterm', 'pagamento', 'peso'].forEach(k => { if (d[k] && !p[k]) { p[k] = d[k]; mud.push(k); } });
       }
+      if (ajustarContainersPelosDocs(p)) mud.push('qtdContainer');
     }
   }
   // logística
@@ -1746,7 +1804,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '68';
+const VERSAO_TESTE = '69';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
