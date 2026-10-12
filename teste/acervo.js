@@ -439,7 +439,7 @@ function aplicarDocNoProcesso(item, p, upd) {
   // invoice / sales contract da Fu Song (a "versão Ademir" não vale): invoice dá o valor; o contrato só confirma
   if ((item.tipo === 'invoice' || item.tipo === 'contrato') && !/ADEMIR/i.test(semAcento(item.nome || (upd && upd.name) || ''))) {
     const d = docVendaDoItem(item);
-    if (d && d.totalUsd && (!d.numero || processoAtual(d.numero) === p.id || d.numero === p.id)) {
+    if (d && d.totalUsd && !p.docs._invoiceCorrigida && (!d.numero || processoAtual(d.numero) === p.id || d.numero === p.id)) {
       if (d.contrato) { p.docs._contratoUsd = d.totalUsd; }
       else {
         p.docs._invoiceUsd = d.totalUsd;
@@ -1116,7 +1116,7 @@ function cambioPeloBanco(p, contrato, reais, dataIso) {
 // aplica o mapa contrato → processos: move o contrato para o processo certo e acerta lançamentos e extrato
 function aplicarMapaCambio(mapa) {
   let n = 0;
-  (mapa || []).forEach(({ ref, processos }) => {
+  (mapa || []).forEach(({ ref, processos, pesos }) => {
     const alvo = processos.filter(id => (S.processos || []).some(p => p.id === id));
     if (!alvo.length) return;
     // onde o contrato está anexado hoje
@@ -1127,10 +1127,13 @@ function aplicarMapaCambio(mapa) {
     });
     if (!modelo) return;
     const c = modelo.cambio;
-    const jaCerto = (c.faturas || []).length === alvo.length && alvo.every(id => (c.faturas || []).some(x => x.processo === id && x.usd > 0)) && !c.faturas.some(x => !alvo.includes(x.processo));
+    // divisão: igual, ou proporcional às invoices (pesos) — a tarifa do intermediário fica proporcional
+    const tot = Number(c.usdTotal) || 0, somaP = pesos ? alvo.reduce((a, id) => a + (Number(pesos[id]) || 0), 0) : 0;
+    let resto = tot;
+    const faturas = alvo.map((id, i) => { const u = i === alvo.length - 1 ? Math.round(resto * 100) / 100 : Math.round((somaP ? tot * (Number(pesos[id]) || 0) / somaP : tot / alvo.length) * 100) / 100; resto -= u; return { processo: id, usd: u, pelaPlanilha: true }; });
+    const usd = faturas[0].usd;
+    const jaCerto = (c.faturas || []).length === alvo.length && faturas.every(f => (c.faturas || []).some(x => x.processo === f.processo && Math.abs((x.usd || 0) - f.usd) < 0.01)) && !c.faturas.some(x => !alvo.includes(x.processo));
     if (jaCerto) return;
-    const usd = Math.round((Number(c.usdTotal) || 0) / alvo.length * 100) / 100;
-    const faturas = alvo.map(id => ({ processo: id, usd, pelaPlanilha: true }));
     // tira dos processos errados
     (S.processos || []).forEach(p => {
       const arr = (((p.docs || {})._files || {}).comprovantes) || [];
@@ -1148,7 +1151,8 @@ function aplicarMapaCambio(mapa) {
     alvo.forEach((id, i) => {
       const p = S.processos.find(x => x.id === id);
       p.docs = p.docs || {}; p.docs._files = p.docs._files || {}; p.docs._files.comprovantes = (p.docs._files.comprovantes || []).filter(f => !(f.cambio && f.cambio.referencia === ref));
-      p.docs._files.comprovantes.push(Object.assign({}, modelo, { atalho: i > 0 ? true : undefined, cambio: Object.assign({}, c, { faturas, usdFatura: usd }) }));
+      p.docs._files.comprovantes.push(Object.assign({}, modelo, { atalho: i > 0 ? true : undefined, cambio: Object.assign({}, c, { faturas, usdFatura: faturas[i].usd }) }));
+      if (p.docs._cambioDocs && p.docs._cambioDocs[ref]) delete p.docs._cambioDocs[ref].banco;   // valor em reais refeito pela parte de cada um
       if (!p.docs.comprovantes) p.docs.comprovantes = modelo.url;
       aplicarCambioNoProcesso(p, { referencia: ref, taxa: c.taxa, valorReais: c.reaisTotal, valorMoeda: c.usdTotal, data: c.data, contratoExtrato: c.contratoExtrato, faturas }, modelo.url);
       logAction('editar', 'PROCESSOS', id, 'Câmbio ' + ref + ' ligado pela planilha do banco');
@@ -1158,7 +1162,22 @@ function aplicarMapaCambio(mapa) {
       const lr = l.docs && l.docs._cambio && (l.docs._cambio.referencia === ref || (c.contratoExtrato && String(l.docs._cambio.contrato) === String(c.contratoExtrato)));
       if (lr && alvo.length === 1 && l.vinculoId !== alvo[0]) { l.vinculoId = alvo[0]; l.vinculo = 'processo'; l.descricao = String(l.descricao || '').replace(/FS\d{6}S?/, alvo[0]); }
     });
-    if (S.banco && c.contratoExtrato) (S.banco.linhas || []).forEach(l => { if (l.lancId === 'cambio:' + c.contratoExtrato) l.centro = alvo.map(id => 'P:' + id).join(' '); });
+    // contrato dividido entre processos: o lançamento de receita do câmbio vira um por processo (valor de cada parte)
+    if (alvo.length > 1) {
+      const doRef = (S.lancamentos || []).filter(l => l.categoria === 'Câmbio' && l.tipo === 'Receita' && l.docs && l.docs._cambio && (l.docs._cambio.referencia === ref || (c.contratoExtrato && String(l.docs._cambio.contrato) === String(c.contratoExtrato))));
+      if (doRef.length) {
+        const base = doRef[0];
+        alvo.forEach(id => {
+          const p = S.processos.find(x => x.id === id), cd = p && p.docs._cambioDocs && p.docs._cambioDocs[ref]; if (!cd) return;
+          let l = doRef.find(x => x.vinculoId === id);
+          if (!l) { l = JSON.parse(JSON.stringify(base)); l.id = genId(); S.lancamentos.unshift(l); doRef.push(l); }
+          l.vinculo = 'processo'; l.vinculoId = id; l.valor = cd.reais; l.descricao = `Câmbio contrato ${c.contratoExtrato || ref} — ${id} (USD ${fmt(cd.usd)})`;
+          l.docs = Object.assign({}, l.docs, { _cambio: Object.assign({}, l.docs._cambio, { usd: cd.usd }) });
+        });
+        const sobra = doRef.filter(l => !alvo.includes(l.vinculoId)); if (sobra.length) S.lancamentos = S.lancamentos.filter(l => !sobra.includes(l));
+      }
+    }
+    if (S.banco && c.contratoExtrato) (S.banco.linhas || []).forEach(l => { if (l.lancId === 'cambio:' + c.contratoExtrato) l.centro = l.valor > 0 ? alvo.map(id => 'P:' + id).join(' ') : 'ADM'; });
     n++;
   });
   return n;
@@ -1172,8 +1191,13 @@ async function guardarMapaCambio(mapa) {
   });
   try { if (typeof ensureTabs2 === 'function') await ensureTabs2(); await gravarAba2('REGRAS', S.banco.regras); } catch (e) { console.warn('mapa câmbio', e); }
 }
+// contratos que pagam mais de um processo e não dizem isso na FATURA (informado por você)
+// 637051913 (USD 21.569, 29/09): Shenzhen Arts Huali mandou o FS260111 (8.100) junto com o FS260117 (13.500)
+const DIVISOES_CAMBIO = [{ ref: '637051913', processos: ['FS260111', 'FS260117'], pesos: { FS260111: 8100, FS260117: 13500 } }];
 function mapaCambioGuardado() {
-  return ((S.banco && S.banco.regras) || []).filter(r => r.tipo === 'cambioProc').map(r => ({ ref: r.valor, processos: String(r.categoria || '').split('+').filter(Boolean) }));
+  const m = ((S.banco && S.banco.regras) || []).filter(r => r.tipo === 'cambioProc').map(r => ({ ref: r.valor, processos: String(r.categoria || '').split('+').filter(Boolean) }));
+  DIVISOES_CAMBIO.forEach(d => { const i = m.findIndex(x => x.ref === d.ref); if (i >= 0) m.splice(i, 1); m.push(d); });
+  return m;
 }
 
 
@@ -1706,7 +1730,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '60';
+const VERSAO_TESTE = '61';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -2054,6 +2078,8 @@ const ASSESSORIA_VIA_SOCIO = ['0341-8262994992|2026-08-20|-300000|PIX ENVIADO KL
 const DECISOES_CUSTO = [['FS260112', 'custoProduto', 'Pago']];
 // valor das invoices da Fu Song conferido nos PDFs (a do FS260115 não tinha entrado no processo)
 const INVOICES_CONFERIDAS = { FS260115: 65880 };
+// valor certo informado por você (11/10/2026): FS260117 é USD 13.500 de invoice e contrato (os PDFs de 27/09 dizem 21.600)
+const INVOICES_CORRIGIDAS = { FS260117: 13500 };
 function ehLinhaAssessoria(l) { return l && l.valor < 0 && (l.lancId === 'saldo:ASSESSORIA' || ASSESSORIA_RE.test(semAcento((l.favorecido || '') + ' ' + (l.memo || '')))); }
 function assessoriaPeloSaldo() {
   let n = 0;
@@ -2076,6 +2102,7 @@ function assessoriaPeloSaldo() {
     const velho = l.lancId; if (velho) S.lancamentos = (S.lancamentos || []).filter(x => x.id !== velho);
     l.status = 'conciliado'; l.lancId = 'saldo:ASSESSORIA'; l.categoria = 'Serviços de Terceiros'; l.centro = 'Assessoria (saldo)'; l.obs = 'Assessoria Ademir/FFA paga pelo Klismann (PIX da empresa para o sócio, repassado ao Ademir)'; n++;
   });
+  Object.entries(INVOICES_CORRIGIDAS).forEach(([id, v]) => { const p = (S.processos || []).find(x => x.id === id); if (!p) return; p.docs = p.docs || {}; if (Number(p.cambioInvoice) !== v || p.docs._invoiceCorrigida !== v) { p.cambioInvoice = v; p.docs._invoiceCorrigida = v; p.docs._invoiceUsd = v; p.docs._contratoUsd = v; n++; } });
   Object.entries(INVOICES_CONFERIDAS).forEach(([id, v]) => { const p = (S.processos || []).find(x => x.id === id); if (p && !(Number(p.cambioInvoice) > 0)) { p.cambioInvoice = v; p.docs = p.docs || {}; p.docs._invoiceUsd = v; n++; } });
   DECISOES_CUSTO.forEach(([id, c, st]) => {
     const p = (S.processos || []).find(x => x.id === id); if (!p) return; p.docs = p.docs || {};
