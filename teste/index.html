@@ -2383,7 +2383,7 @@ async function excluirMesFixo(mesId){
 // ═══════════════════════════════════════════════════════════
 function renderCadastro(){
   const tab = S.cadastroTab;
-  const tipos = ['clientes','fornecedores','transportadoras','despachantes','agentes','armazens','servicos'];
+  const tipos = ['clientes','fornecedores','transportadoras','despachantes','agentes','armazens','servicos','adm'];
   const labels = {
     'clientes':'🏢 Clientes',
     'fornecedores':'📦 Fornecedores',
@@ -2391,7 +2391,8 @@ function renderCadastro(){
     'despachantes':'📋 Despachantes',
     'agentes':'🚢 Agentes de Carga',
     'armazens':'🏭 Armazéns',
-    'servicos':'🔧 Serviços de Terceiros'
+    'servicos':'🔧 Serviços de Terceiros',
+    'adm':'🏢 Despesas gerais (ADM)'
   };
   const tipoMap = {
     'fornecedores':'Fornecedor',
@@ -2399,7 +2400,8 @@ function renderCadastro(){
     'despachantes':'Despachante',
     'agentes':'Agente de Carga',
     'armazens':'Armazém',
-    'servicos':'Serviço de Terceiros'
+    'servicos':'Serviço de Terceiros',
+    'adm':'Despesas gerais (ADM)'
   };
 
   const tabsHtml = `<div style="display:flex;flex-wrap:wrap;gap:4px;background:var(--bg3);padding:4px;border-radius:10px;margin-bottom:16px">
@@ -2429,7 +2431,7 @@ function renderCadastro(){
     const lista = S.fornecedores.filter(f=>f.tipo===tipo);
     if(lista.length === 0) return `
       <div class="card" style="text-align:center;padding:30px;color:var(--muted)">
-        <div style="font-size:32px;margin-bottom:10px">${{Fornecedor:'📦',Transportadora:'🚚',Despachante:'📋','Agente de Carga':'🚢','Armazém':'🏭','Serviço de Terceiros':'🔧'}[tipo]||'🗂️'}</div>
+        <div style="font-size:32px;margin-bottom:10px">${{Fornecedor:'📦',Transportadora:'🚚',Despachante:'📋','Agente de Carga':'🚢','Armazém':'🏭','Serviço de Terceiros':'🔧','Despesas gerais (ADM)':'🏢'}[tipo]||'🗂️'}</div>
         <div>Nenhum ${tipo.toLowerCase()} cadastrado ainda.</div>
         <button class="btn btn-primary" style="margin-top:14px" onclick="abrirModalCadastro('fornecedor','${tipo}')">+ Adicionar ${tipo}</button>
       </div>`;
@@ -4265,7 +4267,7 @@ function attachEvents(){
   if(cadBtn){
     cadBtn.addEventListener('click', ()=>{
       const t = S.cadastroTab;
-      const tipoMap2 = {fornecedores:'Fornecedor',transportadoras:'Transportadora',despachantes:'Despachante',agentes:'Agente de Carga',armazens:'Armazém',servicos:'Serviço de Terceiros'};
+      const tipoMap2 = {fornecedores:'Fornecedor',transportadoras:'Transportadora',despachantes:'Despachante',agentes:'Agente de Carga',armazens:'Armazém',servicos:'Serviço de Terceiros',adm:'Despesas gerais (ADM)'};
       if(t==='clientes') abrirModalCadastro('cliente');
       else abrirModalCadastro('fornecedor', tipoMap2[t]||'');
     });
@@ -5594,11 +5596,11 @@ if (!checkSession()) {
   applyTheme();
 }
 </script>
-<script src="entrada.js?v=a5d5c88a57"></script>
+<script src="entrada.js?v=ed7cb734a1"></script>
 <script src="ofx.js?v=a29f3f6ea6"></script>
 <script src="financeiro2.js?v=3a4670be59"></script>
-<script src="acervo.js?v=e2a3087413"></script>
+<script src="acervo.js?v=2289a6000e"></script>
 <script src="telas.js?v=79fcf1cb5f"></script>
-<script src="melhorias.js?v=88ad14641f"></script>
+<script src="melhorias.js?v=660b332a2e"></script>
 </body>
 </html>
