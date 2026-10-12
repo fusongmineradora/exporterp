@@ -68,6 +68,7 @@
       .replace(RE_CNPJ, '').replace(RE_CPF, '')
       .replace(/^(PIX ENVIADO\s+)+/, '')
       .replace(/^(PIX RECEBIDO|BOLETO PAGO|PAGAMENTOS|RECEBIMENTOS)\s+/, '')
+      .replace(/^(TRANSFERENCIA PIX\s+)?(DES|REM):\s*/, '')   // Bradesco
       .trim();
     return s;
   }
@@ -90,6 +91,7 @@
     { id: 'rend',    re: /^RENDIMENTOS/,                      tipoMov: 'rendimento', categoria: 'Rendimentos financeiros', centro: 'ADM' },
     { id: 'cambio',  re: /LIQ EXPORT/,                        tipoMov: 'cambio',     categoria: 'Câmbio (liquidação)' },
     { id: 'tarcamb', re: /^TAR CAMB/,                         tipoMov: 'tarifa',     categoria: 'Tarifa de câmbio' },
+    { id: 'tarifaB', re: /^TARIFA BANCARIA|^CESTA (DE )?SERVICOS/, tipoMov: 'tarifa', categoria: 'Tarifas bancárias', centro: 'ADM' },
     { id: 'tarifa',  re: /^TAR /,                             tipoMov: 'tarifa',     categoria: 'Tarifas bancárias', centro: 'ADM' },
     { id: 'iof',     re: /\bIOF\b/,                           tipoMov: 'tarifa',     categoria: 'IOF' },
     { id: 'darf',    re: /RECEITA FEDERAL|\bDARF\b/,          categoria: 'Impostos federais' },
@@ -114,6 +116,7 @@
     return false;
   }
 
+  const FU_SONG_CNPJ = '44962707000154';
   // regrasUsuario: [{ doc?:'46003223000103', texto?: 'ITALIANA', categoria, centro?, processo? }]
   function classificar(t, regrasUsuario) {
     const memo = normMemo(t.memo);
@@ -121,6 +124,10 @@
     if (t.documento) {
       const r = (regrasUsuario || []).find(r => r.doc && onlyDigits(r.doc) === t.documento);
       if (r) return { ...r, confianca: 'alta', motivo: 'CNPJ/CPF ' + t.documento };
+    }
+    // 1b) Transferência entre as contas da própria Fu Song (Itaú ↔ Bradesco): CNPJ da empresa ou "FU SONG" na descrição
+    if (!/LIQ EXPORT|^TAR |^RENDIMENTOS|\bIOF\b/.test(memo) && (t.documento === FU_SONG_CNPJ || /\bFU\s?SONG/.test(memo))) {
+      return { categoria: 'Transferência entre contas', centro: 'ADM', tipoMov: 'transferencia', confianca: 'alta', motivo: 'conta da própria empresa' };
     }
     // 2) Texto definido pelo usuário
     const ru = (regrasUsuario || []).find(r => r.texto && textoCasa(memo, normMemo(r.texto)));
@@ -132,6 +139,13 @@
   }
 
   // ── 4. Leitura ──────────────────────────────────────────────
+  // Itaú (341): MEMO (ou NAME). Bradesco (237) e outros: NAME + MEMO quando trazem textos diferentes
+  function memoDoBloco(b, banco) {
+    const memo = tag(b, 'MEMO'), name = tag(b, 'NAME');
+    const ita = /^0*341$/.test(String(banco || '').trim());
+    let s = ita ? (memo || name) : (name && memo && normMemo(name) !== normMemo(memo) && !normMemo(memo).includes(normMemo(name)) ? name + ' ' + memo : (memo || name));
+    return s.replace(/\s+/g, ' ').trim();
+  }
   function parse(input, opts) {
     opts = opts || {};
     const { text, encoding } = decode(input);
@@ -163,7 +177,7 @@
       tipoOFX: tag(b, 'TRNTYPE'),
       data: ofxDate(tag(b, 'DTPOSTED')),
       valor: ofxAmount(tag(b, 'TRNAMT')),
-      memo: (tag(b, 'MEMO') || tag(b, 'NAME')).replace(/\s+/g, ' ').trim(),
+      memo: memoDoBloco(b, tag(text, 'BANKID')),
     }));
     brutas.forEach(t => {
       if (!t.data) avisos.push(`Linha ${t.ordemArquivo + 1}: data inválida.`);
