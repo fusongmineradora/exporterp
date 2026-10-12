@@ -468,12 +468,12 @@ const CADASTRO_REVISADO = [
   ['Armazém', 'Brasil Terminal Portuario S.A.', '04.887.625/0001-78', [], 'custoPorto'],
   ['Armazém', 'Tecon Salvador S A', '03.642.342/0001-01', [], 'custoPorto'],
   ['Serviço de Terceiros', 'Ademir / FFA Comercio E Desenvolvimento', '51.660.510/0001-26', ['Ffa Comercio E Desenvolvimento', 'Ademir Furtado Filho', 'Assessoria (Ademir / FFA)']],
-  ['Serviço de Terceiros', 'Laboratorio Analitico Teixeira', '43.238.050/0001-14', ['A P Teixeira']],
+  [TIPO_ADM, 'Laboratorio Analitico Teixeira', '43.238.050/0001-14', ['A P Teixeira']],   // análises: despesa geral (12/10)
   ['Serviço de Terceiros', 'Henrique Azevedo Guidi', '53.119.499/0001-17', ['Henrique Azevedo GU']],
   ['Serviço de Terceiros', 'Dc Engenharia E Topografia', '47.982.679/0001-25', []],
 ];
 // despesas mensais da empresa (nenhuma entra em processo)
-const CADASTRO_ADM = ['Osmane Gomes Novaes', 'Serventia Extrajudicial Do Oficio Unico', 'Oliveira Dos Brejinhos Prefeit', 'Crea 3 Regiao', 'Sueli Canziani Gazaniga', 'Gilmara Vanderlinde Medeiros', 'Reginaldo Cota', 'Agencia Nacional De Mineracao', 'Agrega Workspace Coworking', 'Contabilidade Carboni', 'Tagplus', 'Pousada Elshaday Conquista LTDA', 'Municipio De Itajai', 'Otoni E Martins LTDA', 'Iata International Air Transpo', 'O Ponto Da Construcao', 'Posto Italo', 'Jose Augusto De Souza Filho', 'Receita Federal'];
+const CADASTRO_ADM = ['Osmane Gomes Novaes', 'Laboratorio Analitico Teixeira', 'Serventia Extrajudicial Do Oficio Unico', 'Oliveira Dos Brejinhos Prefeit', 'Crea 3 Regiao', 'Sueli Canziani Gazaniga', 'Gilmara Vanderlinde Medeiros', 'Reginaldo Cota', 'Agencia Nacional De Mineracao', 'Agrega Workspace Coworking', 'Contabilidade Carboni', 'Tagplus', 'Pousada Elshaday Conquista LTDA', 'Municipio De Itajai', 'Otoni E Martins LTDA', 'Iata International Air Transpo', 'O Ponto Da Construcao', 'Posto Italo', 'Jose Augusto De Souza Filho', 'Receita Federal'];
 const CLIENTE_HK = { nome: 'Hong Kong Sanjiang International Holdings Limited', usci: '79679646', tel: '13815645557 / 15751200205', email: '675086881@qq.com', end: 'Room 1, 22/F, Times Trade Centre, 1 Mei Wan Street, Tsuen Wan, Hong Kong' };
 
 const chaveNome = t => semAcento(limparNomeCadastro(String(t || ''))).replace(/\b(LTDA|EIRELI|ME|EPP|S\/?A|SA|MEI|LIMITADA)\b\.?/g, '').replace(/[^A-Z0-9]/g, '');
@@ -576,8 +576,16 @@ function organizarCadastro() {
   // 5) lançamentos: engenheiro de minas (Henrique) = serviço de terceiros; nome limpo
   (S.lancamentos || []).forEach(l => {
     const emp = String(l.empresa || '');
-    // (o laboratório do FS260106 continua lançamento próprio do processo, "Laboratório": se virasse "Serviços de Terceiros" o sistema juntaria com a conta da assessoria Ademir/FFA)
-    if (/TEIXEIRA/i.test(semAcento(emp)) && l.vinculoId === 'FS260106' && !/terceiros/i.test(l.descricao || '')) { l.descricao = 'Laboratório Analítico Teixeira — análise (serviço de terceiros do processo)'; n++; }
+    // laboratório (R$ 900) e Osmane (R$ 3.750, materiais e embalagens) saem do FS260106 e vão para despesas gerais (decidido em 12/10)
+    if (l.vinculo === 'processo' && l.vinculoId === 'FS260106' && /TEIXEIRA|OSMANE/i.test(semAcento(emp))) {
+      const lab = /TEIXEIRA/i.test(semAcento(emp));
+      l.vinculo = 'avulso'; l.vinculoId = 'ADM';
+      l.categoria = lab ? 'Laboratório' : 'Materiais e embalagens';
+      l.descricao = lab ? 'Laboratório — Laboratório Analítico Teixeira (análise)' : 'Materiais e embalagens — Osmane Gomes Novaes';
+      ((S.banco && S.banco.linhas) || []).forEach(b => { if (b.lancId === l.id) b.centro = 'ADM'; });
+      logAction('editar', 'EXTRATO_CAIXA', l.id, (lab ? 'Laboratório' : 'Osmane') + ': saiu do FS260106 para despesas gerais');
+      n++;
+    }
     if (/HENRIQUE\s+AZEVEDO/i.test(semAcento(emp)) && (l.empresa !== 'Henrique Azevedo Guidi' || l.categoria !== 'Serviços de Terceiros')) { l.empresa = 'Henrique Azevedo Guidi'; l.categoria = 'Serviços de Terceiros'; l.descricao = 'Serviços de Terceiros — Henrique Azevedo Guidi (engenheiro de minas)'; n++; }
   });
   if (n) logAction('editar', 'FORNECEDORES', '-', `Cadastro organizado (${n} ajuste(s))`);
