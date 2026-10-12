@@ -380,6 +380,7 @@ async function dvSalvar(p, f, pdfs) {
   while (p.containers.length < d.containers) p.containers.push('');
   p.docs._gerado = { versao, data: f.data, comprador: d.comprador.nome, consignatario: d.consignatario ? d.consignatario.nome : '', notify: d.notify ? d.notify.nome : '', produto: it.desc, ncm: dvNcm(it.ncm), containers: d.containers, kg: it.kg, preco: it.preco, total, pol: d.pol, pod: d.pod, sgs: !!f.sgs, tipos: Object.keys(pdfs), em: new Date().toISOString(), por: (typeof nomeUsuario === 'function' && nomeUsuario()) || '' };
   delete p.docs._ncmOk;
+  if (typeof aplicarPrevistos === 'function') { try { aplicarPrevistos(p); } catch (e) { console.warn('previstos', e); } }
   logAction('gerar', 'PROCESSOS', p.id, `${Object.keys(pdfs).map(t => t === 'invoice' ? 'Invoice' : 'Sales Contract').join(' e ')} versão ${versao} gerados pelo ERP · ${fmtKg(it.kg)} kg × USD ${String(f.preco)} = USD ${fmt(total)} · NCM ${dvNcmFmt(it.ncm)}${mud.length ? ' · processo atualizado: ' + mud.join(', ') : ''}`);
   await saveToSheets();
   return { versao, total };
@@ -388,6 +389,34 @@ const fmtKg = v => Math.round(Number(v) || 0).toLocaleString('pt-BR');
 
 // ── formulário ──
 let _dvForm = null;
+const dvProc = f => f && (f.novo || (S.processos || []).find(x => x.id === f.procId));
+// novo processo: próximo número e próximo embarque da sequência
+function dvRascunho() {
+  const nums = (S.processos || []).map(x => parseInt(String(x.id || '').replace(/^FS/i, ''), 10)).filter(n => !isNaN(n) && n > 0);
+  const embs = (S.processos || []).map(x => parseInt(x.embarque, 10)).filter(n => !isNaN(n) && n > 0);
+  const id = 'FS' + (nums.length ? Math.max(...nums) + 1 : 260096);
+  return {
+    id, embarque: String((embs.length ? Math.max(...embs) : 8) + 1).padStart(2, '0'), status: 'A Coletar',
+    invoiceNum: 'Invoice - ' + id, contratoNum: 'Contrato - ' + id,
+    cliente: '', usci: '', clienteTel: '', clienteEmail: '', clienteAdd: '', produto: '', ncm: '', moeda: 'USD',
+    pol: 'Santos Port, Brazil', pod: '', origem: 'Brazil', destino: 'China', incoterm: 'CFR', pagamento: '100% In advance',
+    peso: '', qtdContainer: '1', containers: [''], container: '', cambioInvoice: 0, cambioBanco: 'Itaú', cambioStatus: 'Em Aberto', docs: {},
+  };
+}
+function novoProcessoDocVendaUI() {
+  const p = dvRascunho();
+  _dvForm = Object.assign(dvPadrao(p), { procId: p.id, novo: p });
+  _uiCloseModal();
+  const modal = document.createElement('div'); modal.id = 'ui-modal'; modal.className = 'modal-overlay';
+  document.body.appendChild(modal);
+  dvDesenhar(); dvChecarModelos();
+}
+// destino da última venda para esse comprador
+function dvUltimoDestino(nome) {
+  const k = chaveNome(nome);
+  const q = (S.processos || []).filter(x => x.pod && x.status !== 'Cancelado' && [x.docs && x.docs._comprador, x.cliente].some(n => n && chaveNome(n) === k)).sort((a, b) => b.id.localeCompare(a.id))[0];
+  return q ? q.pod : '';
+}
 function gerarDocVendaUI(procId, ncmNovo) {
   const p = (S.processos || []).find(x => x.id === procId); if (!p) return;
   const f = _dvForm = Object.assign(dvPadrao(p), { procId });
@@ -404,12 +433,12 @@ function dvOpcoes(sel) {
 }
 function dvDesenhar() {
   const f = _dvForm, modal = document.getElementById('ui-modal'); if (!f || !modal) return;
-  const p = (S.processos || []).find(x => x.id === f.procId), g = p.docs && p.docs._gerado;
+  const p = dvProc(f), g = !f.novo && p.docs && p.docs._gerado;
   const lab = (t, h) => `<label style="display:block;font-size:12px;color:var(--muted2);margin:10px 0 4px">${t}${h ? ` <span style="opacity:.75">· ${h}</span>` : ''}</label>`;
   const inp = (k, extra) => `<input data-dv="${k}" value="${escHtml(f[k])}" ${extra || ''} style="width:100%">`;
   modal.innerHTML = `<div class="modal" style="max-width:620px;width:96%;max-height:92vh;overflow:auto">
-    <div class="modal-title">Gerar invoice e sales contract · ${escHtml(p.id)}</div>
-    <div style="font-size:12.5px;color:var(--muted2)">Os dados vão por cima dos seus modelos do Canva (logo, carimbo e assinatura ficam como estão). ${g ? `<b>Já existe a versão ${g.versao}</b> (${escHtml(isoToBr(String(g.em).slice(0, 10)))}); esta será a versão ${g.versao + 1} e a anterior continua guardada na pasta.` : ''}</div>
+    <div class="modal-title">${f.novo ? `Novo processo · ${escHtml(p.id)} · embarque ${escHtml(p.embarque)}` : 'Gerar invoice e sales contract · ' + escHtml(p.id)}</div>
+    <div style="font-size:12.5px;color:var(--muted2)">${f.novo ? `Ao salvar, o processo <b>${escHtml(p.id)}</b> é criado com estes dados (status A Coletar, câmbio em aberto, custos previstos) e a invoice e o contrato vão para a pasta dele. ` : ''}Os dados vão por cima dos seus modelos do Canva (logo, carimbo e assinatura ficam como estão). ${g ? `<b>Já existe a versão ${g.versao}</b> (${escHtml(isoToBr(String(g.em).slice(0, 10)))}); esta será a versão ${g.versao + 1} e a anterior continua guardada na pasta.` : ''}</div>
     <div id="dv-modelos" style="font-size:12.5px;margin-top:8px;color:var(--muted2)">Verificando modelos…</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px">
       <div>${lab('Data (Issued)')}${inp('data', 'type="date"')}</div>
@@ -420,7 +449,7 @@ function dvDesenhar() {
       <div>${lab('Consignee', 'recebe a carga')}<select data-dv="consignatario" style="width:100%">${dvOpcoes(f.consignatario)}</select></div>
       <div>${lab('Notify')}<select data-dv="notify" style="width:100%">${dvOpcoes(f.notify)}</select></div></div>` : ''}
     <div style="display:grid;grid-template-columns:2fr 1fr;gap:0 12px">
-      <div>${lab('Produto (descrição)')}${inp('produto')}</div>
+      <div>${lab('Produto (descrição)')}${inp('produto', 'list="dv-produtos"')}</div>
       <div>${lab('NCM / HS Code')}${inp('ncm', 'inputmode="numeric"')}</div>
     </div>
     ${f.ncmFonte ? `<div style="font-size:11.5px;color:var(--muted2);margin-top:4px">NCM sugerido: ${escHtml(f.ncmFonte)}</div>` : ''}
@@ -432,13 +461,15 @@ function dvDesenhar() {
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px">
       <div>${lab('Porto de embarque (POL)')}${inp('pol')}</div>
-      <div>${lab('Porto de destino (POD)')}${inp('pod')}</div>
+      <div>${lab('Porto de destino (POD)')}${inp('pod', 'list="dv-destinos"')}</div>
     </div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;font-size:13px">
       <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" style="width:auto;flex:none;margin:0" data-dv="sgs" ${f.sgs ? 'checked' : ''}> Report SGS</label>
       <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" style="width:auto;flex:none;margin:0" data-dv="invoice" ${f.invoice ? 'checked' : ''}> Invoice</label>
       <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" style="width:auto;flex:none;margin:0" data-dv="contrato" ${f.contrato ? 'checked' : ''}> Sales Contract</label>
     </div>
+    <datalist id="dv-produtos">${[...new Set((S.processos || []).map(x => x.produto).filter(Boolean))].map(t => `<option value="${escHtml(t)}">`).join('')}</datalist>
+    <datalist id="dv-destinos">${[...new Set((S.processos || []).map(x => x.pod).filter(Boolean))].map(t => `<option value="${escHtml(t)}">`).join('')}</datalist>
     <div id="dv-prob" style="font-size:12.5px;color:var(--orange);margin-top:10px"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:14px">
       <button class="btn btn-secondary" id="dv-cancelar">Cancelar</button>
@@ -457,6 +488,13 @@ function dvDesenhar() {
       if (k === 'kg') { f.kg = String(el.value).replace(/\D/g, ''); f.kgManual = true; }
       if (k === 'containers') { const n = Math.max(1, parseInt(el.value, 10) || 1); f.containers = n; if (!f.kgManual) { f.kg = n * KG_POR_CONTAINER; const k2 = modal.querySelector('[data-dv="kg"]'); if (k2) k2.value = f.kg; } }
       if (k === 'comprador' && f.notifyOn && !f.notify) f.notify = el.value;
+      if (k === 'ncm') f.ncmManual = true;
+      if (k === 'pod') f.podManual = true;
+      if (k === 'comprador' && f.novo && !f.podManual) { const d = dvUltimoDestino(el.value); if (d) { f.pod = d; const e2 = modal.querySelector('[data-dv="pod"]'); if (e2) e2.value = d; } }
+      if (k === 'produto' && !f.ncmManual) {   // NCM sugerido pela última NF desse produto
+        const p0 = dvProc(f), antes = p0.produto; p0.produto = el.value; const sg = dvNcmSugerido(p0); if (!f.novo) p0.produto = antes;
+        if (sg.ncm) { f.ncm = sg.ncm; f.ncmFonte = sg.fonte; const e3 = modal.querySelector('[data-dv="ncm"]'); if (e3) e3.value = sg.ncm; }
+      }
       if (k === 'notifyOn') { if (f.notifyOn && !f.notify) f.notify = f.comprador; dvDesenhar(); dvChecarModelos(); return; }
       atualizar();
     });
@@ -491,17 +529,31 @@ async function dvChecarModelos() {
 async function dvExecutar(salvar) {
   const f = _dvForm; if (!f) return;
   const pb = dvProblemas(f); if (pb.length) { showToast(pb[0]); return; }
-  const p = (S.processos || []).find(x => x.id === f.procId); if (!p) return;
+  if (f.novo) {   // outro processo pode ter sido criado enquanto o formulário estava aberto
+    const r = dvRascunho(); if (r.id !== f.novo.id || r.embarque !== f.novo.embarque) { Object.assign(f.novo, { id: r.id, embarque: r.embarque, invoiceNum: r.invoiceNum, contratoNum: r.contratoNum }); f.procId = r.id; }
+  }
+  const p = dvProc(f); if (!p) return;
   const btn = document.getElementById(salvar ? 'dv-ok' : 'dv-ver'); const txt = btn && btn.textContent;
   if (btn) { btn.disabled = true; btn.textContent = salvar ? 'Gerando…' : 'Montando…'; }
   try {
     const pdfs = await dvGerarPdfs(p, f);
     if (!salvar) { Object.entries(pdfs).forEach(([t, b]) => window.open(URL.createObjectURL(new Blob([b], { type: 'application/pdf' })), '_blank')); return; }
+    if (f.novo) dvCriarProcesso(p, f);
     const r = await dvSalvar(p, f, pdfs);
-    _dvForm = null; _uiCloseModal(); render();
-    showToast(`✅ ${Object.keys(pdfs).map(t => t === 'invoice' ? 'Invoice' : 'Sales Contract').join(' e ')} ${p.id} salvos (versão ${r.versao}) · USD ${fmt(r.total)}`);
+    _dvForm = null; _uiCloseModal();
+    if (f.novo) { S.page = 'processos'; S.sub = p; S.editMode = false; S.createMode = false; }
+    render();
+    showToast(`✅ ${f.novo ? 'Processo ' + p.id + ' criado · ' : ''}${Object.keys(pdfs).map(t => t === 'invoice' ? 'Invoice' : 'Sales Contract').join(' e ')} ${p.id} salvos (versão ${r.versao}) · USD ${fmt(r.total)}`);
   } catch (e) { uiAlert(e.message || String(e), 'Não foi possível gerar'); }
   finally { if (btn && document.body.contains(btn)) { btn.disabled = false; btn.textContent = txt; } }
+}
+// cria o processo novo (antes de salvar os PDFs, para a pasta ser criada com o nome certo)
+function dvCriarProcesso(p, f) {
+  if ((S.processos || []).some(x => x.id === p.id)) throw new Error('O processo ' + p.id + ' já existe');
+  const d = dvDadosDoForm(p, f), quem = d.consignatario || d.comprador, c = dvCliente(quem.nome) || {};
+  Object.assign(p, { cliente: quem.nome, usci: c.usci || '', clienteTel: c.tel || '', clienteEmail: c.email || '', clienteAdd: c.end || '' });
+  S.processos.push(p);
+  logAction('criar', 'PROCESSOS', p.id, `${quem.nome} · ${d.itens[0].desc} · embarque ${p.embarque} (pelo Novo processo com invoice e contrato)`);
 }
 function dvManterNcm(procId) {
   const p = (S.processos || []).find(x => x.id === procId), a = dvAvisoNcm(p); if (!a) return;
@@ -554,4 +606,17 @@ if (typeof renderProcesso2 === 'function' && !renderProcesso2._dv) {
     return h;
   };
   renderProcesso2._dv = true;
+}
+
+// Início: Novo processo (cria o processo junto com a invoice e o contrato)
+if (typeof renderInicio === 'function' && !renderInicio._dv) {
+  const base = renderInicio;
+  renderInicio = function () {
+    const h = base.apply(this, arguments);
+    const btn = `<button class="btn btn-primary btn-sm" style="min-height:40px" onclick="novoProcessoDocVendaUI()">📄 Novo processo (invoice + contrato)</button>`;
+    // no topo, ao lado de "N processos em andamento"
+    const re = /(<div style="font-size:13px;font-weight:600;color:var\(--accent\);background:var\(--bg4\)[^>]*>\d+ processos? em andamento<\/div>)/;
+    return re.test(h) ? h.replace(re, `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${btn}$1</div>`) : h;
+  };
+  renderInicio._dv = true;
 }
