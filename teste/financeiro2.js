@@ -855,13 +855,16 @@ function nomeCliente(p) {
   return String((p && p.cliente) || 'Sem cliente').trim();
 }
 
+// valor exportado do processo (13/10/2026): o que foi embarcado de fato (padrão = invoice; pode ser o da DU-E).
+// O que o cliente pagou além disso é crédito dele (antecipação de venda futura).
+function valorExportado(p) { const d = (p && p.docs) || {}; return d._valorExportado != null && d._valorExportado !== '' ? Number(d._valorExportado) || 0 : Number(p && p.cambioInvoice) || 0; }
 function contaClientes() {
   const cli = {};
   (S.processos || []).forEach(p => {
     const n = nomeCliente(p);
     cli[n] = cli[n] || { nome: n, recebidoUsd: 0, embarcadoUsd: 0, processos: [] };
     cli[n].processos.push(p);
-    if (EMBARCADOS.includes(p.status)) cli[n].embarcadoUsd += Number(p.cambioInvoice) || 0;
+    if (EMBARCADOS.includes(p.status)) cli[n].embarcadoUsd += valorExportado(p);
   });
   // câmbio recebido: contratos anexados (fatura → processo → cliente); sem contrato: lançamentos de câmbio
   const vistos = new Set();
@@ -910,9 +913,10 @@ function renderResultados() {
       </div>
       <div class="g2" style="margin-top:10px;font-size:12px">
         <div class="total-box" style="margin-top:0"><span style="color:var(--muted)">Câmbio recebido</span><span class="num">${usd(c.recebidoUsd)}</span></div>
-        <div class="total-box" style="margin-top:0"><span style="color:var(--muted)">Invoices embarcadas</span><span class="num">${usd(c.embarcadoUsd)}</span></div>
+        <div class="total-box" style="margin-top:0"><span style="color:var(--muted)">Valor exportado</span><span class="num">${usd(c.embarcadoUsd)}</span></div>
       </div>
-      <div style="margin-top:8px;font-size:11px;color:var(--muted2)">${c.processos.map(p => `${escHtml(p.id)} (${escHtml(p.status || '—')}${p.cambioInvoice ? ', ' + usd(p.cambioInvoice) : ''})`).join(' · ')}</div>
+      ${(() => { const ant = c.processos.filter(p => p.docs && p.docs._valorExportado != null && (Number(p.cambioInvoice) || 0) - valorExportado(p) > 1); return ant.length ? `<div style="margin-top:8px;font-size:11.5px;color:var(--green)">Antecipação de venda futura: ${ant.map(p => escHtml(p.id) + ' ' + usd((Number(p.cambioInvoice) || 0) - valorExportado(p))).join(' · ')}</div>` : ''; })()}
+      <div style="margin-top:8px;font-size:11px;color:var(--muted2)">${c.processos.map(p => `${escHtml(p.id)} (${escHtml(p.status || '—')}${p.cambioInvoice ? ', ' + usd(valorExportado(p)) + (valorExportado(p) !== (Number(p.cambioInvoice) || 0) ? ' exportado de ' + usd(p.cambioInvoice) : '') : ''})`).join(' · ')}</div>
     </div>`;
   }).join('');
 
