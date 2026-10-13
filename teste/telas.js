@@ -156,7 +156,8 @@ function renderInicio() {
 
   const cargas = ativos.map(p => ({ p, f: faseProcesso(p), fech: processoFechado(p) })).filter(x => !(x.f >= 4 && x.fech)).sort((a, b) => b.f - a.f || String(b.p.id).localeCompare(a.p.id));
   const resultados = ativos.map(p => ({ p, c: custosProcesso(p), prov: !processoFechado(p) })).filter(x => x.c.receita || x.c.custo).sort((a, b) => String(b.p.id).localeCompare(a.p.id));
-  const clientes = typeof contaClientes === 'function' ? contaClientes().filter(c => c.recebidoUsd || c.embarcadoUsd) : [];
+  // saldo do cliente em reais: crédito disponível (gerado − usado) e o que foi pago e ainda não embarcou (13/10/2026)
+  const clientes = typeof saldoClientes === 'function' ? saldoClientes() : [];
 
   const blocoPagar = card(`
     ${titulo2('A pagar', `<span style="font-family:'JetBrains Mono',monospace;font-size:18px;color:var(--red)">${brl(totalPagar)}</span>`)}
@@ -221,7 +222,7 @@ function renderInicio() {
     </div>` : ''}
     ${clientes.length ? `<div style="border-top:1px solid var(--border);padding-top:12px;display:flex;flex-direction:column;gap:6px">
       <div style="font-size:12px;color:var(--muted2)">Saldo dos clientes</div>
-      ${clientes.map(c => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13.5px;flex-wrap:wrap"><span>${escHtml(c.nome)}</span><span style="font-family:'JetBrains Mono',monospace;color:${c.saldoUsd >= 0 ? 'var(--green)' : 'var(--red)'}">${usd(Math.abs(c.saldoUsd))} ${c.saldoUsd >= 0 ? 'a favor' : 'a receber'}</span></div>`).join('')}
+      ${clientes.map(c => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13.5px;flex-wrap:wrap"><span>${escHtml(c.nome)}${c.adiantado ? `<span style="color:var(--muted2);font-size:12px"> · R$ ${m2(c.adiantado)} pago e não embarcado</span>` : ''}</span><span style="font-family:'JetBrains Mono',monospace;color:${c.disponivel > 0.009 ? 'var(--green)' : c.disponivel < -0.009 ? 'var(--red)' : 'var(--muted2)'}">${Math.abs(c.disponivel) < 0.01 ? 'sem saldo' : 'R$ ' + m2(Math.abs(c.disponivel)) + (c.disponivel > 0 ? ' de crédito' : ' usado a mais')}</span></div>`).join('')}
     </div>` : ''}`);
 
   return `

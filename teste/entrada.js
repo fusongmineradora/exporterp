@@ -943,12 +943,12 @@ function ajustarDue(item) {
   { const Q = (S.processos || []).find(p => p.id === item.processo);
     const par = Q && ((S.processos || []).some(q => q.id === Q.id + 'S') || /^FS\d{6}S$/.test(Q.id));   // venda dividida: confere pelo processo (soma das duas DU-Es)
     if (Q && !par) {
-      const kg = (typeof toneladas === 'function' ? toneladas(Q) : 0) * 1000, peso = Number(info.pesoLiq) || 0;
-      const inv = Number(Q.cambioInvoice) || 0, val = Number(info.vmcv || info.vmle) || 0, nk = n => Math.round(n).toLocaleString('pt-BR');
+      const kg = (typeof toneladas === 'function' ? toneladas(Q) : 0) * 1000, peso = Number(info.pesoLiq) || 0, nk = n => Math.round(n).toLocaleString('pt-BR');
+      const val = Number(info.vmcv || info.vmle) || 0, dR = Number(info.dueReais) || 0, nfR = typeof nfSaidaReais === 'function' ? nfSaidaReais(Q) : 0;
       const prob = [];
       if (peso && kg && Math.abs(peso - kg) > Math.max(50, kg * 0.005)) prob.push(`peso ${nk(peso)} kg na DU-E × ${nk(kg)} kg na invoice`);
-      const decidido = Q.docs && Q.docs._valorExportadoFonte === 'due' && typeof valorExportado === 'function' && Math.abs(valorExportado(Q) - val) <= 1;   // ex.: FS260107, diferença é antecipação
-      if (val && inv && Math.abs(val - inv) > 1 && !decidido) prob.push(`valor USD ${fmt(val)} na DU-E × USD ${fmt(inv)} na invoice`);
+      if (dR && nfR && Math.abs(dR - nfR) > Math.max(1, nfR * 0.005)) prob.push(`R$ ${fmt(dR)} na DU-E × R$ ${fmt(nfR)} na nota de saída`);
+      if (val && dR && !(dR / val > 3 && dR / val < 8)) prob.push(`valor em dólar incoerente (USD ${fmt(val)} para R$ ${fmt(dR)})`);
       if (prob.length) item.aviso = (item.aviso ? item.aviso + ' ' : '') + `⚠️ Esta DU-E não bate com o ${Q.id}: ${prob.join('; ')}. Confira com o despachante (retificação).`;
     } }
   const c = item.candidatos[0], seg = item.candidatos[1];
