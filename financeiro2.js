@@ -848,7 +848,12 @@ function resultadoProcesso(p) {
   };
 }
 
-function nomeCliente(p) { return String(p.cliente || 'Sem cliente').trim(); }
+// saldo e cobrança por quem paga: o comprador (Buyer) quando informado; senão o cliente do processo (13/10/2026)
+function nomeCliente(p) {
+  const c = p && p.docs && p.docs._comprador;
+  if (c) { const k = normNome(c); const cli = (S.clientes || []).find(x => normNome(x.nome) === k); return String(cli ? cli.nome : c).trim(); }
+  return String((p && p.cliente) || 'Sem cliente').trim();
+}
 
 function contaClientes() {
   const cli = {};
@@ -877,6 +882,12 @@ function contaClientes() {
     if (vistos.has(p.id)) return;
     const usd = (normalizeStatus(p.cambioStatus) === 'Pago') ? (Number(p.cambioRecebido) || 0) : 0;
     cli[nomeCliente(p)].recebidoUsd += usd;
+  });
+  // diferença pequena entre invoice e câmbio (tarifa do banco intermediário, até USD 60 por contrato) não é dívida do cliente
+  (S.processos || []).forEach(p => {
+    if (!EMBARCADOS.includes(p.status)) return;
+    const inv = Number(p.cambioInvoice) || 0, rec = Number(p.cambioRecebido) || 0, dif = inv - rec;
+    if (rec > 0 && dif > 0.009 && dif <= (typeof tolIntermediario === 'function' ? tolIntermediario(p) : 60) && cli[nomeCliente(p)]) cli[nomeCliente(p)].recebidoUsd += dif;
   });
   return Object.values(cli).map(c => ({ ...c, saldoUsd: c.recebidoUsd - c.embarcadoUsd })).sort((a, b) => b.processos.length - a.processos.length);
 }
