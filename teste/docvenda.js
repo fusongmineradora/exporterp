@@ -654,7 +654,7 @@ function dvCriarProcesso(p, f) {
   const d = dvDadosDoForm(p, f), quem = d.consignatario || d.comprador, c = dvCliente(quem.nome) || {};
   Object.assign(p, { cliente: quem.nome, usci: c.usci || '', clienteTel: c.tel || '', clienteEmail: c.email || '', clienteAdd: c.end || '' });
   p.docs = p.docs || {}; p.docs._intermediador = String(f.inter || '').trim(); p.docs._produtoInterno = String(f.prodInterno || '').trim();
-  if (typeof ehSalvador === 'function' && !ehSalvador(p)) p.docs._armazem = true;   // por Santos o container passa pelo armazém: já entra o armazém estimado
+  p.docs._armazem = true;   // já entra o armazém estimado (Santos R$ 3.200 / Salvador R$ 1.100 por container); "Não vai para o armazém" tira
   S.processos.push(p);
   logAction('criar', 'PROCESSOS', p.id, `${dvNomeInterno(p)} · ${quem.nome} · ${d.itens[0].desc} · embarque ${p.embarque} (pelo Novo processo com invoice e contrato)`);
 }
