@@ -386,6 +386,7 @@ function enriquecerInfo(item) {
     info.armador = /\bMSC\b/.test(info.navio) ? 'MSC' : /MAERSK/.test(info.navio) ? 'MAERSK' : /COSCO/.test(info.navio) ? 'COSCO' : /CMA/.test(info.navio) ? 'CMA CGM' : /HAPAG/.test(info.navio) ? 'Hapag-Lloyd' : /EVERGREEN/.test(info.navio) ? 'Evergreen' : '';
   }
   if (item.tipo === 'bl') {
+    info.ruc = info.ruc || ((U.replace(/\s+/g, ' ').match(/\b(\dBR\d{20,40})\b/) || [])[1]) || '';   // RUC da exportação ("Export references") = o da DU-E (13/10/2026)
     // BL / waybill: Maersk ("Booking No. 2761xxxxx", "Shipped on Board Date AAAA-MM-DD") e MSC
     // ("BOOKING REF. EBKGxxxxxxxx", "SHIPPED ON BOARD DATE dd-Mon-aaaa", navio "MSC NOME - VIAGEM").
     // O BL é o documento oficial da companhia marítima: o que ele diz vale sobre o processo (v78).
@@ -409,7 +410,7 @@ function enriquecerInfo(item) {
       if (ord[0]) emb3 = ord[0][0];
     }
     info.embarque = emb ? emb.split('-').reverse().join('/') : emb2 ? `${emb2[1]}/${emb2[2]}/${emb2[3]}` : emb3;
-    info.dueNumero = info.dueNumero || cx(/DU-?E:?(\d{2}BR\d{9}-?\d)/i) || cx(/(\d{2}BR\d{9}-\d)/);
+    info.dueNumero = normDue(info.dueNumero || cx(/DU-?E:?(\d{2}BR\d{9}-?\d)/i) || cx(/(\d{2}BR\d{9}-\d)/));
     info.refProcesso = cx(/INVOICEN[O°º.]*:?(FS\d{6}S?)/i) || ((T.toUpperCase().match(/\bFS\s?\d{6}S?\b/) || [''])[0].replace(/\s/g, ''));
     const lacres = new Set((U.match(/\b[A-Z]{2}\s?-\s?[A-Z]{2}\d{5,9}\b/g) || []).map(x => x.replace(/\s/g, '')));
     info.containers = [...new Set((C.match(/[A-Z]{3}U\d{7}/g) || []))].filter(c => !lacres.has(c));
@@ -435,11 +436,26 @@ function enriquecerInfo(item) {
     info.refProcesso = ((T.toUpperCase().match(/\bFS\s?\d{6}S?\b/) || [''])[0].replace(/\s/g, ''));
   }
   if (item.tipo === 'due') {
-    info.dueNumero = info.dueNumero || mx(/\b(\d{2}BR\d{9}-?\d)\b/i);
+    info.dueNumero = normDue(info.dueNumero || mx(/\b(\d{2}BR\d{9}-?\d)\b/i));
     info.dueChave = info.dueChave || mx(/Chave de acesso:?\s*([0-9A-Z]{14})\b/i);
     // para conferir com a invoice: VMLE (na moeda da venda) e peso líquido
     if (!info.vmle) info.vmle = numBR(mx(/VMLE\b[^0-9]{0,80}?([\d.]+,\d{2})/i)) || 0;
     if (!info.pesoLiq) info.pesoLiq = numBR(mx(/Peso\s+l[ií]quido\s*\(?KG\)?\s*([\d.]+,\d+)/i)) || 0;
+    // cruzamentos (13/10/2026): RUC (= o do BL), notas de saída da Fu Song citadas, chaves de notas (extrato completo/XML) e porto de embarque
+    info.ruc = info.ruc || ((U.replace(/\s+/g, ' ').match(/\bRUC\s*:?\s*(\dBR\d{20,40})\b/) || [])[1]) || '';
+    info.nfsSaida = [...new Set([...T.matchAll(/NF-?e\s+(\d{1,3})\s*\/\s*(\d{1,9})\b/gi)].map(m => String(Number(m[2]))))];
+    info.refs = [...new Set([...(info.refs || []), ...(typeof chavesDoTexto === 'function' ? chavesDoTexto(T) : [])])];
+    // situação (13/10/2026): averbada / carga exportada / embarque bloqueado — a DU-E confirma o embarque
+    if (!info.vmcv) info.vmcv = numBR(mx(/VMCV\b[^0-9]{0,80}?([\d.]+,\d{2})/i)) || 0;
+    if (!info.dueReais) info.dueReais = numBR(mx(/Valor total (?:das )?mercadorias\s*\(R\$\)\s*([\d.]+,\d{2})/i)) || 0;
+    info.dueSituacao = mx(/Situa[cç][aã]o atual da DU-?E.{0,160}?\b(Averbada|Desembara[cç]ada|Registrada|Cancelada|Liberada|Em an[aá]lise)\b/i);
+    info.dueExportada = /Carga Completamente Exportada|\bAverba[cç][aã]o\b/i.test(U) || /^Averbada$/i.test(info.dueSituacao || '');
+    { const evs = [...U.matchAll(/(\d{2}\/\d{2}\/\d{4})\s+\d{2}:\d{2}(?::\d{2})?\s+(Embarque bloqueado|Embarque desbloqueado|Desbloqueio[^0-9]{0,30})/gi)].map(m => ({ d: m[1], bloq: /bloqueado/i.test(m[2]) && !/desbloq/i.test(m[2]) }));
+      const ult = evs[evs.length - 1];
+      info.dueBloqueio = !info.dueExportada && ((ult && ult.bloq) ? ult.d : (!evs.length && /Embarque bloqueado/i.test(U) ? 'sim' : '')) || ''; }
+    { const le = semAcento(T).toUpperCase().replace(/\s+/g, ' '); const trecho = (le.match(/LOCAL DE EMBARQUE.{0,200}/) || [le])[0];
+      const porto = ['SALVADOR', 'SANTOS', 'PARANAGUA', 'ITAGUAI', 'PECEM', 'SUAPE', 'RIO GRANDE', 'VITORIA', 'ITAJAI', 'NAVEGANTES', 'SAO FRANCISCO DO SUL', 'RIO DE JANEIRO'].find(x => trecho.includes(x));
+      if (porto) info.dueporto = porto; }
   }
   {
     const ct = U.match(/\b(FS\d{6})S?\s+(\d{9,10})\s+([A-Z]{4}\d{7})\b/);   // "FS260097 271229537 SEKU1633624"
@@ -528,13 +544,16 @@ function aplicarCambioNoProcesso(p, c, url) {
 // BL anexado = embarcado. O BL é o documento oficial da companhia marítima: booking, data de embarque,
 // portos, containers, armador e DU-E do BL substituem os do processo (decidido em 13/10/2026). Campo vazio no BL não apaga nada.
 const PORTO_STATUS_FIM = ['No Destino', 'Concluído', 'Cancelado'];
+// número da DU-E sempre no mesmo formato: 26BR000000000-0 (o arquivo pode vir sem o traço)
+function normDue(v) { const d = String(v || '').replace(/\W/g, '').toUpperCase(); return /^\d{2}BR\d{10}$/.test(d) ? d.slice(0, 13) + '-' + d.slice(13) : String(v || ''); }
 function aplicarBL(p, info, url, mud) {
   p.docs = p.docs || {};
   const antes = {};
   const set = (k, v) => { if (!v) return; if (String(p[k] || '') !== String(v)) { antes[k] = p[k] || ''; p[k] = v; mud.push(k); } };
   set('booking', info.booking);
   set('saida', info.embarque);
-  set('dueNumero', info.dueNumero);
+  // o número da DU-E vale pela própria DU-E: o do BL só entra se o processo ainda não tem DU-E anexada (13/10/2026)
+  if (!Object.keys(p.docs._dues || {}).some(k => /BR\d{9}/i.test(k))) set('dueNumero', info.dueNumero);
   set('pol', info.pol);
   set('pod', info.pod);
   set('companhia', info.armador);
@@ -543,9 +562,9 @@ function aplicarBL(p, info, url, mud) {
     const atuais = (p.containers || []).map(c => String(c).toUpperCase().replace(/[\s-]/g, '')).filter(Boolean);
     if (atuais.join(',') !== conts.join(',')) { antes.containers = atuais.join(', '); p.containers = conts.slice(); p.container = conts[0]; p.qtdContainer = String(conts.length); mud.push('container'); }
   }
-  if (!PORTO_STATUS_FIM.includes(p.status) && p.status !== 'Embarcado') { antes.status = p.status; p.status = 'Embarcado'; mud.push('status'); }
+  if (!PORTO_STATUS_FIM.includes(p.status) && p.status !== 'Embarcado' && !(typeof dueBloqueio === 'function' && dueBloqueio(p))) { antes.status = p.status; p.status = 'Embarcado'; mud.push('status'); }
   const velho = p.docs._bl || {};
-  const novo = { booking: info.booking, embarque: info.embarque, navio: info.navio, viagem: info.viagem, lacre: info.lacre, containers: conts, due: info.dueNumero, pol: info.pol, pod: info.pod, numero: info.blNumero, url: url || velho.url || '' };
+  const novo = { booking: info.booking, embarque: info.embarque, navio: info.navio, viagem: info.viagem, lacre: info.lacre, containers: conts, due: info.dueNumero, pol: info.pol, pod: info.pod, numero: info.blNumero, ruc: info.ruc, url: url || velho.url || '' };
   Object.keys(novo).forEach(k => { const v = novo[k]; if (v == null || v === '' || (Array.isArray(v) && !v.length)) novo[k] = velho[k]; });   // campo vazio não apaga o que já estava
   p.docs._bl = novo;
   if (info.navio) p.docs._viagem = Object.assign({}, p.docs._viagem, { navio: info.navio, atd: info.embarque || (p.docs._viagem || {}).atd });
@@ -586,10 +605,17 @@ function aplicarDocNoProcesso(item, p, upd) {
   }
   if (item.tipo === 'nfe' && info.transpNome && !p.logTransportadora) { p.logTransportadora = titulo(info.transpNome); mud.push('logTransportadora'); }
   if (item.tipo === 'due') {
-    if (info.dueNumero && !p.dueNumero) { p.dueNumero = info.dueNumero; mud.push('dueNumero'); }
-    if (info.dueChave && !p.dueChave) { p.dueChave = info.dueChave; mud.push('dueChave'); }
-    // cada DU-E do processo (há processos com mais de uma carga): VMLE e peso para conferir com a invoice
-    if (info.vmle || info.pesoLiq) { p.docs._dues = p.docs._dues || {}; p.docs._dues[info.dueNumero || url || 'due'] = { vmle: Number(info.vmle) || 0, peso: Number(info.pesoLiq) || 0 }; }
+    // o número da DU-E vale pela DU-E: troca o que veio do BL, mas não o de outra DU-E já anexada (processo com duas cargas)
+    const doDoc = Object.keys(p.docs._dues || {}).filter(k => /BR\d{9}/i.test(k));
+    if (info.dueNumero && (!p.dueNumero || !doDoc.includes(p.dueNumero))) { if (p.dueNumero !== info.dueNumero) { p.dueNumero = info.dueNumero; mud.push('dueNumero'); } if (info.dueChave && p.dueChave !== info.dueChave) { p.dueChave = info.dueChave; mud.push('dueChave'); } }
+    else if (info.dueChave && !p.dueChave) { p.dueChave = info.dueChave; mud.push('dueChave'); }
+    // cada DU-E do processo (há processos com mais de uma carga): VMLE, peso, RUC, notas de saída e porto, para conferir
+    // DU-E retificada: avisa no histórico quando passa a bater com a invoice
+    { const ant = (p.docs._dues || {})[info.dueNumero]; const kg = (typeof toneladas === 'function' ? toneladas(p) : 0) * 1000, inv = Number(p.cambioInvoice) || 0;
+      const bate = x => x && (!kg || !x.peso || Math.abs(x.peso - kg) <= Math.max(50, kg * 0.005)) && (!inv || !(x.vmcv || x.vmle) || Math.abs((x.vmcv || x.vmle) - inv) <= 1);
+      const novo = { peso: Number(info.pesoLiq) || 0, vmcv: Number(info.vmcv) || 0, vmle: Number(info.vmle) || 0 };
+      if (ant && !bate(ant) && bate(novo) && typeof logAction === 'function') logAction('editar', 'PROCESSOS', p.id, `DU-E ${info.dueNumero} retificada: agora bate com a invoice`); }
+    if (info.vmle || info.pesoLiq || info.dueNumero) { p.docs._dues = p.docs._dues || {}; p.docs._dues[info.dueNumero || url || 'due'] = { vmle: Number(info.vmle) || 0, vmcv: Number(info.vmcv) || 0, reais: Number(info.dueReais) || 0, peso: Number(info.pesoLiq) || 0, ruc: info.ruc || '', nfs: info.nfsSaida || [], porto: info.dueporto || '', situacao: info.dueSituacao || '', exportada: !!info.dueExportada, bloqueio: info.dueBloqueio || '' }; }
   }
   if (item.tipo === 'faturaFrete') {
     const set = (k, v) => { if (v && !p[k]) { p[k] = v; mud.push(k); } };
@@ -1873,7 +1899,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '79';
+const VERSAO_TESTE = '84';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -2288,13 +2314,17 @@ function blocoContaAssessoria() {
   const c = contaAssessoria(); if (!c.linhas.length && !c.devidos.length) return '';
   const m = v => 'R$ ' + (Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const dif = c.diferenca, aberto = !!S._contaAss;
+  // linha de baixo: de quais processos são os valores em aberto; aviso só quando o extrato e os processos pagos não batem (13/10/2026)
+  const nAb = c.abertos.length, algumEst = c.abertos.some(x => x.previsto);
+  const linhaAss = (nAb ? `${nAb} processo${nAb > 1 ? 's' : ''} em aberto: ${c.abertos.map(x => escHtml(x.id.replace(/^FS260/, ''))).join(' · ')}${algumEst ? ' <span style="opacity:.8">(valores estimados até chegar a nota ou o comprovante)</span>' : ''}` : 'nada em aberto')
+    + (Math.abs(dif) < 0.01 ? '' : ' · ' + (dif < 0 ? `<span style="color:var(--yellow)">⚠ faltam ${m(-dif)} no extrato</span>` : `<span style="color:var(--accent)">crédito de ${m(dif)} com o Ademir</span>`));
   const txtDif = Math.abs(dif) < 0.01 ? '<span style="color:var(--green)">conta fechada</span>' : dif < 0 ? `<span style="color:var(--yellow)">faltam ${m(-dif)} no extrato</span>` : `<span style="color:var(--accent)">crédito de ${m(dif)} (pago a mais)</span>`;
   return `<div style="padding:9px 12px;border-radius:10px;background:var(--bg3)">
-    <div style="display:flex;justify-content:space-between;gap:10px;cursor:pointer" onclick="S._contaAss=!S._contaAss;render()"><div><div style="font-size:14px;font-weight:600">Assessoria Ademir / FFA ${aberto ? '▾' : '▸'}</div><div style="font-size:12.5px;color:var(--muted2)">pago ${m(c.pago)} · devido pelos processos pagos ${m(c.devido)} · ${txtDif}</div></div><div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;white-space:nowrap">${m(c.emAberto)} a pagar</div></div>
+    <div style="display:flex;justify-content:space-between;gap:10px;cursor:pointer" onclick="S._contaAss=!S._contaAss;render()"><div><div style="font-size:14px;font-weight:600">Assessoria Ademir / FFA ${aberto ? '▾' : '▸'}</div><div style="font-size:12.5px;color:var(--muted2)">${linhaAss}</div></div><div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;white-space:nowrap">${m(c.emAberto)} a pagar</div></div>
     ${aberto ? `<div style="font-size:12.5px;padding-top:8px;display:grid;gap:4px">
       <div style="font-weight:600">Saídas no extrato para Ademir/FFA</div>${c.linhas.map(l => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${isoToBr(l.data)} · ${escHtml((l.favorecido || l.memo).slice(0, 40))}${ASSESSORIA_VIA_SOCIO.includes(l.chave) ? ' (via Klismann)' : ''}</span><span style="font-family:'JetBrains Mono',monospace">${m(Math.abs(l.valor))}</span></div>`).join('')}
       <div style="font-weight:600;padding-top:6px">Processos já pagos (${c.devidos.length})</div><div style="color:var(--muted2)">${c.devidos.map(x => escHtml(x.id.replace(/^FS260/, '')) + ' ' + m(x.valor)).join(' · ')}</div>
-      <div style="font-weight:600;padding-top:6px">Em aberto (${c.abertos.length})</div><div style="color:var(--muted2)">${c.abertos.map(x => escHtml(x.id.replace(/^FS260/, '')) + ' ' + m(x.valor) + (x.previsto ? ' (previsto)' : '')).join(' · ') || '—'}</div>
+      <div style="font-weight:600;padding-top:6px">Em aberto (${c.abertos.length})</div><div style="color:var(--muted2)">${c.abertos.map(x => escHtml(x.id.replace(/^FS260/, '')) + ' ' + m(x.valor) + (x.previsto ? ' (estimado)' : '')).join(' · ') || '—'}</div>
       ${dif < -0.009 ? `<div style="color:var(--yellow);padding-top:6px">A diferença de ${m(-dif)} pode ter sido paga por outra conta, em dinheiro, ou ainda não foi paga.</div>` : ''}
     </div>` : ''}
   </div>`;
