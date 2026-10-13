@@ -151,7 +151,7 @@ function divergenciasDocs(p) {
   const d = p.docs || {}, out = [];
   // BL × DU-E anexada (vale também para o "S"): o BL cita outra DU-E (13/10/2026)
   { const n = x => String(x || '').replace(/\W/g, '').toUpperCase(); const ks = Object.keys(d._dues || {}).filter(k => /BR\d{9}/i.test(k));
-    if (d._bl && d._bl.due && ks.length && !ks.map(n).includes(n(d._bl.due))) out.push(`O BL cita a DU-E ${d._bl.due}, mas a DU-E anexada é ${ks.join(' e ')} (o BL pode ter saído com o número errado)`);
+    if (d._bl && d._bl.due && ks.length && !ks.map(n).includes(n(d._bl.due)) && !(typeof blCitaDuePar === 'function' && blCitaDuePar(p))) out.push(`O BL cita a DU-E ${d._bl.due}, mas a DU-E anexada é ${ks.join(' e ')} (o BL pode ter saído com o número errado)`);
     // porto de embarque da DU-E × porto do processo
     const pol = semAcento(String(p.pol || '')).toUpperCase();
     const portos = [...new Set(Object.values(d._dues || {}).map(x => x && x.porto).filter(Boolean))];
@@ -1024,4 +1024,35 @@ if (typeof renderProcesso2 === 'function' && !renderProcesso2._v84) {
     return h.replace(/(font-size:17px">Receita<\/h2>[\s\S]*?<\/div>)/, mm => mm + bloco);
   };
   renderProcesso2._v84 = true;
+}
+
+// ── 13. VENDA DIVIDIDA: BL CITA A DU-E DO OUTRO PROCESSO DO PAR (v86) ──
+// Quando a companhia divide o embarque (ex.: FS260109 e FS260109S), o BL do segundo pode sair com a DU-E
+// do primeiro (mesma invoice). Não é erro: some do "O que falta" e fica só uma observação na tela do processo.
+function parDoProcesso(p) {
+  const id = String((p && p.id) || ''); if (!/^FS\d{6}S?$/.test(id)) return null;
+  const alvo = /S$/.test(id) ? id.slice(0, -1) : id + 'S';
+  return (S.processos || []).find(q => q.id === alvo && q.status !== 'Cancelado') || null;
+}
+function blCitaDuePar(p) {
+  const d = (p && p.docs) || {}; if (!d._bl || !d._bl.due) return '';
+  const par = parDoProcesso(p); if (!par) return '';
+  const n = x => String(x || '').replace(/\W/g, '').toUpperCase(), dd = par.docs || {};
+  const ks = Object.keys(dd._dues || {}).concat(par.dueNumero ? [par.dueNumero] : []).map(n);
+  return ks.includes(n(d._bl.due)) ? par.id : '';
+}
+if (typeof renderProcesso2 === 'function' && !renderProcesso2._v86) {
+  const base = renderProcesso2;
+  renderProcesso2 = function () {
+    const h = base.apply(this, arguments);
+    try {
+      const p = S.sub, par = p && p.id ? blCitaDuePar(p) : '';
+      if (par) {
+        const nota = `<div style="font-size:12.5px;color:var(--muted2);background:rgba(148,163,184,.12);border-radius:8px;padding:8px 10px">ℹ️ O BL cita a DU-E ${escHtml(p.docs._bl.due)}, do ${escHtml(par)} — mesma venda, embarque dividido (normal).</div>`;
+        return h.replace(/(font-size:17px">Documentos<\/h2><span style="font-size:12.5px;color:var\(--muted2\)">\d+ de \d+<\/span><\/div>)/, m => m + nota);
+      }
+    } catch (e) { console.warn('nota venda dividida', e); }
+    return h;
+  };
+  renderProcesso2._v86 = true;
 }
