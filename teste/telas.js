@@ -17,6 +17,8 @@ const brl = n => 'R$ ' + m2(n);
 
 function arquivos(p, tipo) { const f = (p.docs && p.docs._files && p.docs._files[tipo]) || []; return f.length ? f : (p.docs && p.docs[tipo] ? [{ url: p.docs[tipo], name: tipo }] : []); }
 function temDoc(p, ...tipos) { return tipos.some(t => arquivos(p, t).length > 0); }
+// v90: o arquivo que vale (o mais novo que não foi substituído)
+function arquivoAtual(p, tipo) { const l = arquivos(p, tipo); return l.filter(f => f && !f.substituido).slice(-1)[0] || l[l.length - 1]; }
 
 // Fase atual: vem das datas (as mesmas que o ERP usa para o status)
 function faseProcesso(p) {
@@ -301,7 +303,7 @@ function renderProcesso2() {
 
     ${card(`${titulo2('Documentos', `<span style="font-size:12.5px;color:var(--muted2)">${docsOk} de ${CHECKLIST.length}</span>`)}
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">
-        ${CHECKLIST.map(x => { const a = x.tipos.map(t => arquivos(p, t)[0]).find(Boolean); return check(!!a, x.nome, a && a.url, !a && f >= x.fase); }).join('')}
+        ${CHECKLIST.map(x => { const a = x.tipos.map(t => arquivoAtual(p, t)).find(Boolean); return check(!!a, x.nome, a && a.url, !a && f >= x.fase); }).join('')}
       </div>
       <div style="font-size:12px;color:var(--muted2)">Opcionais: ${OPCIONAIS.map(([t, n]) => n + (arquivos(p, t).length ? ' ✓' : '')).join(' · ')}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
