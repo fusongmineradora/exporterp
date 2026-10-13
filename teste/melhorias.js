@@ -720,7 +720,7 @@ async function textoDoArquivo(f) {
   return { texto: await pdfTexto(buf) };
 }
 async function relerDocsProcessos(forcar) {
-  const ps = (S.processos || []).filter(p => p.status !== 'Cancelado' && (forcar || !(p.docs && p.docs._relido83)));
+  const ps = (S.processos || []).filter(p => p.status !== 'Cancelado' && (forcar || !(p.docs && p.docs._relido84)));
   const norm = c => String(c || '').toUpperCase().replace(/[\s-]/g, '');
   let mud = 0;
   for (const p of ps) {
@@ -761,7 +761,7 @@ async function relerDocsProcessos(forcar) {
         if (!i.dueNumero) continue;
         p.docs._dues = p.docs._dues || {};
         const ant = p.docs._dues[i.dueNumero] || {};
-        const nv = Object.assign({}, ant, { vmle: Number(i.vmle) || ant.vmle || 0, vmcv: Number(i.vmcv) || ant.vmcv || 0, peso: Number(i.pesoLiq) || ant.peso || 0, ruc: i.ruc || ant.ruc || '', nfs: (i.nfsSaida && i.nfsSaida.length) ? i.nfsSaida : (ant.nfs || []), porto: i.dueporto || ant.porto || '', situacao: i.dueSituacao || ant.situacao || '', exportada: !!(i.dueExportada || ant.exportada), bloqueio: i.dueExportada ? '' : (i.dueBloqueio || '') });
+        const nv = Object.assign({}, ant, { vmle: Number(i.vmle) || ant.vmle || 0, vmcv: Number(i.vmcv) || ant.vmcv || 0, reais: Number(i.dueReais) || ant.reais || 0, peso: Number(i.pesoLiq) || ant.peso || 0, ruc: i.ruc || ant.ruc || '', nfs: (i.nfsSaida && i.nfsSaida.length) ? i.nfsSaida : (ant.nfs || []), porto: i.dueporto || ant.porto || '', situacao: i.dueSituacao || ant.situacao || '', exportada: !!(i.dueExportada || ant.exportada), bloqueio: i.dueExportada ? '' : (i.dueBloqueio || '') });
         if (JSON.stringify(nv) !== JSON.stringify(ant)) { p.docs._dues[i.dueNumero] = nv; mud++; }
       } catch (e) { console.warn('reler DU-E', p.id, e); }
     }
@@ -801,6 +801,7 @@ async function relerDocsProcessos(forcar) {
     if (!p.docs._relido78) { p.docs._relido78 = true; mud++; }
     if (!p.docs._relido82) { p.docs._relido82 = true; mud++; }
     if (!p.docs._relido83) { p.docs._relido83 = true; mud++; }
+    if (!p.docs._relido84) { p.docs._relido84 = true; mud++; }
   }
   return { mud, n: ps.length };
 }
@@ -809,9 +810,9 @@ let _relendo = false;
 (function agendarReleitura() {
   const t = setInterval(async () => {
     if (_relendo || !window._sheetsToken || !(S.processos || []).length || typeof aplicarBL !== 'function') return;
-    if (!(S.processos || []).some(p => p.status !== 'Cancelado' && !(p.docs && p.docs._relido83))) { clearInterval(t); return; }
+    if (!(S.processos || []).some(p => p.status !== 'Cancelado' && !(p.docs && p.docs._relido84))) { clearInterval(t); return; }
     _relendo = true; clearInterval(t);
-    try { const r = await relerDocsProcessos(false); if (typeof aplicarValorExportadoDecidido === 'function') r.mud += aplicarValorExportadoDecidido(); if (r.mud) { autoUpdateStatus(); await saveToSheets(); render(); } } catch (e) { console.warn('releitura', e); }
+    try { const r = await relerDocsProcessos(false); if (typeof aplicarValorExportadoDecidido === 'function') r.mud += aplicarValorExportadoDecidido(); if (typeof aplicarUsosSaldoDecididos === 'function') r.mud += aplicarUsosSaldoDecididos(); if (r.mud) { autoUpdateStatus(); await saveToSheets(); render(); } } catch (e) { console.warn('releitura', e); }
     _relendo = false;
   }, 25000);
 })();
@@ -888,29 +889,108 @@ if (typeof autoUpdateStatus === 'function' && !autoUpdateStatus._v83) {
   };
   autoUpdateStatus._v83 = true;
 }
-// resultado do processo: só o valor exportado é receita dele (a antecipação fica como crédito do cliente)
-if (typeof procTotals === 'function' && !procTotals._v83) {
+// ═══════════════════════════════════════════════════════════════
+// 12. FECHAMENTO PELA NOTA DE SAÍDA E SALDO DO CLIENTE EM REAIS (v84 · 13/10/2026)
+// Regras dele: a DU-E tem que bater com a nota de saída; a nota de saída é o fechamento do processo; o que entrou
+// (câmbio) além da nota é saldo (crédito) do cliente. O saldo é usado em outros processos ("Usar saldo do cliente").
+// · recebeu mais do que exportou (em dólar): receita = nota de saída; crédito = câmbio R$ − nota R$
+// · usou saldo: o valor registrado sai do crédito e entra na receita do processo que usou
+//   (sem registro e com nota maior que o câmbio: usa automaticamente nota R$ − câmbio R$)
+// · câmbio ≈ nota em dólar: nada muda (a diferença de taxa fica no resultado do processo, como antes)
+// ═══════════════════════════════════════════════════════════════
+function nfSaidaReais(p) {
+  const m = {}; (((p.docs || {})._files || {}).nfeSaida || []).forEach(f => { const k = String(f.numero || f.chave || f.id); m[k] = Math.max(m[k] || 0, Number(f.valor) || 0); });
+  const v = Object.values(m).reduce((a, x) => a + x, 0); return v > 0 ? Math.round(v * 100) / 100 : 0;
+}
+function dueReais(p) {
+  const pS = (S.processos || []).find(q => q.id === p.id + 'S');
+  const todas = Object.assign({}, (pS && pS.docs && pS.docs._dues) || {}, (p.docs && p.docs._dues) || {});
+  return Math.round(Object.entries(todas).filter(([k]) => /BR\d{9}/i.test(k)).reduce((a, [, x]) => a + (Number(x && x.reais) || 0), 0) * 100) / 100;
+}
+// dólar exportado: o da DU-E, quando a DU-E é coerente (taxa R$/USD plausível) e não foi marcada como errada; senão a invoice
+function usdExportado(p) {
+  const d = p.docs || {}, inv = Number(p.cambioInvoice) || 0;
+  if (d._valorExportadoFonte) return valorExportado(p);
+  const vd = valorDasDues(p), rd = dueReais(p);
+  if (vd > 0 && (!rd || (rd / vd > 3 && rd / vd < 8))) return vd;
+  return inv;
+}
+const embarcadoP = p => EMBARCADOS.includes(p.status) || faseProcesso(p) >= 3;
+// situação do processo perante o saldo do cliente (valores em R$)
+function saldoDoProcesso(p) {
+  const o = { gerou: 0, usou: 0, usouAuto: false, adiantado: 0, ajusteReceita: 0, usos: [] };
+  if (!p || p.status === 'Cancelado' || ehProcessoS(p)) return o;
+  const d = p.docs || {}, usdRec = Number(p.cambioRecebido) || 0, recR = Number(p.cambioReais) || 0, nfR = nfSaidaReais(p);
+  o.usos = (d._usosSaldo || []).filter(u => Number(u.valor) > 0);
+  const usosR = o.usos.reduce((a, u) => a + Number(u.valor), 0);
+  if (!embarcadoP(p)) { if (recR > 0) o.adiantado = recR; return o; }
+  const usdExp = usdExportado(p), tol = tolIntermediario(p);
+  if (usdRec - usdExp > tol && nfR > 0 && recR > nfR) { o.gerou = Math.round((recR - nfR) * 100) / 100; o.ajusteReceita -= o.gerou; }
+  else if (usdExp - usdRec > tol && !usosR && nfR > recR && recR > 0) { o.usou = Math.round((nfR - recR) * 100) / 100; o.usouAuto = true; o.ajusteReceita += o.usou; }
+  if (usosR) { o.usou += usosR; o.ajusteReceita += usosR; }
+  return o;
+}
+// extrato do saldo por cliente (quem paga)
+function saldoClientes() {
+  const g = {};
+  (S.processos || []).forEach(p => {
+    const s = saldoDoProcesso(p); const n = nomeCliente(p);
+    const c = g[n] = g[n] || { nome: n, linhas: [], disponivel: 0, adiantado: 0, usdGerou: 0, rGerou: 0 };
+    if (s.gerou) { c.linhas.push({ id: p.id, valor: s.gerou, texto: `gerou crédito (pagou USD ${fmt(Number(p.cambioRecebido) || 0)}, exportou USD ${fmt(usdExportado(p))})` }); c.disponivel += s.gerou; const tx = Number(p.cambioTaxa) || 0; if (tx) { c.usdGerou += s.gerou / tx; c.rGerou += s.gerou; } }
+    s.usos.forEach(u => { c.linhas.push({ id: p.id, valor: -Number(u.valor), texto: 'usou' + (u.desc ? ': ' + u.desc : '') + (u.origem ? ` (saldo do ${u.origem})` : '') }); c.disponivel -= Number(u.valor); });
+    if (s.usouAuto) { c.linhas.push({ id: p.id, valor: -s.usou, texto: 'usou (nota de saída maior que o câmbio — calculado)' }); c.disponivel -= s.usou; }
+    if (s.adiantado) c.adiantado += s.adiantado, c.linhas.push({ id: p.id, valor: s.adiantado, texto: 'pago e ainda não embarcado', adiantado: true });
+  });
+  return Object.values(g).filter(c => c.linhas.length).map(c => Object.assign(c, { disponivel: Math.round(c.disponivel * 100) / 100, usdEq: c.rGerou ? c.disponivel / (c.rGerou / c.usdGerou) : null }));
+}
+async function usarSaldoClienteUI(id) {
+  const p = (S.processos || []).find(x => x.id === id); if (!p) return;
+  const cli = saldoClientes().find(c => c.nome === nomeCliente(p));
+  const v = await uiPrompt(`Quanto do saldo de ${nomeCliente(p)} o ${id} usou (R$)?${cli ? ` Disponível: R$ ${fmt(cli.disponivel)}.` : ''}`, '', 'Usar saldo do cliente'); if (v == null) return;
+  const valor = numEntrada(v); if (!(valor > 0)) return;
+  const desc = await uiPrompt('Para que foi? (ex.: produto Thomazini)', '', 'Usar saldo do cliente'); if (desc == null) return;
+  const origens = (S.processos || []).filter(q => nomeCliente(q) === nomeCliente(p) && saldoDoProcesso(q).gerou > 0).map(q => q.id);
+  p.docs = p.docs || {}; p.docs._usosSaldo = (p.docs._usosSaldo || []).concat([{ id: genId(), valor, desc: String(desc).trim(), origem: origens.length === 1 ? origens[0] : '', data: new Date().toISOString().slice(0, 10) }]);
+  logAction('editar', 'PROCESSOS', id, `Usou R$ ${fmt(valor)} do saldo de ${nomeCliente(p)}${desc ? ' — ' + desc : ''}`);
+  try { await saveToSheets(); } catch (e) {} render();
+}
+async function removerUsoSaldo(id, uid) {
+  const p = (S.processos || []).find(x => x.id === id); if (!p || !p.docs) return;
+  if (!await uiConfirm('Tirar este uso do saldo?', 'Saldo do cliente', 'Tirar', 'Cancelar')) return;
+  p.docs._usosSaldo = (p.docs._usosSaldo || []).filter(u => u.id !== uid); if (!p.docs._usosSaldo.length) delete p.docs._usosSaldo;
+  logAction('editar', 'PROCESSOS', id, 'Uso do saldo do cliente removido'); try { await saveToSheets(); } catch (e) {} render();
+}
+// decisões dele (13/10/2026): FS260112 e FS260114 usaram o saldo do FS260107 para pagar o produto da Thomazini
+// (o valor é o da nota da Thomazini anexada a cada processo)
+const USOS_SALDO_DECIDIDOS = [['FS260112', /THOMAZINI/i, 'FS260107', 'produto Thomazini'], ['FS260114', /THOMAZINI/i, 'FS260107', 'produto Thomazini']];
+function aplicarUsosSaldoDecididos() {
+  let n = 0;
+  USOS_SALDO_DECIDIDOS.forEach(([id, re, origem, desc]) => {
+    const p = (S.processos || []).find(x => x.id === id); if (!p || !p.docs || p.docs._usosDecididos) return;
+    const fisc = (((p.docs._custoDocs || {}).custoProduto || {}).fiscais || []).filter(x => re.test(String(x.de || x.nome || '')));
+    const nfs = fisc.length ? fisc : ((p.docs._files || {}).nfe || []).filter(f => re.test(String(f.emitente || f.name || '')) && /xml/i.test(f.formato || f.name || ''));
+    const valor = Math.round(nfs.reduce((a, x) => a + (Number(x.valor) || 0), 0) * 100) / 100; if (!(valor > 0)) return;
+    p.docs._usosSaldo = (p.docs._usosSaldo || []).concat([{ id: genId(), valor, desc, origem, data: '2026-10-13', decidido: true }]);
+    p.docs._usosDecididos = true; n++;
+    logAction('editar', 'PROCESSOS', id, `Usou R$ ${fmt(valor)} do saldo do ${origem} (${desc}) — decisão de 13/10/2026`);
+  });
+  return n;
+}
+// FS260106 também gerou crédito (Lianyungang): a DU-E/nota valem (decisão de 13/10/2026)
+VALOR_EXPORTADO_DECIDIDO.FS260106 = 'due';
+// resultado: a receita do processo segue o saldo (fecha pela nota quando gera crédito; soma o saldo usado)
+if (typeof procTotals === 'function' && !procTotals._v84) {
   const base = procTotals;
-  procTotals = function (p) {
-    const t = base.apply(this, arguments); const f = fatorExportado(p); if (f >= 1) return t;
-    const es = buildAllEntries({ filtroProcessoId: p.id }).filter(e => e.status !== 'Cancelado');
-    const rc = es.filter(e => e.tipo === 'Receita' && (e.categoria === 'Câmbio' || e._computed)).reduce((a, e) => a + (Number(e.valor) || 0), 0);
-    const aj = Math.round(rc * (1 - f) * 100) / 100;
-    return Object.assign({}, t, { receita: t.receita - aj, lucro: t.lucro - aj, antecipacao: aj });
-  };
-  procTotals._v83 = true;
+  procTotals = function (p) { const t = base.apply(this, arguments); const aj = saldoDoProcesso(p).ajusteReceita; return aj ? Object.assign({}, t, { receita: t.receita + aj, lucro: t.lucro + aj, ajusteSaldo: aj }) : t; };
+  procTotals._v84 = true;
 }
-if (typeof resultadoProcesso === 'function' && !resultadoProcesso._v83) {
+if (typeof resultadoProcesso === 'function' && !resultadoProcesso._v84) {
   const base = resultadoProcesso;
-  resultadoProcesso = function (p) {
-    const r = base.apply(this, arguments); const f = fatorExportado(p); if (f >= 1) return r;
-    const aj = Math.round((Number(r.reaisCambio) || 0) * (1 - f) * 100) / 100;
-    return Object.assign({}, r, { resultado: r.resultado - aj, antecipacaoReais: aj, antecipacaoUsd: Math.round(((Number(p.cambioInvoice) || 0) - valorExportado(p)) * 100) / 100 });
-  };
-  resultadoProcesso._v83 = true;
+  resultadoProcesso = function (p) { const r = base.apply(this, arguments); const s = saldoDoProcesso(p); return s.ajusteReceita ? Object.assign({}, r, { resultado: r.resultado + s.ajusteReceita, creditoGerado: s.gerou, saldoUsado: s.usou }) : r; };
+  resultadoProcesso._v84 = true;
 }
-// conferência: bloqueio da DU-E; valor da DU-E × invoice vira escolha do valor exportado
-if (typeof divergenciasDocs === 'function' && !divergenciasDocs._v83) {
+// conferência: DU-E × nota de saída (R$), dólar da DU-E incoerente, embarque bloqueado, DU-E a retificar
+if (typeof divergenciasDocs === 'function' && !divergenciasDocs._v84) {
   const base = divergenciasDocs;
   divergenciasDocs = function (p) {
     let out = base.apply(this, arguments);
@@ -918,34 +998,28 @@ if (typeof divergenciasDocs === 'function' && !divergenciasDocs._v83) {
     const b = dueBloqueio(p);
     if (b) out.unshift(`Embarque bloqueado na DU-E ${b.due}${b.desde ? ' desde ' + b.desde : ''} — carga no porto, aguardando desbloqueio`);
     if (ehProcessoS(p)) return out;
-    const d = p.docs || {}, vd = valorDasDues(p), inv = Number(p.cambioInvoice) || 0;
     out = out.filter(t => !/^VMLE da DU-E/.test(t));
-    if (vd && inv && Math.abs(vd - inv) > 1) {
-      if (!d._valorExportadoFonte) out.push(`DU-E com USD ${fmt(vd)} e invoice com USD ${fmt(inv)} — escolha o valor exportado (em Receita)`);
-      else if (d._valorExportadoFonte === 'invoice') out.push(`DU-E com USD ${fmt(vd)} e invoice com USD ${fmt(inv)} — DU-E a retificar (o aviso sai quando chegar a DU-E retificada)`);
-    }
+    const d = p.docs || {}, vd = valorDasDues(p), rd = dueReais(p), nf = nfSaidaReais(p), inv = Number(p.cambioInvoice) || 0;
+    if (rd && nf && Math.abs(rd - nf) > Math.max(1, nf * 0.005)) out.push(`DU-E com R$ ${fmt(rd)} e nota de saída com R$ ${fmt(nf)} — a DU-E tem que bater com a nota`);
+    if (vd && rd && !(rd / vd > 3 && rd / vd < 8)) out.push(`DU-E com valor em dólar incoerente (USD ${fmt(vd)} para R$ ${fmt(rd)}) — DU-E a retificar`);
+    else if (d._valorExportadoFonte === 'invoice' && vd && inv && Math.abs(vd - inv) > 1) out.push(`DU-E com USD ${fmt(vd)} e invoice com USD ${fmt(inv)} — DU-E a retificar`);
     return out;
   };
-  divergenciasDocs._v83 = true;
+  divergenciasDocs._v84 = true;
 }
-// tela do processo: bloco "Valor exportado" na Receita
-if (typeof renderProcesso2 === 'function' && !renderProcesso2._v83) {
+// tela do processo: fechamento e saldo do cliente (na Receita)
+if (typeof renderProcesso2 === 'function' && !renderProcesso2._v84) {
   const base = renderProcesso2;
   renderProcesso2 = function () {
     const h = base.apply(this, arguments); const p = S.sub;
     if (!p || !p.id || ehProcessoS(p)) return h;
-    const d = p.docs || {}, vd = valorDasDues(p), inv = Number(p.cambioInvoice) || 0, us = n => 'USD ' + fmt(n);
-    let bloco = '';
-    if (d._valorExportadoFonte) {
-      const ex = valorExportado(p), ant = inv - ex;
-      bloco = `<div style="font-size:12.5px;background:var(--bg3);border-radius:8px;padding:8px 10px;margin:6px 0">Valor exportado: <b>${us(ex)}</b> (${d._valorExportadoFonte === 'due' ? 'pela DU-E' : 'pela invoice'}${d._valorExportadoFonte === 'invoice' && vd && Math.abs(vd - inv) > 1 ? ` · <span style="color:var(--orange)">DU-E com ${us(vd)}, aguardando retificação</span>` : ''})${ant > 1 ? ` · <span style="color:var(--green)">${us(ant)} de crédito do cliente (antecipação de venda futura)</span>` : ''} <button class="btn btn-secondary btn-xs" onclick="usarValorExportado('${escHtml(p.id)}','limpar')">mudar</button></div>`;
-    } else if (vd && inv && Math.abs(vd - inv) > 1) {
-      bloco = `<div style="font-size:12.5px;background:rgba(251,146,60,.14);border-radius:8px;padding:8px 10px;margin:6px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span>A DU-E diz <b>${us(vd)}</b> e a invoice <b>${us(inv)}</b>. Qual foi o valor exportado?</span>
-        <button class="btn btn-primary btn-xs" onclick="usarValorExportado('${escHtml(p.id)}','due')">${us(vd)} (DU-E)</button>
-        <button class="btn btn-secondary btn-xs" onclick="usarValorExportado('${escHtml(p.id)}','invoice')">${us(inv)} (invoice · a DU-E está errada)</button></div>`;
-    }
-    if (!bloco) return h;
-    return h.replace(/(font-size:17px">Receita<\/h2>[\s\S]*?<\/div>)/, m => m + bloco);
+    const s = saldoDoProcesso(p), nf = nfSaidaReais(p), m = v => 'R$ ' + fmt(v), id = escHtml(p.id);
+    const partes = [];
+    if (s.gerou) partes.push(`Fecha pela nota de saída (${m(nf)}). Câmbio ${m(Number(p.cambioReais) || 0)}: <span style="color:var(--green)">${m(s.gerou)} viraram crédito de ${escHtml(nomeCliente(p))}</span>`);
+    s.usos.forEach(u => partes.push(`Usou ${m(u.valor)} do saldo de ${escHtml(nomeCliente(p))}${u.desc ? ' — ' + escHtml(u.desc) : ''}${u.origem ? ' (do ' + escHtml(u.origem) + ')' : ''} <button class="btn btn-secondary btn-xs" onclick="removerUsoSaldo('${id}','${escHtml(u.id)}')">tirar</button>`));
+    if (s.usouAuto) partes.push(`Nota de saída (${m(nf)}) maior que o câmbio: ${m(s.usou)} saem do saldo de ${escHtml(nomeCliente(p))} (calculado)`);
+    const bloco = `<div style="font-size:12.5px;background:var(--bg3);border-radius:8px;padding:8px 10px;margin:6px 0;display:flex;flex-direction:column;gap:4px">${partes.map(x => `<div>${x}</div>`).join('')}<div><button class="btn btn-secondary btn-xs" onclick="usarSaldoClienteUI('${id}')">Usar saldo do cliente</button></div></div>`;
+    return h.replace(/(font-size:17px">Receita<\/h2>[\s\S]*?<\/div>)/, mm => mm + bloco);
   };
-  renderProcesso2._v83 = true;
+  renderProcesso2._v84 = true;
 }
