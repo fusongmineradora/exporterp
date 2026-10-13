@@ -38,6 +38,7 @@ node t72.js   # envio dos modelos (reconhece qual é qual, recusa preenchido)
 node t73.js   # Novo processo + nome interno + pasta renomeada + recarregar
 node t79.js   # Caixa de Entrada: 4 CT-es + 4 MDF-es juntos → todos identificados (MDF-e segue o CT-e citado)
 node t82.js   # 20 extratos de DU-E reais → todos no processo certo (número, RUC do BL, nota de saída, par 109/109S) + conferências
+node t83.js   # DU-E bloqueada → No Porto; valor exportado (antecipação vira crédito do cliente); aviso de DU-E errada e DU-E retificada
 node t50.js; node t51.js; node t62.js   # versão OFICIAL (t51: 2ª abertura sem gravações)
 ```
 Resultados esperados (base de 12/10/2026, versão 77):
@@ -47,6 +48,7 @@ Resultados esperados (base de 12/10/2026, versão 77):
 - `t70`: invoice FS260116 = USD 28.620, 54.000 kg, NCM 25291000; contrato relido com 2 containers; aviso de NCM 2529.90.00; FS260117 com versões `_v2`.
 - `t72`: 2 modelos aceitos, 1 recusado por estar preenchido, 1 recusado por não ser da Fu Song.
 - `t82`: `certos: 20`, `anexou: 20`; FS260109S com a segunda DU-E da venda e aviso "O BL cita a DU-E …"; FS260114 com aviso de peso/VMLE trocados (precisa de `dados/store_oficial.json`, `dados/fixtures/dues_lote.json` e `bl_textos.json`).
+- `t83`: `anexou: 20`, `mudou2: false`; FS260113 "No Porto" (fase 2) com aviso de embarque bloqueado; FS260107 com valor exportado pela DU-E e antecipação; FS260114 com aviso na Caixa de Entrada e sem aviso depois da DU-E retificada.
 - `t79`: os 8 documentos com processo e "alta"; `anexou: 8`; FS260100/104/108/111 com 1 CT-e e 1 MDF-e cada (precisa de `dados/fixtures/cte_mdfe_lote.json`).
 - `t73`: FS260119 / embarque 32; armazém 3.200, marítimo 6.500, assessoria 1.200, despachante 550; pasta renomeada com o booking; recarregar mantém tudo.
 Versão 78: além dos acima, abrir duas vezes esperando 45 s (para a releitura dos BLs/NFs rodar) — a 2ª abertura não pode gravar nada. Rodar com `WARN=1 node tNN.js` mostra avisos do console (um `ReferenceError` dentro da manutenção não aparece de outro jeito: a rotina para no meio sem quebrar a tela).
