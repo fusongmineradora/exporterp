@@ -159,8 +159,7 @@ function renderInicio() {
   // saldo do cliente em reais: crédito disponível (gerado − usado) e o que foi pago e ainda não embarcou (13/10/2026)
   const clientes = typeof saldoClientes === 'function' ? saldoClientes() : [];
 
-  const blocoPagar = card(`
-    ${titulo2('A pagar', `<span style="font-family:'JetBrains Mono',monospace;font-size:18px;color:var(--red)">${brl(totalPagar)}</span>`)}
+  const pagarCorpo = `
     ${pagar.length ? `<div style="display:flex;flex-direction:column">${pagar.slice(0, 8).map(x => `
       <div style="display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">
         <div style="min-width:0"><div style="font-size:14px">${linkProc(x.p.id)} · ${escHtml(PROCESS_COST_FIELDS[x.campo])}</div>
@@ -171,17 +170,12 @@ function renderInicio() {
     ${S._prevAberto ? [...new Set(previstos.map(x => x.campo))].map(c => { const xs = previstos.filter(x => x.campo === c).sort((a, b) => String(a.p.id).localeCompare(b.p.id)); return `<div style="padding-top:10px"><div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;font-weight:600"><span>${escHtml(PROCESS_COST_FIELDS[c])}</span><span style="font-family:'JetBrains Mono',monospace">${m2(xs.reduce((a, x) => a + x.aberto, 0))}</span></div>${xs.map(x => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding-top:4px"><span>${linkProc(x.p.id)} <span style="color:var(--muted2)">· ${escHtml(String((x.previsto && x.previsto.regra) || x.empresa || '').replace(' por processo', '').replace('(certificado de origem)', 'certificado'))}</span></span><span style="font-family:'JetBrains Mono',monospace;white-space:nowrap">${m2(x.aberto)}</span></div>`).join('')}</div>`; }).join('') : ''}</div>` : ''}
     ${(() => { const ad = []; (S.processos || []).forEach(q => Object.entries((q.docs && q.docs._costAdiant) || {}).forEach(([c, v]) => ad.push({ q, c, v, emp: (q.docs._costEmpresa || {})[c] || '' }))); return ad.length ? `<div style="padding:9px 12px;border-radius:10px;background:var(--bg3)"><div style="font-size:14px;font-weight:600">Adiantamentos aguardando nota</div>${ad.map(x => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding-top:6px"><span>${linkProc(x.q.id)} · ${escHtml(PROCESS_COST_FIELDS[x.c])}${x.emp ? ' · ' + escHtml(x.emp) : ''}</span><span style="font-family:'JetBrains Mono',monospace">${m2(x.v)} adiantado</span></div>`).join('')}<div style="font-size:11.5px;color:var(--muted2);padding-top:6px">Quando a nota chegar, o saldo a pagar aparece aqui em "A pagar".</div></div>` : ''; })()}
     ${typeof reembolsosAbertos === 'function' && reembolsosAbertos().length ? `<div style="display:flex;justify-content:space-between;gap:10px;padding:9px 12px;border-radius:10px;background:var(--bg3)"><div><div style="font-size:14px;font-weight:600">Reembolso ao sócio</div><div style="font-size:12.5px;color:var(--muted2)">${reembolsosAbertos().length} despesa(s) pagas no cartão / conta pessoal</div></div><div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;white-space:nowrap">${m2(reembolsosAbertos().reduce((a, l) => a + (Number(l.valor) || 0), 0))}</div></div>` : ''}
-    ${typeof blocoContaAssessoria === 'function' ? blocoContaAssessoria() : ''}
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
-      <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--green)">A receber (câmbio)</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--green)">${usd(totEmb + totAnt)}</div><div style="font-size:11.5px;color:var(--muted2);line-height:1.45">${(totEmb + totAnt) > 0 ? `já embarcou: ${usd(totEmb)}${recEmb.length ? ' (' + recEmb.map(x => x.p.id).slice(0, 3).join(', ') + ')' : ''}<br>ainda não embarcou: ${usd(totAnt)}${recAnt.length ? ' (' + recAnt.map(x => x.p.id).slice(0, 3).join(', ') + ')' : ''}${px ? '<br>≈ ' + brl((totEmb + totAnt) * px) + ' no dólar de hoje' : ''}` : 'nada em aberto'}</div></div>
-      <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--muted2)">Pago neste mês</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px">${brl(pagoMes)}</div><div style="font-size:11.5px;color:var(--muted2)">custos e despesas</div></div>
-      <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--muted2)">Dólar (PTAX venda)</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px">${px ? 'R$ ' + px.toLocaleString('pt-BR', { minimumFractionDigits: 4 }) : (S._ptax && S._ptax.erro ? 'indisponível' : '…')}</div><div style="font-size:11.5px;color:var(--muted2)">${px ? 'Banco Central · ' + S._ptax.data : 'Banco Central'}</div></div>
-    </div>`);
+    ${typeof blocoContaAssessoria === 'function' ? blocoContaAssessoria() : ''}`;
+
 
   const chip = (n, txt, cor, acao) => `<button type="button" onclick="${acao}" style="text-align:left;border:none;cursor:pointer;background:var(--bg3);border-radius:10px;padding:10px;color:${cor};min-height:44px"><div style="font-family:'Outfit',sans-serif;font-size:22px;font-weight:700">${n == null ? '…' : n}</div><div style="font-size:12px">${txt}</div></button>`;
-  const blocoFalta = card(`
-    ${titulo2('O que falta')}
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px">
+  const faltaCorpo = `
+    <div class="ini-chips">
       ${chip(nDocs, 'documentos e custos', 'var(--orange)', "document.getElementById('falta-lista').scrollIntoView({behavior:'smooth'})")}
       ${chip(nComp, 'nota ou comprovante', 'var(--orange)', "document.getElementById('falta-lista').scrollIntoView({behavior:'smooth'})")}
       ${chip(extratoPend, 'linhas do extrato', 'var(--accent)', "nav('conciliacao')")}
@@ -189,18 +183,13 @@ function renderInicio() {
     </div>
     <div id="falta-lista" style="display:flex;flex-direction:column;gap:8px;font-size:13.5px">
       ${pend.length ? pend.slice(0, S._todasPend ? pend.length : 12).map(x => `<div style="display:flex;gap:10px;align-items:flex-start"><span style="flex:none;width:8px;height:8px;border-radius:50%;background:${x.tipo === 'cambio' ? 'var(--green)' : 'var(--orange)'};margin-top:6px"></span><div>${linkProc(x.p.id)} ${escHtml(x.texto)}</div></div>`).join('') + (pend.length > 12 ? `<button class="btn btn-secondary btn-sm" style="align-self:flex-start;min-height:40px" onclick="S._todasPend=!S._todasPend;render()">${S._todasPend ? 'Mostrar menos' : `Ver todas as pendências (+ ${pend.length - 12})`}</button>` : '') : '<div style="color:var(--muted2)">Nada faltando nos processos.</div>'}
-    </div>`);
+    </div>`;
 
-  // v87: abre e fecha; fechado mostra um resumo por fase (o sistema lembra como ficou neste aparelho)
-  if (S._cargasAbertas === undefined) { try { S._cargasAbertas = localStorage.getItem('teste:inicio-cargas') === '1'; } catch (e) { S._cargasAbertas = false; } }
+
+  // resumo das cargas por fase (cabeçalho de "Onde estão as cargas")
   const nomeFase = f => (f >= 0 ? FASES[f] : 'A coletar');
   const resumoCargas = (() => { const g = {}; cargas.forEach(x => { (g[x.f] = g[x.f] || []).push(x.p.id); }); return Object.keys(g).map(Number).sort((a, b) => a - b).map(f => `<span style="white-space:nowrap"><b style="font-weight:600;color:${f >= 3 ? 'var(--accent)' : f >= 0 ? 'var(--yellow)' : 'var(--muted2)'}">${nomeFase(f)}</b> ${g[f].length <= 2 ? g[f].map(id => linkProc(id)).join(', ') : g[f].length}</span>`).join(' · '); })();
-  const blocoCargas = card(`
-    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">
-      <h2 style="margin:0;font-family:'Outfit',sans-serif;font-size:17px;cursor:pointer;user-select:none" onclick="S._cargasAbertas=!S._cargasAbertas;try{localStorage.setItem('teste:inicio-cargas',S._cargasAbertas?'1':'0')}catch(e){};render()">Onde estão as cargas <span style="font-size:13px;color:var(--muted2)">${S._cargasAbertas ? '▾' : '▸'}</span></h2>
-      <a href="#" onclick="nav('rastreamento');return false" style="font-size:13px;text-decoration:none">Rastreio →</a>
-    </div>
-    ${!S._cargasAbertas ? (cargas.length ? `<div style="font-size:13px;line-height:1.7;cursor:pointer" onclick="if(event.target.closest('a'))return;S._cargasAbertas=true;try{localStorage.setItem('teste:inicio-cargas','1')}catch(e){};render()">${cargas.length} carga(s) · ${resumoCargas}</div>` : '<div style="font-size:13.5px;color:var(--muted2)">Nenhuma carga ativa.</div>') : cargas.length ? cargas.map(x => {
+  const cargasCorpo = `${cargas.length ? cargas.map(x => {
       const p = x.p, v = (p.docs && p.docs._viagem) || {}, dl = brParaDate(p.deadlineCarga), dlDias = dl ? Math.ceil((dl - new Date()) / 864e5) : null;
       const info = x.f >= 3 ? [(p.containers || []).filter(Boolean).join(', '), v.navio, 'saiu ' + p.saida, v.eta ? 'chega ' + v.eta : '', p.pod].filter(Boolean).join(' · ')
         : [p.logTransportadora, p.logCidade, (p.containers || []).filter(Boolean).join(', ')].filter(Boolean).join(' · ') || (p.produto || '');
@@ -209,7 +198,8 @@ function renderInicio() {
         ${barraFases(x.f)}
         <div style="font-size:12.5px;color:var(--muted2)">${escHtml(info)}${dlDias != null && dlDias >= 0 && dlDias <= 5 && x.f < 3 ? ` · <span style="color:var(--yellow);font-weight:600">dead line de carga em ${dlDias} dia(s)</span>` : ''}</div>
       </div>`;
-    }).join('') + `<div style="font-size:11.5px;color:var(--muted2)">${FASES.join(' · ')}</div>` : '<div style="font-size:13.5px;color:var(--muted2)">Nenhuma carga ativa.</div>'}`);
+    }).join('') + `<div style="font-size:11.5px;color:var(--muted2)">${FASES.join(' · ')}</div>` : '<div style="font-size:13.5px;color:var(--muted2)">Nenhuma carga ativa.</div>'}`;
+
 
   const porProduto = {};
   // par "S" (FS260109 + FS260109S): é a mesma venda — as toneladas contam uma vez e o resultado aparece junto
@@ -220,8 +210,7 @@ function renderInicio() {
   resultadosVis.forEach(x => { if (!x.c.ton) return; const g = grupoProduto(x.p); const o = porProduto[g] = porProduto[g] || { ton: 0, prod: 0, env: 0, envUsd: 0, tonUsd: 0, n: 0 }; o.ton += x.c.ton; o.prod += x.c.produto; o.env += x.c.envio; const tx = taxaDoProcesso(x.p); if (tx) { o.envUsd += x.c.envio / tx; o.tonUsd += x.c.ton; } o.n++; });
   // v87: linhas com o valor sempre alinhado à direita (o nome quebra linha, o valor não desce)
   const linhaValor = (esq, dir, extra) => `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;align-items:start;font-size:13.5px;${extra || ''}"><div style="min-width:0">${esq}</div><div style="font-family:'JetBrains Mono',monospace;white-space:nowrap;text-align:right">${dir}</div></div>`;
-  const blocoResultado = card(`
-    ${titulo2('Resultado')}
+  const resultadoCorpo = `
     <div style="display:flex;flex-direction:column;gap:8px;font-size:13.5px">
       ${resultadosVis.slice(0, 10).map(x => linhaValor(`${linkProc(x.p.id)}${x.par ? ' <span style="font-size:12px;color:var(--muted2)">+ ' + escHtml(x.par.slice(-4)) + '</span>' : ''} ${x.prov ? '<span style="color:var(--yellow);font-size:12px">provisório</span>' : '<span style="color:var(--green);font-size:12px">fechado</span>'}`, `<span style="color:${x.c.lucro >= 0 ? 'var(--green)' : 'var(--red)'}">${x.c.lucro >= 0 ? '+ ' : '− '}${m2(Math.abs(x.c.lucro))}</span>`)).join('') || '<div style="color:var(--muted2)">Sem resultado ainda.</div>'}
     </div>
@@ -233,17 +222,37 @@ function renderInicio() {
     ${clientes.length ? `<div style="border-top:1px solid var(--border);padding-top:12px;display:flex;flex-direction:column;gap:6px">
       <div style="font-size:12px;color:var(--muted2)">Saldo dos clientes</div>
       ${clientes.map(c => linhaValor(`<div>${escHtml(c.nome)}</div>${c.adiantado ? `<div style="color:var(--muted2);font-size:12px">R$ ${m2(c.adiantado)} pago e não embarcado</div>` : ''}`, `<span style="color:${c.disponivel > 0.009 ? 'var(--green)' : c.disponivel < -0.009 ? 'var(--red)' : 'var(--muted2)'}">${Math.abs(c.disponivel) < 0.01 ? 'sem saldo' : 'R$ ' + m2(Math.abs(c.disponivel)) + (c.disponivel > 0 ? ' de crédito' : ' usado a mais')}</span>`)).join('')}
-    </div>` : ''}`);
+    </div>` : ''}`;
 
-  // v87: no computador (tela larga) duas colunas: A pagar + O que falta | Cargas + Resultado; no celular, uma coluna
-  return `
-  <style>.ini-wrap{max-width:760px;margin:0 auto}.ini-col{min-width:0}.ini-custo{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:4px 16px;align-items:baseline;font-size:13.5px}.ini-custo .val{font-family:'JetBrains Mono',monospace;white-space:nowrap;text-align:right}@media (max-width:600px){.ini-custo{grid-template-columns:1fr auto auto;gap:2px 12px}.ini-custo .nome{grid-column:1/-1;margin-top:4px}}@media (min-width:1280px){.ini-wrap{max-width:1400px}.ini-cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}}</style>
+
+  // ── v88: layout "Resumo" (escolhido por ele em 13/10): números principais no topo e cada parte abre e fecha ──
+  const nEmb = cargas.filter(x => x.f >= 3).length;
+  const fech = resultadosVis.filter(x => !x.prov), nProv = resultadosVis.length - fech.length, lucroFech = fech.reduce((a, x) => a + (x.c.lucro || 0), 0);
+  const abreSecao = k => `S._iniAberto=S._iniAberto||{};S._iniAberto['${k}']=true;try{localStorage.setItem('teste:inicio-abertos',JSON.stringify(S._iniAberto))}catch(e){};render();setTimeout(()=>{const e=document.getElementById('ini-${k}');if(e)e.scrollIntoView({behavior:'smooth',block:'start'})},60)`;
+  const kpi = (rot, val, sub, cor, acao) => `<div ${acao ? `onclick="${acao}" ` : ''}style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;${acao ? 'cursor:pointer;' : ''}min-width:0"><div style="font-size:12px;color:var(--muted2)">${rot}</div><div class="v" style="font-family:'JetBrains Mono',monospace;font-size:17px;color:${cor || 'var(--text)'};white-space:nowrap">${val}</div><div style="font-size:11.5px;color:var(--muted2);line-height:1.4">${sub || ''}</div></div>`;
+  const kpis = `<div class="ini-kpis">
+    ${kpi('A pagar', brl(totalPagar), totalPrevisto ? 'estimados ' + brl(totalPrevisto) : 'sem estimados', 'var(--red)', abreSecao('pagar'))}
+    ${kpi('A receber (câmbio)', usd(totEmb + totAnt), (totEmb + totAnt) > 0 ? `já embarcou ${usd(totEmb)} · ainda não embarcou ${usd(totAnt)}${px ? ' · ≈ ' + brl((totEmb + totAnt) * px) : ''}` : 'nada em aberto', 'var(--green)')}
+    ${kpi('Pago neste mês', brl(pagoMes), 'custos e despesas')}
+    ${kpi('Dólar (PTAX venda)', px ? 'R$ ' + px.toLocaleString('pt-BR', { minimumFractionDigits: 4 }) : (S._ptax && S._ptax.erro ? 'indisponível' : '…'), px ? 'Banco Central · ' + S._ptax.data : 'Banco Central')}
+    ${kpi('O que falta', String(pend.length), `${nDocs} documentos e custos · ${nComp} notas ou comprovantes`, pend.length ? 'var(--orange)' : 'var(--green)', abreSecao('falta'))}
+    ${kpi('Cargas', String(cargas.length), `${nEmb} embarcadas · ${cargas.length - nEmb} no Brasil`, 'var(--accent)', abreSecao('cargas'))}
+  </div>`;
+  // cada parte abre e fecha clicando no cabeçalho; o aparelho lembra (começa só com "O que falta" aberto)
+  const aberto = k => { S._iniAberto = S._iniAberto || (() => { try { return JSON.parse(localStorage.getItem('teste:inicio-abertos') || 'null') || { falta: true }; } catch (e) { return { falta: true }; } })(); return !!S._iniAberto[k]; };
+  const secao = (k, titulo, resumo, corpo) => card(`<div id="ini-${k}" onclick="if(event.target.closest('a,button'))return;S._iniAberto=S._iniAberto||{};S._iniAberto['${k}']=!S._iniAberto['${k}'];try{localStorage.setItem('teste:inicio-abertos',JSON.stringify(S._iniAberto))}catch(e){};render()" style="display:flex;justify-content:space-between;align-items:baseline;gap:4px 10px;flex-wrap:wrap;cursor:pointer;user-select:none;scroll-margin-top:12px"><h2 style="margin:0;font-family:'Outfit',sans-serif;font-size:17px;white-space:nowrap">${titulo} <span style="font-size:13px;color:var(--muted2)">${aberto(k) ? '▾' : '▸'}</span></h2><span style="font-size:13px;color:var(--muted2);text-align:right">${resumo}</span></div>${aberto(k) ? corpo : ''}`);
+  const estiloIni = `<style>.ini-wrap{max-width:980px;margin:0 auto}.ini-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px}.ini-chips{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.ini-custo{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:4px 16px;align-items:baseline;font-size:13.5px}.ini-custo .val{font-family:'JetBrains Mono',monospace;white-space:nowrap;text-align:right}@media (max-width:600px){.ini-kpis{grid-template-columns:1fr 1fr}.ini-kpis .v{font-size:14px}.ini-chips{grid-template-columns:1fr 1fr}.ini-custo{grid-template-columns:1fr auto auto;gap:2px 12px}.ini-custo .nome{grid-column:1/-1;margin-top:4px}}</style>`;
+  return `${estiloIni}
   <div class="ini-wrap">
     <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px;gap:10px;flex-wrap:wrap">
       <div><div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:26px">Início</div><div style="font-size:13px;color:var(--muted2)">${new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</div></div>
       <div style="font-size:13px;font-weight:600;color:var(--accent);background:var(--bg4);padding:6px 12px;border-radius:999px">${ativos.filter(p => !processoFechado(p)).length} processos em andamento</div>
     </div>
-    <div class="ini-cols"><div class="ini-col">${blocoPagar}${blocoFalta}</div><div class="ini-col">${blocoCargas}${blocoResultado}</div></div>
+    ${kpis}
+    ${secao('pagar', 'A pagar', `<span style="font-family:'JetBrains Mono',monospace;color:var(--red)">${brl(totalPagar)}</span>${totalPrevisto ? ' · estimados ' + brl(totalPrevisto) : ''}`, pagarCorpo)}
+    ${secao('falta', 'O que falta', pend.length ? `${pend.length} pendência(s)` : 'nada faltando', faltaCorpo)}
+    ${secao('cargas', 'Onde estão as cargas', cargas.length ? resumoCargas : 'nenhuma carga ativa', cargasCorpo + `<div style="text-align:right"><a href="#" onclick="nav('rastreamento');return false" style="font-size:13px;text-decoration:none">Rastreio →</a></div>`)}
+    ${secao('resultado', 'Resultado', `${fech.length} fechado(s) <span style="font-family:'JetBrains Mono',monospace;color:${lucroFech >= 0 ? 'var(--green)' : 'var(--red)'}">${lucroFech >= 0 ? '+ ' : '− '}${m2(Math.abs(lucroFech))}</span>${nProv ? ` · ${nProv} provisório(s)` : ''}`, resultadoCorpo)}
   </div>`;
 }
 
