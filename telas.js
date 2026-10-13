@@ -17,6 +17,8 @@ const brl = n => 'R$ ' + m2(n);
 
 function arquivos(p, tipo) { const f = (p.docs && p.docs._files && p.docs._files[tipo]) || []; return f.length ? f : (p.docs && p.docs[tipo] ? [{ url: p.docs[tipo], name: tipo }] : []); }
 function temDoc(p, ...tipos) { return tipos.some(t => arquivos(p, t).length > 0); }
+// v90: o arquivo que vale (o mais novo que não foi substituído)
+function arquivoAtual(p, tipo) { const l = arquivos(p, tipo); return l.filter(f => f && !f.substituido).slice(-1)[0] || l[l.length - 1]; }
 
 // Fase atual: vem das datas (as mesmas que o ERP usa para o status)
 function faseProcesso(p) {
@@ -159,8 +161,7 @@ function renderInicio() {
   // saldo do cliente em reais: crédito disponível (gerado − usado) e o que foi pago e ainda não embarcou (13/10/2026)
   const clientes = typeof saldoClientes === 'function' ? saldoClientes() : [];
 
-  const blocoPagar = card(`
-    ${titulo2('A pagar', `<span style="font-family:'JetBrains Mono',monospace;font-size:18px;color:var(--red)">${brl(totalPagar)}</span>`)}
+  const pagarCorpo = `
     ${pagar.length ? `<div style="display:flex;flex-direction:column">${pagar.slice(0, 8).map(x => `
       <div style="display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">
         <div style="min-width:0"><div style="font-size:14px">${linkProc(x.p.id)} · ${escHtml(PROCESS_COST_FIELDS[x.campo])}</div>
@@ -171,17 +172,12 @@ function renderInicio() {
     ${S._prevAberto ? [...new Set(previstos.map(x => x.campo))].map(c => { const xs = previstos.filter(x => x.campo === c).sort((a, b) => String(a.p.id).localeCompare(b.p.id)); return `<div style="padding-top:10px"><div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;font-weight:600"><span>${escHtml(PROCESS_COST_FIELDS[c])}</span><span style="font-family:'JetBrains Mono',monospace">${m2(xs.reduce((a, x) => a + x.aberto, 0))}</span></div>${xs.map(x => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding-top:4px"><span>${linkProc(x.p.id)} <span style="color:var(--muted2)">· ${escHtml(String((x.previsto && x.previsto.regra) || x.empresa || '').replace(' por processo', '').replace('(certificado de origem)', 'certificado'))}</span></span><span style="font-family:'JetBrains Mono',monospace;white-space:nowrap">${m2(x.aberto)}</span></div>`).join('')}</div>`; }).join('') : ''}</div>` : ''}
     ${(() => { const ad = []; (S.processos || []).forEach(q => Object.entries((q.docs && q.docs._costAdiant) || {}).forEach(([c, v]) => ad.push({ q, c, v, emp: (q.docs._costEmpresa || {})[c] || '' }))); return ad.length ? `<div style="padding:9px 12px;border-radius:10px;background:var(--bg3)"><div style="font-size:14px;font-weight:600">Adiantamentos aguardando nota</div>${ad.map(x => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding-top:6px"><span>${linkProc(x.q.id)} · ${escHtml(PROCESS_COST_FIELDS[x.c])}${x.emp ? ' · ' + escHtml(x.emp) : ''}</span><span style="font-family:'JetBrains Mono',monospace">${m2(x.v)} adiantado</span></div>`).join('')}<div style="font-size:11.5px;color:var(--muted2);padding-top:6px">Quando a nota chegar, o saldo a pagar aparece aqui em "A pagar".</div></div>` : ''; })()}
     ${typeof reembolsosAbertos === 'function' && reembolsosAbertos().length ? `<div style="display:flex;justify-content:space-between;gap:10px;padding:9px 12px;border-radius:10px;background:var(--bg3)"><div><div style="font-size:14px;font-weight:600">Reembolso ao sócio</div><div style="font-size:12.5px;color:var(--muted2)">${reembolsosAbertos().length} despesa(s) pagas no cartão / conta pessoal</div></div><div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;white-space:nowrap">${m2(reembolsosAbertos().reduce((a, l) => a + (Number(l.valor) || 0), 0))}</div></div>` : ''}
-    ${typeof blocoContaAssessoria === 'function' ? blocoContaAssessoria() : ''}
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
-      <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--green)">A receber (câmbio)</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--green)">${usd(totEmb + totAnt)}</div><div style="font-size:11.5px;color:var(--muted2);line-height:1.45">${(totEmb + totAnt) > 0 ? `já embarcou: ${usd(totEmb)}${recEmb.length ? ' (' + recEmb.map(x => x.p.id).slice(0, 3).join(', ') + ')' : ''}<br>ainda não embarcou: ${usd(totAnt)}${recAnt.length ? ' (' + recAnt.map(x => x.p.id).slice(0, 3).join(', ') + ')' : ''}${px ? '<br>≈ ' + brl((totEmb + totAnt) * px) + ' no dólar de hoje' : ''}` : 'nada em aberto'}</div></div>
-      <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--muted2)">Pago neste mês</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px">${brl(pagoMes)}</div><div style="font-size:11.5px;color:var(--muted2)">custos e despesas</div></div>
-      <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--muted2)">Dólar (PTAX venda)</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px">${px ? 'R$ ' + px.toLocaleString('pt-BR', { minimumFractionDigits: 4 }) : (S._ptax && S._ptax.erro ? 'indisponível' : '…')}</div><div style="font-size:11.5px;color:var(--muted2)">${px ? 'Banco Central · ' + S._ptax.data : 'Banco Central'}</div></div>
-    </div>`);
+    ${typeof blocoContaAssessoria === 'function' ? blocoContaAssessoria() : ''}`;
+
 
   const chip = (n, txt, cor, acao) => `<button type="button" onclick="${acao}" style="text-align:left;border:none;cursor:pointer;background:var(--bg3);border-radius:10px;padding:10px;color:${cor};min-height:44px"><div style="font-family:'Outfit',sans-serif;font-size:22px;font-weight:700">${n == null ? '…' : n}</div><div style="font-size:12px">${txt}</div></button>`;
-  const blocoFalta = card(`
-    ${titulo2('O que falta')}
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px">
+  const faltaCorpo = `
+    <div class="ini-chips">
       ${chip(nDocs, 'documentos e custos', 'var(--orange)', "document.getElementById('falta-lista').scrollIntoView({behavior:'smooth'})")}
       ${chip(nComp, 'nota ou comprovante', 'var(--orange)', "document.getElementById('falta-lista').scrollIntoView({behavior:'smooth'})")}
       ${chip(extratoPend, 'linhas do extrato', 'var(--accent)', "nav('conciliacao')")}
@@ -189,49 +185,80 @@ function renderInicio() {
     </div>
     <div id="falta-lista" style="display:flex;flex-direction:column;gap:8px;font-size:13.5px">
       ${pend.length ? pend.slice(0, S._todasPend ? pend.length : 12).map(x => `<div style="display:flex;gap:10px;align-items:flex-start"><span style="flex:none;width:8px;height:8px;border-radius:50%;background:${x.tipo === 'cambio' ? 'var(--green)' : 'var(--orange)'};margin-top:6px"></span><div>${linkProc(x.p.id)} ${escHtml(x.texto)}</div></div>`).join('') + (pend.length > 12 ? `<button class="btn btn-secondary btn-sm" style="align-self:flex-start;min-height:40px" onclick="S._todasPend=!S._todasPend;render()">${S._todasPend ? 'Mostrar menos' : `Ver todas as pendências (+ ${pend.length - 12})`}</button>` : '') : '<div style="color:var(--muted2)">Nada faltando nos processos.</div>'}
-    </div>`);
+    </div>`;
 
-  const blocoCargas = card(`
-    ${titulo2('Onde estão as cargas', `<a href="#" onclick="nav('rastreamento');return false" style="font-size:13px;text-decoration:none">Rastreio →</a>`)}
-    ${cargas.length ? cargas.slice(0, 8).map(x => {
+
+  // resumo das cargas por fase (cabeçalho de "Onde estão as cargas")
+  // v89: embarcadas separadas em Em Trânsito e No Destino (mesma regra do Rastreio)
+  cargas.forEach(x => { x.grupo = x.f >= 3 ? grupoEmbarcada(x.p, x.f) : ''; });
+  const ORDEM_C = ['A coletar', 'Coleta', 'Armazém', 'Porto', 'Em Trânsito', 'No Destino'];
+  const nomeCarga = x => (x.f >= 3 ? (x.grupo === 'destino' ? 'No Destino' : 'Em Trânsito') : x.f >= 0 ? FASES[x.f] : 'A coletar');
+  const corCarga = n => (n === 'No Destino' ? 'var(--green)' : n === 'Em Trânsito' ? 'var(--accent)' : n === 'A coletar' ? 'var(--muted2)' : 'var(--yellow)');
+  const resumoCargas = (() => { const g = {}; cargas.forEach(x => { const n = nomeCarga(x); (g[n] = g[n] || []).push(x.p.id); }); return ORDEM_C.filter(n => g[n]).map(n => `<span style="white-space:nowrap"><b style="font-weight:600;color:${corCarga(n)}">${n}</b> ${g[n].length <= 2 ? g[n].map(id => linkProc(id)).join(', ') : g[n].length}</span>`).join(' · '); })();
+  const cargasCorpo = `${cargas.length ? cargas.map(x => {
       const p = x.p, v = (p.docs && p.docs._viagem) || {}, dl = brParaDate(p.deadlineCarga), dlDias = dl ? Math.ceil((dl - new Date()) / 864e5) : null;
       const info = x.f >= 3 ? [(p.containers || []).filter(Boolean).join(', '), v.navio, 'saiu ' + p.saida, v.eta ? 'chega ' + v.eta : '', p.pod].filter(Boolean).join(' · ')
         : [p.logTransportadora, p.logCidade, (p.containers || []).filter(Boolean).join(', ')].filter(Boolean).join(' · ') || (p.produto || '');
       return `<div style="display:flex;flex-direction:column;gap:6px">
-        <div style="display:flex;justify-content:space-between;gap:8px"><span>${linkProc(p.id)} <span style="font-size:12.5px;color:var(--muted2)">${escHtml(p.cliente || '')}</span></span><span style="font-size:12.5px;font-weight:600;color:${x.f >= 3 ? 'var(--accent)' : x.f >= 0 ? 'var(--yellow)' : 'var(--muted2)'}">${x.f >= 0 ? FASES[x.f] : 'A coletar'}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:8px"><span>${linkProc(p.id)} <span style="font-size:12.5px;color:var(--muted2)">${escHtml(p.cliente || '')}</span></span><span style="font-size:12.5px;font-weight:600;color:${corCarga(nomeCarga(x))}">${nomeCarga(x)}</span></div>
         ${barraFases(x.f)}
         <div style="font-size:12.5px;color:var(--muted2)">${escHtml(info)}${dlDias != null && dlDias >= 0 && dlDias <= 5 && x.f < 3 ? ` · <span style="color:var(--yellow);font-weight:600">dead line de carga em ${dlDias} dia(s)</span>` : ''}</div>
       </div>`;
-    }).join('') : '<div style="font-size:13.5px;color:var(--muted2)">Nenhuma carga ativa.</div>'}
-    <div style="font-size:11.5px;color:var(--muted2)">${FASES.join(' · ')}</div>`);
+    }).join('') + `<div style="font-size:11.5px;color:var(--muted2)">${FASES.join(' · ')}</div>` : '<div style="font-size:13.5px;color:var(--muted2)">Nenhuma carga ativa.</div>'}`;
+
 
   const porProduto = {};
   // par "S" (FS260109 + FS260109S): é a mesma venda — as toneladas contam uma vez e o resultado aparece junto
   const ehS = p => /^FS\d{6}S$/.test(p.id) && (S.processos || []).some(q => q.id === p.id.slice(0, -1));
   resultados.forEach(x => { if (ehS(x.p)) { const pai = resultados.find(y => y.p.id === x.p.id.slice(0, -1)); if (pai) { pai.c = Object.assign({}, pai.c, { custo: pai.c.custo + x.c.custo, envio: pai.c.envio + x.c.envio + x.c.produto, lucro: pai.c.lucro + x.c.lucro }); pai.par = x.p.id; } } });
   const resultadosVis = resultados.filter(x => !(ehS(x.p) && resultados.some(y => y.p.id === x.p.id.slice(0, -1))));
-  resultadosVis.forEach(x => { if (!x.c.ton) return; const g = grupoProduto(x.p); const o = porProduto[g] = porProduto[g] || { ton: 0, prod: 0, env: 0, n: 0 }; o.ton += x.c.ton; o.prod += x.c.produto; o.env += x.c.envio; o.n++; });
-  const blocoResultado = card(`
-    ${titulo2('Resultado')}
+  const taxaDoProcesso = p => { const t = Number(p.cambioTaxa) || ((Number(p.cambioReais) > 0 && Number(p.cambioRecebido) > 0) ? Number(p.cambioReais) / Number(p.cambioRecebido) : 0); return t > 2 && t < 10 ? t : (Number(px) || 0); };
+  resultadosVis.forEach(x => { if (!x.c.ton) return; const g = grupoProduto(x.p); const o = porProduto[g] = porProduto[g] || { ton: 0, prod: 0, env: 0, envUsd: 0, tonUsd: 0, n: 0 }; o.ton += x.c.ton; o.prod += x.c.produto; o.env += x.c.envio; const tx = taxaDoProcesso(x.p); if (tx) { o.envUsd += x.c.envio / tx; o.tonUsd += x.c.ton; } o.n++; });
+  // v87: linhas com o valor sempre alinhado à direita (o nome quebra linha, o valor não desce)
+  const linhaValor = (esq, dir, extra) => `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;align-items:start;font-size:13.5px;${extra || ''}"><div style="min-width:0">${esq}</div><div style="font-family:'JetBrains Mono',monospace;white-space:nowrap;text-align:right">${dir}</div></div>`;
+  const resultadoCorpo = `
     <div style="display:flex;flex-direction:column;gap:8px;font-size:13.5px">
-      ${resultadosVis.slice(0, 10).map(x => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${linkProc(x.p.id)}${x.par ? ' <span style="font-size:12px;color:var(--muted2)">+ ' + escHtml(x.par.slice(-4)) + '</span>' : ''} ${x.prov ? '<span style="color:var(--yellow);font-size:12px">provisório</span>' : '<span style="color:var(--green);font-size:12px">fechado</span>'}</span><span style="font-family:'JetBrains Mono',monospace;color:${x.c.lucro >= 0 ? 'var(--green)' : 'var(--red)'}">${x.c.lucro >= 0 ? '+ ' : '− '}${m2(Math.abs(x.c.lucro))}</span></div>`).join('') || '<div style="color:var(--muted2)">Sem resultado ainda.</div>'}
+      ${resultadosVis.slice(0, 10).map(x => linhaValor(`${linkProc(x.p.id)}${x.par ? ' <span style="font-size:12px;color:var(--muted2)">+ ' + escHtml(x.par.slice(-4)) + '</span>' : ''} ${x.prov ? '<span style="color:var(--yellow);font-size:12px">provisório</span>' : '<span style="color:var(--green);font-size:12px">fechado</span>'}`, `<span style="color:${x.c.lucro >= 0 ? 'var(--green)' : 'var(--red)'}">${x.c.lucro >= 0 ? '+ ' : '− '}${m2(Math.abs(x.c.lucro))}</span>`)).join('') || '<div style="color:var(--muted2)">Sem resultado ainda.</div>'}
     </div>
     ${Object.keys(porProduto).length ? `<div style="border-top:1px solid var(--border);padding-top:12px;display:flex;flex-direction:column;gap:6px">
-      <div style="font-size:12px;color:var(--muted2)">Custo médio por tonelada</div>
-      ${Object.entries(porProduto).map(([g, o]) => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13.5px;flex-wrap:wrap"><span>${escHtml(g)} <span style="color:var(--muted2);font-size:12px">${o.n} proc. · ${m2(o.ton)} t</span></span><span style="font-family:'JetBrains Mono',monospace">produto ${m2(o.prod / o.ton)} · envio ${m2(o.env / o.ton)}</span></div>`).join('')}
+      <div class="ini-custo"><div class="nome" style="font-size:12px;color:var(--muted2)">Custo de envio por tonelada</div><div class="val" style="font-size:12px;color:var(--muted2)">R$ / t</div><div class="val" style="font-size:12px;color:var(--muted2)">USD / t</div>
+      ${Object.entries(porProduto).map(([g, o]) => `<div class="nome">${escHtml(g)} <span style="color:var(--muted2);font-size:12px">${o.n} proc. · ${m2(o.ton)} t</span></div><div class="val">${m2(o.env / o.ton)}</div><div class="val">${o.tonUsd ? m2(o.envUsd / o.tonUsd) : '—'}</div>`).join('')}</div>
+      <div style="font-size:11.5px;color:var(--muted2)">Dólar pelo câmbio de cada processo (sem câmbio ainda, o dólar do dia).</div>
     </div>` : ''}
     ${clientes.length ? `<div style="border-top:1px solid var(--border);padding-top:12px;display:flex;flex-direction:column;gap:6px">
       <div style="font-size:12px;color:var(--muted2)">Saldo dos clientes</div>
-      ${clientes.map(c => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13.5px;flex-wrap:wrap"><span>${escHtml(c.nome)}${c.adiantado ? `<span style="color:var(--muted2);font-size:12px"> · R$ ${m2(c.adiantado)} pago e não embarcado</span>` : ''}</span><span style="font-family:'JetBrains Mono',monospace;color:${c.disponivel > 0.009 ? 'var(--green)' : c.disponivel < -0.009 ? 'var(--red)' : 'var(--muted2)'}">${Math.abs(c.disponivel) < 0.01 ? 'sem saldo' : 'R$ ' + m2(Math.abs(c.disponivel)) + (c.disponivel > 0 ? ' de crédito' : ' usado a mais')}</span></div>`).join('')}
-    </div>` : ''}`);
+      ${clientes.map(c => linhaValor(`<div>${escHtml(c.nome)}</div>${c.adiantado ? `<div style="color:var(--muted2);font-size:12px">R$ ${m2(c.adiantado)} pago e não embarcado</div>` : ''}`, `<span style="color:${c.disponivel > 0.009 ? 'var(--green)' : c.disponivel < -0.009 ? 'var(--red)' : 'var(--muted2)'}">${Math.abs(c.disponivel) < 0.01 ? 'sem saldo' : 'R$ ' + m2(Math.abs(c.disponivel)) + (c.disponivel > 0 ? ' de crédito' : ' usado a mais')}</span>`)).join('')}
+    </div>` : ''}`;
 
-  return `
-  <div style="max-width:760px;margin:0 auto">
+
+  // ── v88: layout "Resumo" (escolhido por ele em 13/10): números principais no topo e cada parte abre e fecha ──
+  const nEmb = cargas.filter(x => x.f >= 3).length, nDest = cargas.filter(x => x.grupo === 'destino').length;
+  const fech = resultadosVis.filter(x => !x.prov), nProv = resultadosVis.length - fech.length, lucroFech = fech.reduce((a, x) => a + (x.c.lucro || 0), 0);
+  const abreSecao = k => `S._iniAberto=S._iniAberto||{};S._iniAberto['${k}']=true;try{localStorage.setItem('oficial:inicio-abertos',JSON.stringify(S._iniAberto))}catch(e){};render();setTimeout(()=>{const e=document.getElementById('ini-${k}');if(e)e.scrollIntoView({behavior:'smooth',block:'start'})},60)`;
+  const kpi = (rot, val, sub, cor, acao) => `<div ${acao ? `onclick="${acao}" ` : ''}style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;${acao ? 'cursor:pointer;' : ''}min-width:0"><div style="font-size:12px;color:var(--muted2)">${rot}</div><div class="v" style="font-family:'JetBrains Mono',monospace;font-size:17px;color:${cor || 'var(--text)'};white-space:nowrap">${val}</div><div style="font-size:11.5px;color:var(--muted2);line-height:1.4">${sub || ''}</div></div>`;
+  const kpis = `<div class="ini-kpis">
+    ${kpi('A pagar', brl(totalPagar), totalPrevisto ? 'estimados ' + brl(totalPrevisto) : 'sem estimados', 'var(--red)', abreSecao('pagar'))}
+    ${kpi('A receber (câmbio)', usd(totEmb + totAnt), (totEmb + totAnt) > 0 ? `já embarcou ${usd(totEmb)} · ainda não embarcou ${usd(totAnt)}${px ? ' · ≈ ' + brl((totEmb + totAnt) * px) : ''}` : 'nada em aberto', 'var(--green)')}
+    ${kpi('Pago neste mês', brl(pagoMes), 'custos e despesas')}
+    ${kpi('Dólar (PTAX venda)', px ? 'R$ ' + px.toLocaleString('pt-BR', { minimumFractionDigits: 4 }) : (S._ptax && S._ptax.erro ? 'indisponível' : '…'), px ? 'Banco Central · ' + S._ptax.data : 'Banco Central')}
+    ${kpi('O que falta', String(pend.length), `${nDocs} documentos e custos · ${nComp} notas ou comprovantes`, pend.length ? 'var(--orange)' : 'var(--green)', abreSecao('falta'))}
+    ${kpi('Cargas', String(cargas.length), `${nEmb - nDest} em trânsito · ${nDest} no destino · ${cargas.length - nEmb} no Brasil`, 'var(--accent)', abreSecao('cargas'))}
+  </div>`;
+  // cada parte abre e fecha clicando no cabeçalho; o aparelho lembra (começa só com "O que falta" aberto)
+  const aberto = k => { S._iniAberto = S._iniAberto || (() => { try { return JSON.parse(localStorage.getItem('oficial:inicio-abertos') || 'null') || { falta: true }; } catch (e) { return { falta: true }; } })(); return !!S._iniAberto[k]; };
+  const secao = (k, titulo, resumo, corpo) => card(`<div id="ini-${k}" onclick="if(event.target.closest('a,button'))return;S._iniAberto=S._iniAberto||{};S._iniAberto['${k}']=!S._iniAberto['${k}'];try{localStorage.setItem('oficial:inicio-abertos',JSON.stringify(S._iniAberto))}catch(e){};render()" style="display:flex;justify-content:space-between;align-items:baseline;gap:4px 10px;flex-wrap:wrap;cursor:pointer;user-select:none;scroll-margin-top:12px"><h2 style="margin:0;font-family:'Outfit',sans-serif;font-size:17px;white-space:nowrap">${titulo} <span style="font-size:13px;color:var(--muted2)">${aberto(k) ? '▾' : '▸'}</span></h2><span style="font-size:13px;color:var(--muted2);text-align:right">${resumo}</span></div>${aberto(k) ? corpo : ''}`);
+  const estiloIni = `<style>.ini-wrap{max-width:980px;margin:0 auto}.ini-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px}.ini-chips{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.ini-custo{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:4px 16px;align-items:baseline;font-size:13.5px}.ini-custo .val{font-family:'JetBrains Mono',monospace;white-space:nowrap;text-align:right}@media (max-width:600px){.ini-kpis{grid-template-columns:1fr 1fr}.ini-kpis .v{font-size:14px}.ini-chips{grid-template-columns:1fr 1fr}.ini-custo{grid-template-columns:1fr auto auto;gap:2px 12px}.ini-custo .nome{grid-column:1/-1;margin-top:4px}}</style>`;
+  return `${estiloIni}
+  <div class="ini-wrap">
     <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px;gap:10px;flex-wrap:wrap">
       <div><div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:26px">Início</div><div style="font-size:13px;color:var(--muted2)">${new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</div></div>
       <div style="font-size:13px;font-weight:600;color:var(--accent);background:var(--bg4);padding:6px 12px;border-radius:999px">${ativos.filter(p => !processoFechado(p)).length} processos em andamento</div>
     </div>
-    ${blocoPagar}${blocoFalta}${blocoCargas}${blocoResultado}
+    ${kpis}
+    ${secao('pagar', 'A pagar', `<span style="font-family:'JetBrains Mono',monospace;color:var(--red)">${brl(totalPagar)}</span>${totalPrevisto ? ' · estimados ' + brl(totalPrevisto) : ''}`, pagarCorpo)}
+    ${secao('falta', 'O que falta', pend.length ? `${pend.length} pendência(s)` : 'nada faltando', faltaCorpo)}
+    ${secao('cargas', 'Onde estão as cargas', cargas.length ? resumoCargas : 'nenhuma carga ativa', cargasCorpo + `<div style="text-align:right"><a href="#" onclick="nav('rastreamento');return false" style="font-size:13px;text-decoration:none">Rastreio →</a></div>`)}
+    ${secao('resultado', 'Resultado', `${fech.length} fechado(s) <span style="font-family:'JetBrains Mono',monospace;color:${lucroFech >= 0 ? 'var(--green)' : 'var(--red)'}">${lucroFech >= 0 ? '+ ' : '− '}${m2(Math.abs(lucroFech))}</span>${nProv ? ` · ${nProv} provisório(s)` : ''}`, resultadoCorpo)}
   </div>`;
 }
 
@@ -276,7 +303,7 @@ function renderProcesso2() {
 
     ${card(`${titulo2('Documentos', `<span style="font-size:12.5px;color:var(--muted2)">${docsOk} de ${CHECKLIST.length}</span>`)}
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">
-        ${CHECKLIST.map(x => { const a = x.tipos.map(t => arquivos(p, t)[0]).find(Boolean); return check(!!a, x.nome, a && a.url, !a && f >= x.fase); }).join('')}
+        ${CHECKLIST.map(x => { const a = x.tipos.map(t => arquivoAtual(p, t)).find(Boolean); return check(!!a, x.nome, a && a.url, !a && f >= x.fase); }).join('')}
       </div>
       <div style="font-size:12px;color:var(--muted2)">Opcionais: ${OPCIONAIS.map(([t, n]) => n + (arquivos(p, t).length ? ' ✓' : '')).join(' · ')}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -369,27 +396,40 @@ function linkArmador(p) {
   if (/YANG\s*MING|YML/.test(arm)) return 'https://www.yangming.com/en/esolution/cargo_tracking';
   return '';
 }
+// v89: viagem de uma carga embarcada — ETA do BL/fatura do agente; sem ETA, estima saída + 40 dias (China)
+function viagemCarga(p) {
+  const v = (p.docs && p.docs._viagem) || {}, atd = brParaDate(p.saida); let eta = brParaDate(v.eta), est = false;
+  if (atd && !eta) { eta = new Date(atd.getTime() + 40 * 864e5); est = true; }
+  const pct = atd && eta ? Math.max(0, Math.min(100, Math.round((Date.now() - atd) / (eta - atd) * 100))) : 0;
+  return { v, atd, eta, est, pct, faltam: eta ? Math.ceil((eta - Date.now()) / 864e5) : null };
+}
+// embarcada: "No Destino" quando já passou da chegada prevista (ou o status diz No Destino/Concluído); senão "Em Trânsito"
+function grupoEmbarcada(p, f) { if (f >= 4) return 'destino'; return viagemCarga(p).pct >= 100 ? 'destino' : 'transito'; }
 function renderRastreio2() {
   const lista = (S.processos || []).filter(p => p.status !== 'Cancelado').map(p => ({ p, f: faseProcesso(p) }));
-  const emb = lista.filter(x => x.f >= 3).sort((a, b) => (brParaDate(b.p.saida) || 0) - (brParaDate(a.p.saida) || 0));
+  const emb = lista.filter(x => x.f >= 3).map(x => Object.assign(x, { g: viagemCarga(x.p), grupo: grupoEmbarcada(x.p, x.f) }));
+  const transito = emb.filter(x => x.grupo === 'transito').sort((a, b) => (a.g.eta || 0) - (b.g.eta || 0));      // a que chega primeiro em cima
+  const destino = emb.filter(x => x.grupo === 'destino').sort((a, b) => (b.g.eta || 0) - (a.g.eta || 0));       // a que chegou por último em cima
   const antes = lista.filter(x => x.f < 3).sort((a, b) => b.f - a.f);
-  const viagem = p => {
-    const v = (p.docs && p.docs._viagem) || {}, atd = brParaDate(p.saida); let eta = brParaDate(v.eta), est = false;
-    if (atd && !eta) { eta = new Date(atd.getTime() + 40 * 864e5); est = true; }   // China: ~40 dias quando a ETA não veio no documento
-    const pct = atd && eta ? Math.max(0, Math.min(100, Math.round((Date.now() - atd) / (eta - atd) * 100))) : 0;
-    return { v, atd, eta, est, pct, faltam: eta ? Math.ceil((eta - Date.now()) / 864e5) : null };
-  };
+  // v89: grupos que abrem e fecham (o aparelho lembra); No Destino começa fechado
+  if (!S._rastAberto) { try { S._rastAberto = JSON.parse(localStorage.getItem('oficial:rastreio-abertos') || 'null'); } catch (e) {} S._rastAberto = S._rastAberto || { transito: true, destino: false, antes: true }; }
+  const cabGrupo = (k, nome, n, cor, itens) => `<div onclick="if(event.target.closest('a'))return;S._rastAberto['${k}']=!S._rastAberto['${k}'];try{localStorage.setItem('oficial:rastreio-abertos',JSON.stringify(S._rastAberto))}catch(e){};render()" style="display:flex;justify-content:space-between;align-items:baseline;gap:4px 10px;flex-wrap:wrap;cursor:pointer;user-select:none;margin:18px 0 10px"><h2 style="margin:0;font-family:'Outfit',sans-serif;font-size:18px;color:${cor};white-space:nowrap">${nome} <span style="font-size:14px;color:var(--muted2)">(${n}) ${S._rastAberto[k] ? '▾' : '▸'}</span></h2>${!S._rastAberto[k] && itens.length ? `<span style="font-size:12.5px;color:var(--muted2)">${itens.length <= 12 ? itens.map(id => linkProc(id)).join(' · ') : ''}</span>` : ''}</div>`;
+  const cartao = ({ p, g, grupo }) => { const link = linkArmador(p); return card(`
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>${linkProc(p.id)} <span style="font-size:12.5px;color:var(--muted2)">${escHtml(p.cliente || '')}</span></span><span style="font-size:12.5px;font-weight:600;color:${grupo === 'destino' ? 'var(--green)' : 'var(--accent)'}">${grupo === 'destino' ? 'No destino' : 'Em trânsito'}</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;gap:8px"><span>${escHtml(p.pol || 'Origem')}<br><span style="color:var(--muted2);font-size:12px">saiu ${escHtml(p.saida || '—')}</span></span><span style="text-align:right">${escHtml(p.pod || 'Destino')}<br><span style="color:var(--muted2);font-size:12px">${g.eta ? (g.est ? 'estimada ' : 'ETA ') + g.eta.toLocaleDateString('pt-BR') : '—'}</span></span></div>
+      <div style="height:8px;border-radius:4px;background:var(--border2);overflow:hidden"><div style="height:100%;width:${g.pct}%;background:${grupo === 'destino' ? 'var(--green)' : 'var(--accent)'}"></div></div>
+      <div style="font-size:12.5px;color:var(--muted2)">${escHtml([g.v.navio, p.companhia, (p.containers || []).filter(Boolean).join(', '), p.booking ? 'booking ' + p.booking : ''].filter(Boolean).join(' · '))}${g.faltam != null && g.faltam > 0 ? ` · faltam ${g.faltam} dias` : ''}</div>
+      ${link ? `<a class="btn btn-secondary btn-sm" style="min-height:44px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none" href="${sanitizeUrl(link)}" target="_blank" rel="noopener noreferrer">Rastrear no site do armador</a>` : '<div style="font-size:12px;color:var(--muted2)">Sem container/armador para rastrear.</div>'}`); };
   return `
   <div style="max-width:760px;margin:0 auto">
     <div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:26px;margin-bottom:4px">Rastreio</div>
     <div style="font-size:13px;color:var(--muted2);margin-bottom:14px">Cargas embarcadas: saída (ATD) e chegada prevista (ETA) vêm do BL e da fatura do agente. O botão abre o rastreio do armador com o container.</div>
-    ${emb.length ? emb.map(({ p }) => { const g = viagem(p), link = linkArmador(p); return card(`
-      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>${linkProc(p.id)} <span style="font-size:12.5px;color:var(--muted2)">${escHtml(p.cliente || '')}</span></span><span style="font-size:12.5px;font-weight:600;color:${g.pct >= 100 ? 'var(--green)' : 'var(--accent)'}">${g.pct >= 100 ? 'No destino / chegando' : 'Em viagem'}</span></div>
-      <div style="display:flex;justify-content:space-between;font-size:13px;gap:8px"><span>${escHtml(p.pol || 'Origem')}<br><span style="color:var(--muted2);font-size:12px">saiu ${escHtml(p.saida || '—')}</span></span><span style="text-align:right">${escHtml(p.pod || 'Destino')}<br><span style="color:var(--muted2);font-size:12px">${g.eta ? (g.est ? 'estimada ' : 'ETA ') + g.eta.toLocaleDateString('pt-BR') : '—'}</span></span></div>
-      <div style="height:8px;border-radius:4px;background:var(--border2);overflow:hidden"><div style="height:100%;width:${g.pct}%;background:var(--accent)"></div></div>
-      <div style="font-size:12.5px;color:var(--muted2)">${escHtml([g.v.navio, p.companhia, (p.containers || []).filter(Boolean).join(', '), p.booking ? 'booking ' + p.booking : ''].filter(Boolean).join(' · '))}${g.faltam != null && g.faltam > 0 ? ` · faltam ${g.faltam} dias` : ''}</div>
-      ${link ? `<a class="btn btn-secondary btn-sm" style="min-height:44px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none" href="${sanitizeUrl(link)}" target="_blank" rel="noopener noreferrer">Rastrear no site do armador</a>` : '<div style="font-size:12px;color:var(--muted2)">Sem container/armador para rastrear.</div>'}`); }).join('') : card('<div style="font-size:13.5px;color:var(--muted2)">Nenhuma carga embarcada.</div>')}
-    ${antes.length ? card(`${titulo2('Antes do embarque')}${antes.map(({ p, f }) => `<div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;gap:8px"><span>${linkProc(p.id)}</span><span style="font-size:12.5px;font-weight:600;color:var(--muted2)">${f >= 0 ? FASES[f] : 'A coletar'}</span></div>${barraFases(f)}<div style="font-size:12.5px;color:var(--muted2)">${escHtml([p.logTransportadora, p.logCidade, p.deadlineCarga ? 'dead line ' + p.deadlineCarga : ''].filter(Boolean).join(' · ') || p.produto || '')}</div></div>`).join('')}`) : ''}
+    ${cabGrupo('transito', 'Em Trânsito', transito.length, 'var(--accent)', transito.map(x => x.p.id))}
+    ${S._rastAberto.transito ? (transito.length ? transito.map(cartao).join('') : card('<div style="font-size:13.5px;color:var(--muted2)">Nenhuma carga em viagem.</div>')) : ''}
+    ${cabGrupo('destino', 'No Destino', destino.length, 'var(--green)', destino.map(x => x.p.id))}
+    ${S._rastAberto.destino ? (destino.length ? destino.map(cartao).join('') : card('<div style="font-size:13.5px;color:var(--muted2)">Nenhuma carga no destino.</div>')) : ''}
+    ${antes.length ? cabGrupo('antes', 'Antes do embarque', antes.length, 'var(--text)', antes.map(x => x.p.id)) : ''}
+    ${antes.length && S._rastAberto.antes ? card(`${antes.map(({ p, f }) => `<div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;gap:8px"><span>${linkProc(p.id)}</span><span style="font-size:12.5px;font-weight:600;color:var(--muted2)">${f >= 0 ? FASES[f] : 'A coletar'}</span></div>${barraFases(f)}<div style="font-size:12.5px;color:var(--muted2)">${escHtml([p.logTransportadora, p.logCidade, p.deadlineCarga ? 'dead line ' + p.deadlineCarga : ''].filter(Boolean).join(' · ') || p.produto || '')}</div></div>`).join('')}`) : ''}
   </div>`;
 }
 
