@@ -443,12 +443,12 @@ function enriquecerInfo(item) {
     if (!info.pesoLiq) info.pesoLiq = numBR(mx(/Peso\s+l[ií]quido\s*\(?KG\)?\s*([\d.]+,\d+)/i)) || 0;
     // cruzamentos (13/10/2026): RUC (= o do BL), notas de saída da Fu Song citadas, chaves de notas (extrato completo/XML) e porto de embarque
     info.ruc = info.ruc || ((U.replace(/\s+/g, ' ').match(/\bRUC\s*:?\s*(\dBR\d{20,40})\b/) || [])[1]) || '';
-    info.nfsSaida = [...new Set([...T.matchAll(/NF-?e\s+(\d{1,3})\s*\/\s*(\d{1,9})\b/gi)].map(m => String(Number(m[2]))))];
+    info.nfsSaida = [...new Set([...T.matchAll(/NF-?\s?e\s+(\d{1,3})\s*\/\s*(\d{1,9})\b/gi)].map(m => String(Number(m[2]))))];
     info.refs = [...new Set([...(info.refs || []), ...(typeof chavesDoTexto === 'function' ? chavesDoTexto(T) : [])])];
     // situação (13/10/2026): averbada / carga exportada / embarque bloqueado — a DU-E confirma o embarque
     if (!info.vmcv) info.vmcv = numBR(mx(/VMCV\b[^0-9]{0,80}?([\d.]+,\d{2})/i)) || 0;
     if (!info.dueReais) info.dueReais = numBR(mx(/Valor total (?:das )?mercadorias\s*\(R\$\)\s*([\d.]+,\d{2})/i)) || 0;
-    info.dueSituacao = mx(/Situa[cç][aã]o atual da DU-?E.{0,160}?\b(Averbada|Desembara[cç]ada|Registrada|Cancelada|Liberada|Em an[aá]lise)\b/i);
+    info.dueSituacao = mx(/Situa[cç][aã]o atual da DU-?\s?E.{0,160}?\b(Averbada|Desembara[cç]ada|Registrada|Cancelada|Liberada|Em an[aá]lise)\b/i);
     info.dueExportada = /Carga Completamente Exportada|\bAverba[cç][aã]o\b/i.test(U) || /^Averbada$/i.test(info.dueSituacao || '');
     { const evs = [...U.matchAll(/(\d{2}\/\d{2}\/\d{4})\s+\d{2}:\d{2}(?::\d{2})?\s+(Embarque bloqueado|Embarque desbloqueado|Desbloqueio[^0-9]{0,30})/gi)].map(m => ({ d: m[1], bloq: /bloqueado/i.test(m[2]) && !/desbloq/i.test(m[2]) }));
       const ult = evs[evs.length - 1];
@@ -1899,7 +1899,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '84';
+const VERSAO_TESTE = '85';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
