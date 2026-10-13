@@ -25,7 +25,7 @@ function faseProcesso(p) {
   const passou = s => { const d = brParaDate(s); return d && d <= hoje; };
   const eta = p.docs && p.docs._viagem && p.docs._viagem.eta;
   if (p.status === 'No Destino' || p.status === 'Concluído' || (passou(p.saida) && eta && passou(eta))) return 4;
-  if (passou(p.saida)) return 3;
+  if (passou(p.saida) || temDoc(p, 'bl')) return 3;   // BL anexado = embarcado (13/10/2026)
   if (passou(p.logPorto) || temDoc(p, 'due')) return 2;
   if (passou(p.logChegada)) return 1;
   if (passou(p.logEmbarque) || temDoc(p, 'cte', 'mdfe')) return 0;
@@ -94,7 +94,11 @@ function custosAbertos(p) { return Object.keys(PROCESS_COST_FIELDS).map(c => ({ 
 function processoFechado(p) { return faseProcesso(p) >= 3 && !pendenciasProcesso(p).length && !custosAbertos(p).length; }
 
 function toneladas(p) { const kg = Number(String(p.peso || '').replace(/[^\d,.]/g, '').replace(/\.(?=\d{3}\b)/g, '').replace(',', '.')) || 0; return kg > 0 ? kg / 1000 : 0; }
-function grupoProduto(p) { const t = String(p.produto || '').toUpperCase(); return /L[IÍ]TIO|LITHIUM|SPOD|ESPOD|AMBLIG|ZABUY/.test(t) ? 'Lítio' : /QUART/.test(t) ? 'Quartzo' : /AVENTUR/.test(t) ? 'Aventurina' : (p.produto || 'Outros'); }
+function grupoProduto(p) {
+  // pelo nome interno da pedra (Rutilo, Ematóide, Quartzo azul…); lítio em todas as formas = Lítio (13/10/2026)
+  const ni = typeof dvInterno === 'function' ? semAcento(dvInterno(p).prod || '') : '';
+  if (ni) return /LITIO|LITHIUM|ESPOD|SPOD|AMBLIG|ZABUY/.test(ni) ? 'Lítio' : dvInterno(p).prod.trim();
+  const t = String(p.produto || '').toUpperCase(); return /L[IÍ]TIO|LITHIUM|SPOD|ESPOD|AMBLIG|ZABUY/.test(t) ? 'Lítio' : /QUART/.test(t) ? 'Quartzo' : /AVENTUR/.test(t) ? 'Aventurina' : (p.produto || 'Outros'); }
 function custosProcesso(p) {
   const t = procTotals(p); const prod = Number(p.custoProduto) || 0; const ton = toneladas(p);
   return { ...t, produto: prod, envio: Math.max(0, t.custo - prod), ton, produtoT: ton ? prod / ton : 0, envioT: ton ? (t.custo - prod) / ton : 0 };
@@ -136,6 +140,10 @@ function renderInicio() {
   const totalPagar = pagar.reduce((a, x) => a + x.aberto, 0);
   const receber = ativos.map(p => ({ p, falta: (Number(p.cambioInvoice) || 0) - (Number(p.cambioRecebido) || 0) })).filter(x => x.falta > tolIntermediario(x.p) || (x.falta > 0.009 && !(Number(x.p.cambioRecebido) > 0)));
   const totalReceberUsd = receber.reduce((a, x) => a + x.falta, 0);
+  // separado: embarcados (já saíram) × antecipados (invoice emitida, carga ainda não embarcou) — 13/10/2026
+  const embarcadoRec = x => faseProcesso(x.p) >= 3 || ['Embarcado', 'No Destino', 'Concluído'].includes(x.p.status);
+  const recEmb = receber.filter(embarcadoRec), recAnt = receber.filter(x => !embarcadoRec(x));
+  const totEmb = recEmb.reduce((a, x) => a + x.falta, 0), totAnt = recAnt.reduce((a, x) => a + x.falta, 0);
   const pend = []; ativos.forEach(p => pendenciasProcesso(p).forEach(x => pend.push({ p, ...x })));
   const nDocs = pend.filter(x => x.tipo === 'doc' || x.tipo === 'custo').length, nComp = pend.filter(x => x.tipo === 'comprovante' || x.tipo === 'nota').length;
   const extratoPend = S.banco && S.banco.carregado ? S.banco.linhas.filter(l => l.status === 'pendente').length : null;
@@ -163,7 +171,8 @@ function renderInicio() {
     ${typeof reembolsosAbertos === 'function' && reembolsosAbertos().length ? `<div style="display:flex;justify-content:space-between;gap:10px;padding:9px 12px;border-radius:10px;background:var(--bg3)"><div><div style="font-size:14px;font-weight:600">Reembolso ao sócio</div><div style="font-size:12.5px;color:var(--muted2)">${reembolsosAbertos().length} despesa(s) pagas no cartão / conta pessoal</div></div><div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;white-space:nowrap">${m2(reembolsosAbertos().reduce((a, l) => a + (Number(l.valor) || 0), 0))}</div></div>` : ''}
     ${typeof blocoContaAssessoria === 'function' ? blocoContaAssessoria() : ''}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
-      <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--green)">A receber (câmbio)</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--green)">${usd(totalReceberUsd)}</div><div style="font-size:11.5px;color:var(--muted2)">${px ? '≈ ' + brl(totalReceberUsd * px) + ' no dólar de hoje' : receber.map(x => x.p.id).slice(0, 3).join(' · ') || '—'}</div></div>
+      <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--green)">A receber · embarcados</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--green)">${usd(totEmb)}</div><div style="font-size:11.5px;color:var(--muted2)">${recEmb.length ? recEmb.map(x => x.p.id).slice(0, 4).join(' · ') + (px ? ' · ≈ ' + brl(totEmb * px) : '') : 'nada em aberto'}</div></div>
+      <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--accent)">Antecipados a receber</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--accent)">${usd(totAnt)}</div><div style="font-size:11.5px;color:var(--muted2)">${recAnt.length ? recAnt.map(x => x.p.id).slice(0, 4).join(' · ') + ' · ainda não embarcou' : 'nenhum'}</div></div>
       <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--muted2)">Pago neste mês</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px">${brl(pagoMes)}</div><div style="font-size:11.5px;color:var(--muted2)">custos e despesas</div></div>
       <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--muted2)">Dólar (PTAX venda)</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px">${px ? 'R$ ' + px.toLocaleString('pt-BR', { minimumFractionDigits: 4 }) : (S._ptax && S._ptax.erro ? 'indisponível' : '…')}</div><div style="font-size:11.5px;color:var(--muted2)">${px ? 'Banco Central · ' + S._ptax.data : 'Banco Central'}</div></div>
     </div>`);
@@ -196,11 +205,15 @@ function renderInicio() {
     <div style="font-size:11.5px;color:var(--muted2)">${FASES.join(' · ')}</div>`);
 
   const porProduto = {};
-  resultados.forEach(x => { if (!x.c.ton) return; const g = grupoProduto(x.p); const o = porProduto[g] = porProduto[g] || { ton: 0, prod: 0, env: 0, n: 0 }; o.ton += x.c.ton; o.prod += x.c.produto; o.env += x.c.envio; o.n++; });
+  // par "S" (FS260109 + FS260109S): é a mesma venda — as toneladas contam uma vez e o resultado aparece junto
+  const ehS = p => /^FS\d{6}S$/.test(p.id) && (S.processos || []).some(q => q.id === p.id.slice(0, -1));
+  resultados.forEach(x => { if (ehS(x.p)) { const pai = resultados.find(y => y.p.id === x.p.id.slice(0, -1)); if (pai) { pai.c = Object.assign({}, pai.c, { custo: pai.c.custo + x.c.custo, envio: pai.c.envio + x.c.envio + x.c.produto, lucro: pai.c.lucro + x.c.lucro }); pai.par = x.p.id; } } });
+  const resultadosVis = resultados.filter(x => !(ehS(x.p) && resultados.some(y => y.p.id === x.p.id.slice(0, -1))));
+  resultadosVis.forEach(x => { if (!x.c.ton) return; const g = grupoProduto(x.p); const o = porProduto[g] = porProduto[g] || { ton: 0, prod: 0, env: 0, n: 0 }; o.ton += x.c.ton; o.prod += x.c.produto; o.env += x.c.envio; o.n++; });
   const blocoResultado = card(`
     ${titulo2('Resultado')}
     <div style="display:flex;flex-direction:column;gap:8px;font-size:13.5px">
-      ${resultados.slice(0, 10).map(x => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${linkProc(x.p.id)} ${x.prov ? '<span style="color:var(--yellow);font-size:12px">provisório</span>' : '<span style="color:var(--green);font-size:12px">fechado</span>'}</span><span style="font-family:'JetBrains Mono',monospace;color:${x.c.lucro >= 0 ? 'var(--green)' : 'var(--red)'}">${x.c.lucro >= 0 ? '+ ' : '− '}${m2(Math.abs(x.c.lucro))}</span></div>`).join('') || '<div style="color:var(--muted2)">Sem resultado ainda.</div>'}
+      ${resultadosVis.slice(0, 10).map(x => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${linkProc(x.p.id)}${x.par ? ' <span style="font-size:12px;color:var(--muted2)">+ ' + escHtml(x.par.slice(-4)) + '</span>' : ''} ${x.prov ? '<span style="color:var(--yellow);font-size:12px">provisório</span>' : '<span style="color:var(--green);font-size:12px">fechado</span>'}</span><span style="font-family:'JetBrains Mono',monospace;color:${x.c.lucro >= 0 ? 'var(--green)' : 'var(--red)'}">${x.c.lucro >= 0 ? '+ ' : '− '}${m2(Math.abs(x.c.lucro))}</span></div>`).join('') || '<div style="color:var(--muted2)">Sem resultado ainda.</div>'}
     </div>
     ${Object.keys(porProduto).length ? `<div style="border-top:1px solid var(--border);padding-top:12px;display:flex;flex-direction:column;gap:6px">
       <div style="font-size:12px;color:var(--muted2)">Custo médio por tonelada</div>

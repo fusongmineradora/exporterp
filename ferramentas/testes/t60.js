@@ -2,7 +2,7 @@ setTimeout(()=>{console.log('TIMEOUT');process.exit(1)},280000);
 const fs=require('fs'); const {mk}=require('./h.js');
 const store=JSON.parse(fs.readFileSync(__dirname+'/dados/store.json','utf8'));
 const H=mk(store);
-const due=fs.readFileSync('../fixtures/due102.txt','utf8');
+const due=fs.readFileSync(__dirname+'/dados/fixtures/due102.txt','utf8');
 (async()=>{
  const R={}; H.add({id:'1b9jBP8PUceHUYymYCIbKXTl9GRBEJAfAZgUTTwsor_I',name:'Fu Song ERP Database — TESTE 4',mimeType:'application/vnd.google-apps.spreadsheet',parents:[]});
  let {b,pg,errs}=await H.open();

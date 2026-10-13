@@ -1,7 +1,7 @@
 setTimeout(()=>{console.log('TIMEOUT');process.exit(1)},400000);
 const fs=require('fs'); const {mk}=require('./h.js');
 const store=JSON.parse(fs.readFileSync(__dirname+'/dados/store.json','utf8')); const H=mk(store);
-const tx=JSON.parse(fs.readFileSync('../fixtures/textos.json','utf8'));
+const tx=JSON.parse(fs.readFileSync(__dirname+'/dados/fixtures/textos.json','utf8'));
 const PU='1Vang8C4wfTpWMJu2TPamhOBZilraniIf', ENT='1WPKXkM8NXdJKNF1zk_R76hkqs8B6Do86';
 H.fld(PU,'Processos Unificados'); H.fld(ENT,'00 Entrada - Novos Documentos',PU); H.fld('CANC','99 Cancelados',PU);
 const ids=['096','097','098','099','100','101','102','104','106','107','108','109','111','112','113','114','115','116','117','118'];
