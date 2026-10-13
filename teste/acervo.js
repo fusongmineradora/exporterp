@@ -909,6 +909,7 @@ async function executarImportacaoTudo() {
     }
     // ── 5. identifica de novo (agora os processos existem) e anexa o que é seguro ──
     E.itens.forEach(it => { try { identificarItem(it); } catch (e) { console.warn('identificar', it.nome, e); } });
+    try { ligarPeloLote(E.itens); } catch (e) {}
     E.itens.forEach(it => {
       if (it.pastaErrada) rel.pastaErrada.push({ nome: (it.nome || '').replace(/^((?:FS\d{6}S?)(?:\+FS\d{6}S?)*|ADM) - /i, ''), estava: it.pastaErrada.estava.join(', '), certo: it.pastaErrada.certo, motivos: it.pastaErrada.motivos || [], auto: !!it.corrigido });
       else if (it.aviso && /^Conflito/.test(it.aviso)) rel.pastaErrada.push({ nome: it.nome, estava: (it.pastaProcessos || []).join(', '), certo: '?', motivos: [it.aviso], auto: false });
@@ -1872,7 +1873,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '78';
+const VERSAO_TESTE = '79';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)

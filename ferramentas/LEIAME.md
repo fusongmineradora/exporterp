@@ -36,6 +36,7 @@ node t64.js   # leitura de invoice/contrato e conferências
 node t70.js   # gerar invoice e contrato, NCM pela NF, versões, releitura do PDF gerado
 node t72.js   # envio dos modelos (reconhece qual é qual, recusa preenchido)
 node t73.js   # Novo processo + nome interno + pasta renomeada + recarregar
+node t79.js   # Caixa de Entrada: 4 CT-es + 4 MDF-es juntos → todos identificados (MDF-e segue o CT-e citado)
 node t50.js; node t51.js; node t62.js   # versão OFICIAL (t51: 2ª abertura sem gravações)
 ```
 Resultados esperados (base de 12/10/2026, versão 77):
@@ -44,6 +45,7 @@ Resultados esperados (base de 12/10/2026, versão 77):
 - `t60`/`t62`: `"writes": []` / `"ver":"versão 77"`, sem erros; `t60` com `"cob"` = texto de cobrança (não pode vir "(nenhum)").
 - `t70`: invoice FS260116 = USD 28.620, 54.000 kg, NCM 25291000; contrato relido com 2 containers; aviso de NCM 2529.90.00; FS260117 com versões `_v2`.
 - `t72`: 2 modelos aceitos, 1 recusado por estar preenchido, 1 recusado por não ser da Fu Song.
+- `t79`: os 8 documentos com processo e "alta"; `anexou: 8`; FS260100/104/108/111 com 1 CT-e e 1 MDF-e cada (precisa de `dados/fixtures/cte_mdfe_lote.json`).
 - `t73`: FS260119 / embarque 32; armazém 3.200, marítimo 6.500, assessoria 1.200, despachante 550; pasta renomeada com o booking; recarregar mantém tudo.
 Versão 78: além dos acima, abrir duas vezes esperando 45 s (para a releitura dos BLs/NFs rodar) — a 2ª abertura não pode gravar nada. Rodar com `WARN=1 node tNN.js` mostra avisos do console (um `ReferenceError` dentro da manutenção não aparece de outro jeito: a rotina para no meio sem quebrar a tela).
 Observações do simulador: o pdf.js é falso (devolve os bytes do arquivo como texto — para testar leitura de PDF use arquivos de texto); o CDN (cdnjs) é bloqueado, então o sistema usa o `pdf-lib.min.js` do próprio site; os testes de PDF trocam a rota de upload para guardar os bytes.
