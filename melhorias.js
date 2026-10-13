@@ -147,13 +147,23 @@ async function salvarDivisaoCambio(ref, pesos) {
 
 // ── 5. CONFERÊNCIA DE DOCUMENTOS ────────────────────────────
 function divergenciasDocs(p) {
-  if (!p || p.status === 'Cancelado' || ehProcessoS(p)) return [];
+  if (!p || p.status === 'Cancelado') return [];
   const d = p.docs || {}, out = [];
+  // BL × DU-E anexada (vale também para o "S"): o BL cita outra DU-E (13/10/2026)
+  { const n = x => String(x || '').replace(/\W/g, '').toUpperCase(); const ks = Object.keys(d._dues || {}).filter(k => /BR\d{9}/i.test(k));
+    if (d._bl && d._bl.due && ks.length && !ks.map(n).includes(n(d._bl.due))) out.push(`O BL cita a DU-E ${d._bl.due}, mas a DU-E anexada é ${ks.join(' e ')} (o BL pode ter saído com o número errado)`);
+    // porto de embarque da DU-E × porto do processo
+    const pol = semAcento(String(p.pol || '')).toUpperCase();
+    const portos = [...new Set(Object.values(d._dues || {}).map(x => x && x.porto).filter(Boolean))];
+    if (pol && portos.length && !portos.some(x => pol.includes(x))) out.push(`DU-E com embarque por ${portos.map(x => x[0] + x.slice(1).toLowerCase()).join(' e ')} e o processo diz ${p.pol}`); }
+  if (ehProcessoS(p)) return out;
   const cc = Number(d._contratoCont) || 0, bl = ((d._bl && d._bl.containers) || []).filter(Boolean).length;
   if (cc && bl && cc !== bl) out.push(`Sales Contract com ${cc} container(s) e BL com ${bl}`);
-  const dues = Object.entries(d._dues || {});
+  // venda dividida com o processo "S": as DU-Es dos dois somam (uma por container)
+  const pS = (S.processos || []).find(q => q.id === p.id + 'S');
+  const dues = Object.entries(d._dues || {}).concat(pS ? Object.entries((pS.docs && pS.docs._dues) || {}).filter(([k]) => !(d._dues || {})[k]) : []);
   // DU-E anexada a mais de um processo: não dá para comparar com uma invoice só
-  const compartilhada = dues.some(([k]) => (S.processos || []).some(q => q !== p && q.docs && q.docs._dues && q.docs._dues[k]));
+  const compartilhada = dues.some(([k]) => (S.processos || []).some(q => q !== p && q !== pS && q.docs && q.docs._dues && q.docs._dues[k]));
   if (dues.length && !compartilhada) {
     const peso = dues.reduce((a, [, x]) => a + (Number(x.peso) || 0), 0), vmle = dues.reduce((a, [, x]) => a + (Number(x.vmle) || 0), 0);
     const kg = (typeof toneladas === 'function' ? toneladas(p) : 0) * 1000;
@@ -710,7 +720,7 @@ async function textoDoArquivo(f) {
   return { texto: await pdfTexto(buf) };
 }
 async function relerDocsProcessos(forcar) {
-  const ps = (S.processos || []).filter(p => p.status !== 'Cancelado' && (forcar || !(p.docs && p.docs._relido78)));
+  const ps = (S.processos || []).filter(p => p.status !== 'Cancelado' && (forcar || !(p.docs && p.docs._relido84)));
   const norm = c => String(c || '').toUpperCase().replace(/[\s-]/g, '');
   let mud = 0;
   for (const p of ps) {
@@ -742,6 +752,21 @@ async function relerDocsProcessos(forcar) {
       const esc = cand.find(x => x.info.booking && x.info.booking === p.booking) || cand.find(x => (x.info.containers || []).some(c => meus.includes(norm(c)))) || cand.find(x => x.info.refProcesso === p.id) || cand[0];
       if (esc) { const m = []; aplicarBL(p, esc.info, esc.f.url, m); if (m.length) mud++; }
     }
+    // DU-Es já anexadas: RUC, notas de saída e porto (para os cruzamentos da v82); o número vale pela DU-E
+    for (const f of (p.docs._files.due || [])) {
+      if (!idArq(f)) continue;
+      try {
+        const { texto } = await textoDoArquivo(f); if (!texto) continue;
+        const it = { tipo: 'due', texto, info: {}, nome: f.name }; enriquecerInfo(it); const i = it.info;
+        if (!i.dueNumero) continue;
+        p.docs._dues = p.docs._dues || {};
+        const ant = p.docs._dues[i.dueNumero] || {};
+        const nv = Object.assign({}, ant, { vmle: Number(i.vmle) || ant.vmle || 0, vmcv: Number(i.vmcv) || ant.vmcv || 0, reais: Number(i.dueReais) || ant.reais || 0, peso: Number(i.pesoLiq) || ant.peso || 0, ruc: i.ruc || ant.ruc || '', nfs: (i.nfsSaida && i.nfsSaida.length) ? i.nfsSaida : (ant.nfs || []), porto: i.dueporto || ant.porto || '', situacao: i.dueSituacao || ant.situacao || '', exportada: !!(i.dueExportada || ant.exportada), bloqueio: i.dueExportada ? '' : (i.dueBloqueio || '') });
+        if (JSON.stringify(nv) !== JSON.stringify(ant)) { p.docs._dues[i.dueNumero] = nv; mud++; }
+      } catch (e) { console.warn('reler DU-E', p.id, e); }
+    }
+    { const ks = Object.keys(p.docs._dues || {}).filter(k => /BR\d{9}/i.test(k));
+      if (ks.length && !ks.includes(p.dueNumero)) { logAction('editar', 'PROCESSOS', p.id, 'DU-E: ' + (p.dueNumero || '(vazio)') + ' → ' + ks[0] + ' (vale o número da DU-E anexada)'); p.dueNumero = ks[0]; mud++; } }
     // NCM das NFs de entrada (a NF de maior valor manda; se as NFs tiverem NCMs diferentes, guarda todos)
     if (forcar || !p.docs._ncmNF) {
       const porNum = {};
@@ -774,6 +799,9 @@ async function relerDocsProcessos(forcar) {
       }
     }
     if (!p.docs._relido78) { p.docs._relido78 = true; mud++; }
+    if (!p.docs._relido82) { p.docs._relido82 = true; mud++; }
+    if (!p.docs._relido83) { p.docs._relido83 = true; mud++; }
+    if (!p.docs._relido84) { p.docs._relido84 = true; mud++; }
   }
   return { mud, n: ps.length };
 }
@@ -782,9 +810,9 @@ let _relendo = false;
 (function agendarReleitura() {
   const t = setInterval(async () => {
     if (_relendo || !window._sheetsToken || !(S.processos || []).length || typeof aplicarBL !== 'function') return;
-    if (!(S.processos || []).some(p => p.status !== 'Cancelado' && !(p.docs && p.docs._relido78))) { clearInterval(t); return; }
+    if (!(S.processos || []).some(p => p.status !== 'Cancelado' && !(p.docs && p.docs._relido84))) { clearInterval(t); return; }
     _relendo = true; clearInterval(t);
-    try { const r = await relerDocsProcessos(false); if (r.mud) { autoUpdateStatus(); await saveToSheets(); render(); } } catch (e) { console.warn('releitura', e); }
+    try { const r = await relerDocsProcessos(false); if (typeof aplicarValorExportadoDecidido === 'function') r.mud += aplicarValorExportadoDecidido(); if (typeof aplicarUsosSaldoDecididos === 'function') r.mud += aplicarUsosSaldoDecididos(); if (r.mud) { autoUpdateStatus(); await saveToSheets(); render(); } } catch (e) { console.warn('releitura', e); }
     _relendo = false;
   }, 25000);
 })();
@@ -798,4 +826,200 @@ if (typeof conferirDocumentos === 'function' && !conferirDocumentos._v78) {
     return base.apply(this, arguments);
   };
   conferirDocumentos._v78 = true;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 11. DU-E CONFIRMA O EMBARQUE E VALOR EXPORTADO (v83 · 13/10/2026)
+// · DU-E com "embarque bloqueado" (e carga ainda não exportada): o processo fica "No Porto", mesmo com BL anexado,
+//   até chegar a DU-E averbada / carga exportada (ou um BL novo depois do desbloqueio)
+// · valor exportado por processo (padrão = invoice; pode ser o da DU-E): o que o cliente pagou a mais é crédito dele
+//   (antecipação de venda futura) — não entra no resultado do processo
+// ═══════════════════════════════════════════════════════════════
+function dueBloqueio(p) {
+  const ds = Object.entries((p && p.docs && p.docs._dues) || {}).filter(([k, x]) => x && /BR\d{9}/i.test(k));
+  if (!ds.length || ds.some(([, x]) => x.exportada)) return null;
+  const b = ds.find(([, x]) => x.bloqueio); return b ? { due: b[0], desde: b[1].bloqueio === 'sim' ? '' : b[1].bloqueio } : null;
+}
+// soma do valor da DU-E (VMCV, ou VMLE) do processo e do seu "S" (venda dividida)
+function valorDasDues(p) {
+  const pS = (S.processos || []).find(q => q.id === p.id + 'S');
+  const todas = Object.assign({}, (pS && pS.docs && pS.docs._dues) || {}, (p.docs && p.docs._dues) || {});
+  return Math.round(Object.entries(todas).filter(([k]) => /BR\d{9}/i.test(k)).reduce((a, [, x]) => a + (Number(x && (x.vmcv || x.vmle)) || 0), 0) * 100) / 100;
+}
+function fatorExportado(p) {
+  const d = (p && p.docs) || {}; if (d._valorExportado == null || d._valorExportado === '') return 1;
+  const inv = Number(p.cambioInvoice) || 0, ex = valorExportado(p);
+  return inv > 0 && ex + 0.01 < inv ? Math.max(0, ex / inv) : 1;
+}
+async function usarValorExportado(id, fonte) {
+  const p = (S.processos || []).find(x => x.id === id); if (!p) return;
+  p.docs = p.docs || {};
+  if (fonte === 'limpar') { delete p.docs._valorExportado; delete p.docs._valorExportadoFonte; }
+  else { const v = fonte === 'due' ? valorDasDues(p) : Number(p.cambioInvoice) || 0; p.docs._valorExportado = v; p.docs._valorExportadoFonte = fonte; }
+  logAction('editar', 'PROCESSOS', id, fonte === 'limpar' ? 'Valor exportado: volta a ser o da invoice' : `Valor exportado: USD ${fmt(p.docs._valorExportado)} (${fonte === 'due' ? 'pela DU-E' : 'pela invoice'})`);
+  try { await saveToSheets(); } catch (e) {}
+  render();
+}
+// decisões suas (13/10/2026): o valor exportado do FS260107 é o da DU-E; a diferença fica como antecipação da Xiamen
+const VALOR_EXPORTADO_DECIDIDO = { FS260107: 'due' };
+function aplicarValorExportadoDecidido() {
+  let n = 0;
+  Object.entries(VALOR_EXPORTADO_DECIDIDO).forEach(([id, fonte]) => {
+    const p = (S.processos || []).find(x => x.id === id); if (!p || (p.docs && p.docs._valorExportadoFonte)) return;
+    const v = fonte === 'due' ? valorDasDues(p) : Number(p.cambioInvoice) || 0; if (!(v > 0)) return;
+    p.docs = p.docs || {}; p.docs._valorExportado = v; p.docs._valorExportadoFonte = fonte; n++;
+    logAction('editar', 'PROCESSOS', id, `Valor exportado: USD ${fmt(v)} (pela DU-E) — diferença para a invoice fica como antecipação do cliente`);
+  });
+  return n;
+}
+// status: DU-E bloqueada → "No Porto"
+if (typeof autoUpdateStatus === 'function' && !autoUpdateStatus._v83) {
+  const base = autoUpdateStatus;
+  autoUpdateStatus = function () {
+    const antes = {}; (S.processos || []).forEach(p => { antes[p.id] = p.status; if (p.docs && p.docs._bloqueioDue && !dueBloqueio(p)) delete p.docs._bloqueioDue; });
+    const r = base.apply(this, arguments);   // (a base marca "Embarcado" pela data de saída do BL; a DU-E bloqueada manda de volta para o porto)
+    (S.processos || []).forEach(p => {
+      const b = dueBloqueio(p);
+      if (b && !['No Destino', 'Concluído', 'Cancelado'].includes(p.status)) {
+        if (antes[p.id] !== 'No Porto') logAction('editar', 'PROCESSOS', p.id, `Embarque bloqueado na DU-E ${b.due}${b.desde ? ' desde ' + b.desde : ''}: status ${antes[p.id] || '—'} → No Porto`);
+        p.status = 'No Porto'; if (JSON.stringify(p.docs._bloqueioDue) !== JSON.stringify(b)) p.docs._bloqueioDue = b;
+      }
+    });
+    return r;
+  };
+  autoUpdateStatus._v83 = true;
+}
+// ═══════════════════════════════════════════════════════════════
+// 12. FECHAMENTO PELA NOTA DE SAÍDA E SALDO DO CLIENTE EM REAIS (v84 · 13/10/2026)
+// Regras dele: a DU-E tem que bater com a nota de saída; a nota de saída é o fechamento do processo; o que entrou
+// (câmbio) além da nota é saldo (crédito) do cliente. O saldo é usado em outros processos ("Usar saldo do cliente").
+// · recebeu mais do que exportou (em dólar): receita = nota de saída; crédito = câmbio R$ − nota R$
+// · usou saldo: o valor registrado sai do crédito e entra na receita do processo que usou
+//   (sem registro e com nota maior que o câmbio: usa automaticamente nota R$ − câmbio R$)
+// · câmbio ≈ nota em dólar: nada muda (a diferença de taxa fica no resultado do processo, como antes)
+// ═══════════════════════════════════════════════════════════════
+function nfSaidaReais(p) {
+  const m = {}; (((p.docs || {})._files || {}).nfeSaida || []).forEach(f => { const k = String(f.numero || f.chave || f.id); m[k] = Math.max(m[k] || 0, Number(f.valor) || 0); });
+  const v = Object.values(m).reduce((a, x) => a + x, 0); return v > 0 ? Math.round(v * 100) / 100 : 0;
+}
+function dueReais(p) {
+  const pS = (S.processos || []).find(q => q.id === p.id + 'S');
+  const todas = Object.assign({}, (pS && pS.docs && pS.docs._dues) || {}, (p.docs && p.docs._dues) || {});
+  return Math.round(Object.entries(todas).filter(([k]) => /BR\d{9}/i.test(k)).reduce((a, [, x]) => a + (Number(x && x.reais) || 0), 0) * 100) / 100;
+}
+// dólar exportado: o da DU-E, quando a DU-E é coerente (taxa R$/USD plausível) e não foi marcada como errada; senão a invoice
+function usdExportado(p) {
+  const d = p.docs || {}, inv = Number(p.cambioInvoice) || 0;
+  if (d._valorExportadoFonte) return valorExportado(p);
+  const vd = valorDasDues(p), rd = dueReais(p);
+  if (vd > 0 && (!rd || (rd / vd > 3 && rd / vd < 8))) return vd;
+  return inv;
+}
+const embarcadoP = p => EMBARCADOS.includes(p.status) || faseProcesso(p) >= 3;
+// situação do processo perante o saldo do cliente (valores em R$)
+function saldoDoProcesso(p) {
+  const o = { gerou: 0, usou: 0, usouAuto: false, adiantado: 0, ajusteReceita: 0, usos: [] };
+  if (!p || p.status === 'Cancelado' || ehProcessoS(p)) return o;
+  const d = p.docs || {}, usdRec = Number(p.cambioRecebido) || 0, recR = Number(p.cambioReais) || 0, nfR = nfSaidaReais(p);
+  o.usos = (d._usosSaldo || []).filter(u => Number(u.valor) > 0);
+  const usosR = o.usos.reduce((a, u) => a + Number(u.valor), 0);
+  if (!embarcadoP(p)) { if (recR > 0) o.adiantado = recR; return o; }
+  const usdExp = usdExportado(p), tol = tolIntermediario(p);
+  if (usdRec - usdExp > tol && nfR > 0 && recR > nfR) { o.gerou = Math.round((recR - nfR) * 100) / 100; o.ajusteReceita -= o.gerou; }
+  else if (usdExp - usdRec > tol && !usosR && nfR > recR && recR > 0) { o.usou = Math.round((nfR - recR) * 100) / 100; o.usouAuto = true; o.ajusteReceita += o.usou; }
+  if (usosR) { o.usou += usosR; o.ajusteReceita += usosR; }
+  return o;
+}
+// extrato do saldo por cliente (quem paga)
+function saldoClientes() {
+  const g = {};
+  (S.processos || []).forEach(p => {
+    const s = saldoDoProcesso(p); const n = nomeCliente(p);
+    const c = g[n] = g[n] || { nome: n, linhas: [], disponivel: 0, adiantado: 0, usdGerou: 0, rGerou: 0 };
+    if (s.gerou) { c.linhas.push({ id: p.id, valor: s.gerou, texto: `gerou crédito (pagou USD ${fmt(Number(p.cambioRecebido) || 0)}, exportou USD ${fmt(usdExportado(p))})` }); c.disponivel += s.gerou; const tx = Number(p.cambioTaxa) || 0; if (tx) { c.usdGerou += s.gerou / tx; c.rGerou += s.gerou; } }
+    s.usos.forEach(u => { c.linhas.push({ id: p.id, valor: -Number(u.valor), texto: 'usou' + (u.desc ? ': ' + u.desc : '') + (u.origem ? ` (saldo do ${u.origem})` : '') }); c.disponivel -= Number(u.valor); });
+    if (s.usouAuto) { c.linhas.push({ id: p.id, valor: -s.usou, texto: 'usou (nota de saída maior que o câmbio — calculado)' }); c.disponivel -= s.usou; }
+    if (s.adiantado) c.adiantado += s.adiantado, c.linhas.push({ id: p.id, valor: s.adiantado, texto: 'pago e ainda não embarcado', adiantado: true });
+  });
+  return Object.values(g).filter(c => c.linhas.length).map(c => Object.assign(c, { disponivel: Math.round(c.disponivel * 100) / 100, usdEq: c.rGerou ? c.disponivel / (c.rGerou / c.usdGerou) : null }));
+}
+async function usarSaldoClienteUI(id) {
+  const p = (S.processos || []).find(x => x.id === id); if (!p) return;
+  const cli = saldoClientes().find(c => c.nome === nomeCliente(p));
+  const v = await uiPrompt(`Quanto do saldo de ${nomeCliente(p)} o ${id} usou (R$)?${cli ? ` Disponível: R$ ${fmt(cli.disponivel)}.` : ''}`, '', 'Usar saldo do cliente'); if (v == null) return;
+  const valor = numEntrada(v); if (!(valor > 0)) return;
+  const desc = await uiPrompt('Para que foi? (ex.: produto Thomazini)', '', 'Usar saldo do cliente'); if (desc == null) return;
+  const origens = (S.processos || []).filter(q => nomeCliente(q) === nomeCliente(p) && saldoDoProcesso(q).gerou > 0).map(q => q.id);
+  p.docs = p.docs || {}; p.docs._usosSaldo = (p.docs._usosSaldo || []).concat([{ id: genId(), valor, desc: String(desc).trim(), origem: origens.length === 1 ? origens[0] : '', data: new Date().toISOString().slice(0, 10) }]);
+  logAction('editar', 'PROCESSOS', id, `Usou R$ ${fmt(valor)} do saldo de ${nomeCliente(p)}${desc ? ' — ' + desc : ''}`);
+  try { await saveToSheets(); } catch (e) {} render();
+}
+async function removerUsoSaldo(id, uid) {
+  const p = (S.processos || []).find(x => x.id === id); if (!p || !p.docs) return;
+  if (!await uiConfirm('Tirar este uso do saldo?', 'Saldo do cliente', 'Tirar', 'Cancelar')) return;
+  p.docs._usosSaldo = (p.docs._usosSaldo || []).filter(u => u.id !== uid); if (!p.docs._usosSaldo.length) delete p.docs._usosSaldo;
+  logAction('editar', 'PROCESSOS', id, 'Uso do saldo do cliente removido'); try { await saveToSheets(); } catch (e) {} render();
+}
+// decisões dele (13/10/2026): FS260112 e FS260114 usaram o saldo do FS260107 para pagar o produto da Thomazini
+// (o valor é o da nota da Thomazini anexada a cada processo)
+const USOS_SALDO_DECIDIDOS = [['FS260112', /THOMAZINI/i, 'FS260107', 'produto Thomazini'], ['FS260114', /THOMAZINI/i, 'FS260107', 'produto Thomazini']];
+function aplicarUsosSaldoDecididos() {
+  let n = 0;
+  USOS_SALDO_DECIDIDOS.forEach(([id, re, origem, desc]) => {
+    const p = (S.processos || []).find(x => x.id === id); if (!p || !p.docs || p.docs._usosDecididos) return;
+    const fisc = (((p.docs._custoDocs || {}).custoProduto || {}).fiscais || []).filter(x => re.test(String(x.de || x.nome || '')));
+    const nfs = fisc.length ? fisc : ((p.docs._files || {}).nfe || []).filter(f => re.test(String(f.emitente || f.name || '')) && /xml/i.test(f.formato || f.name || ''));
+    const valor = Math.round(nfs.reduce((a, x) => a + (Number(x.valor) || 0), 0) * 100) / 100; if (!(valor > 0)) return;
+    p.docs._usosSaldo = (p.docs._usosSaldo || []).concat([{ id: genId(), valor, desc, origem, data: '2026-10-13', decidido: true }]);
+    p.docs._usosDecididos = true; n++;
+    logAction('editar', 'PROCESSOS', id, `Usou R$ ${fmt(valor)} do saldo do ${origem} (${desc}) — decisão de 13/10/2026`);
+  });
+  return n;
+}
+// FS260106 também gerou crédito (Lianyungang): a DU-E/nota valem (decisão de 13/10/2026)
+VALOR_EXPORTADO_DECIDIDO.FS260106 = 'due';
+// resultado: a receita do processo segue o saldo (fecha pela nota quando gera crédito; soma o saldo usado)
+if (typeof procTotals === 'function' && !procTotals._v84) {
+  const base = procTotals;
+  procTotals = function (p) { const t = base.apply(this, arguments); const aj = saldoDoProcesso(p).ajusteReceita; return aj ? Object.assign({}, t, { receita: t.receita + aj, lucro: t.lucro + aj, ajusteSaldo: aj }) : t; };
+  procTotals._v84 = true;
+}
+if (typeof resultadoProcesso === 'function' && !resultadoProcesso._v84) {
+  const base = resultadoProcesso;
+  resultadoProcesso = function (p) { const r = base.apply(this, arguments); const s = saldoDoProcesso(p); return s.ajusteReceita ? Object.assign({}, r, { resultado: r.resultado + s.ajusteReceita, creditoGerado: s.gerou, saldoUsado: s.usou }) : r; };
+  resultadoProcesso._v84 = true;
+}
+// conferência: DU-E × nota de saída (R$), dólar da DU-E incoerente, embarque bloqueado, DU-E a retificar
+if (typeof divergenciasDocs === 'function' && !divergenciasDocs._v84) {
+  const base = divergenciasDocs;
+  divergenciasDocs = function (p) {
+    let out = base.apply(this, arguments);
+    if (!p || p.status === 'Cancelado') return out;
+    const b = dueBloqueio(p);
+    if (b) out.unshift(`Embarque bloqueado na DU-E ${b.due}${b.desde ? ' desde ' + b.desde : ''} — carga no porto, aguardando desbloqueio`);
+    if (ehProcessoS(p)) return out;
+    out = out.filter(t => !/^VMLE da DU-E/.test(t));
+    const d = p.docs || {}, vd = valorDasDues(p), rd = dueReais(p), nf = nfSaidaReais(p), inv = Number(p.cambioInvoice) || 0;
+    if (rd && nf && Math.abs(rd - nf) > Math.max(1, nf * 0.005)) out.push(`DU-E com R$ ${fmt(rd)} e nota de saída com R$ ${fmt(nf)} — a DU-E tem que bater com a nota`);
+    if (vd && rd && !(rd / vd > 3 && rd / vd < 8)) out.push(`DU-E com valor em dólar incoerente (USD ${fmt(vd)} para R$ ${fmt(rd)}) — DU-E a retificar`);
+    else if (d._valorExportadoFonte === 'invoice' && vd && inv && Math.abs(vd - inv) > 1) out.push(`DU-E com USD ${fmt(vd)} e invoice com USD ${fmt(inv)} — DU-E a retificar`);
+    return out;
+  };
+  divergenciasDocs._v84 = true;
+}
+// tela do processo: fechamento e saldo do cliente (na Receita)
+if (typeof renderProcesso2 === 'function' && !renderProcesso2._v84) {
+  const base = renderProcesso2;
+  renderProcesso2 = function () {
+    const h = base.apply(this, arguments); const p = S.sub;
+    if (!p || !p.id || ehProcessoS(p)) return h;
+    const s = saldoDoProcesso(p), nf = nfSaidaReais(p), m = v => 'R$ ' + fmt(v), id = escHtml(p.id);
+    const partes = [];
+    if (s.gerou) partes.push(`Fecha pela nota de saída (${m(nf)}). Câmbio ${m(Number(p.cambioReais) || 0)}: <span style="color:var(--green)">${m(s.gerou)} viraram crédito de ${escHtml(nomeCliente(p))}</span>`);
+    s.usos.forEach(u => partes.push(`Usou ${m(u.valor)} do saldo de ${escHtml(nomeCliente(p))}${u.desc ? ' — ' + escHtml(u.desc) : ''}${u.origem ? ' (do ' + escHtml(u.origem) + ')' : ''} <button class="btn btn-secondary btn-xs" onclick="removerUsoSaldo('${id}','${escHtml(u.id)}')">tirar</button>`));
+    if (s.usouAuto) partes.push(`Nota de saída (${m(nf)}) maior que o câmbio: ${m(s.usou)} saem do saldo de ${escHtml(nomeCliente(p))} (calculado)`);
+    const bloco = `<div style="font-size:12.5px;background:var(--bg3);border-radius:8px;padding:8px 10px;margin:6px 0;display:flex;flex-direction:column;gap:4px">${partes.map(x => `<div>${x}</div>`).join('')}<div><button class="btn btn-secondary btn-xs" onclick="usarSaldoClienteUI('${id}')">Usar saldo do cliente</button></div></div>`;
+    return h.replace(/(font-size:17px">Receita<\/h2>[\s\S]*?<\/div>)/, mm => mm + bloco);
+  };
+  renderProcesso2._v84 = true;
 }

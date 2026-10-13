@@ -25,6 +25,7 @@ function faseProcesso(p) {
   const passou = s => { const d = brParaDate(s); return d && d <= hoje; };
   const eta = p.docs && p.docs._viagem && p.docs._viagem.eta;
   if (p.status === 'No Destino' || p.status === 'Concluído' || (passou(p.saida) && eta && passou(eta))) return 4;
+  if (typeof dueBloqueio === 'function' && dueBloqueio(p)) return 2;   // a DU-E diz embarque bloqueado: carga no porto, mesmo com BL (13/10/2026)
   if (passou(p.saida) || temDoc(p, 'bl')) return 3;   // BL anexado = embarcado (13/10/2026)
   if (passou(p.logPorto) || temDoc(p, 'due')) return 2;
   if (passou(p.logChegada)) return 1;
@@ -155,7 +156,8 @@ function renderInicio() {
 
   const cargas = ativos.map(p => ({ p, f: faseProcesso(p), fech: processoFechado(p) })).filter(x => !(x.f >= 4 && x.fech)).sort((a, b) => b.f - a.f || String(b.p.id).localeCompare(a.p.id));
   const resultados = ativos.map(p => ({ p, c: custosProcesso(p), prov: !processoFechado(p) })).filter(x => x.c.receita || x.c.custo).sort((a, b) => String(b.p.id).localeCompare(a.p.id));
-  const clientes = typeof contaClientes === 'function' ? contaClientes().filter(c => c.recebidoUsd || c.embarcadoUsd) : [];
+  // saldo do cliente em reais: crédito disponível (gerado − usado) e o que foi pago e ainda não embarcou (13/10/2026)
+  const clientes = typeof saldoClientes === 'function' ? saldoClientes() : [];
 
   const blocoPagar = card(`
     ${titulo2('A pagar', `<span style="font-family:'JetBrains Mono',monospace;font-size:18px;color:var(--red)">${brl(totalPagar)}</span>`)}
@@ -171,8 +173,7 @@ function renderInicio() {
     ${typeof reembolsosAbertos === 'function' && reembolsosAbertos().length ? `<div style="display:flex;justify-content:space-between;gap:10px;padding:9px 12px;border-radius:10px;background:var(--bg3)"><div><div style="font-size:14px;font-weight:600">Reembolso ao sócio</div><div style="font-size:12.5px;color:var(--muted2)">${reembolsosAbertos().length} despesa(s) pagas no cartão / conta pessoal</div></div><div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;white-space:nowrap">${m2(reembolsosAbertos().reduce((a, l) => a + (Number(l.valor) || 0), 0))}</div></div>` : ''}
     ${typeof blocoContaAssessoria === 'function' ? blocoContaAssessoria() : ''}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
-      <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--green)">A receber · embarcados</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--green)">${usd(totEmb)}</div><div style="font-size:11.5px;color:var(--muted2)">${recEmb.length ? recEmb.map(x => x.p.id).slice(0, 4).join(' · ') + (px ? ' · ≈ ' + brl(totEmb * px) : '') : 'nada em aberto'}</div></div>
-      <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--accent)">Antecipados a receber</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--accent)">${usd(totAnt)}</div><div style="font-size:11.5px;color:var(--muted2)">${recAnt.length ? recAnt.map(x => x.p.id).slice(0, 4).join(' · ') + ' · ainda não embarcou' : 'nenhum'}</div></div>
+      <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--green)">A receber (câmbio)</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--green)">${usd(totEmb + totAnt)}</div><div style="font-size:11.5px;color:var(--muted2);line-height:1.45">${(totEmb + totAnt) > 0 ? `já embarcou: ${usd(totEmb)}${recEmb.length ? ' (' + recEmb.map(x => x.p.id).slice(0, 3).join(', ') + ')' : ''}<br>ainda não embarcou: ${usd(totAnt)}${recAnt.length ? ' (' + recAnt.map(x => x.p.id).slice(0, 3).join(', ') + ')' : ''}${px ? '<br>≈ ' + brl((totEmb + totAnt) * px) + ' no dólar de hoje' : ''}` : 'nada em aberto'}</div></div>
       <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--muted2)">Pago neste mês</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px">${brl(pagoMes)}</div><div style="font-size:11.5px;color:var(--muted2)">custos e despesas</div></div>
       <div style="background:var(--bg3);border-radius:10px;padding:10px 12px"><div style="font-size:12px;color:var(--muted2)">Dólar (PTAX venda)</div><div style="font-family:'JetBrains Mono',monospace;font-size:15px">${px ? 'R$ ' + px.toLocaleString('pt-BR', { minimumFractionDigits: 4 }) : (S._ptax && S._ptax.erro ? 'indisponível' : '…')}</div><div style="font-size:11.5px;color:var(--muted2)">${px ? 'Banco Central · ' + S._ptax.data : 'Banco Central'}</div></div>
     </div>`);
@@ -221,7 +222,7 @@ function renderInicio() {
     </div>` : ''}
     ${clientes.length ? `<div style="border-top:1px solid var(--border);padding-top:12px;display:flex;flex-direction:column;gap:6px">
       <div style="font-size:12px;color:var(--muted2)">Saldo dos clientes</div>
-      ${clientes.map(c => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13.5px;flex-wrap:wrap"><span>${escHtml(c.nome)}</span><span style="font-family:'JetBrains Mono',monospace;color:${c.saldoUsd >= 0 ? 'var(--green)' : 'var(--red)'}">${usd(Math.abs(c.saldoUsd))} ${c.saldoUsd >= 0 ? 'a favor' : 'a receber'}</span></div>`).join('')}
+      ${clientes.map(c => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13.5px;flex-wrap:wrap"><span>${escHtml(c.nome)}${c.adiantado ? `<span style="color:var(--muted2);font-size:12px"> · R$ ${m2(c.adiantado)} pago e não embarcado</span>` : ''}</span><span style="font-family:'JetBrains Mono',monospace;color:${c.disponivel > 0.009 ? 'var(--green)' : c.disponivel < -0.009 ? 'var(--red)' : 'var(--muted2)'}">${Math.abs(c.disponivel) < 0.01 ? 'sem saldo' : 'R$ ' + m2(Math.abs(c.disponivel)) + (c.disponivel > 0 ? ' de crédito' : ' usado a mais')}</span></div>`).join('')}
     </div>` : ''}`);
 
   return `
