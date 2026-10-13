@@ -1873,7 +1873,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '80';
+const VERSAO_TESTE = '81';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -2288,13 +2288,17 @@ function blocoContaAssessoria() {
   const c = contaAssessoria(); if (!c.linhas.length && !c.devidos.length) return '';
   const m = v => 'R$ ' + (Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const dif = c.diferenca, aberto = !!S._contaAss;
+  // linha de baixo: de quais processos são os valores em aberto; aviso só quando o extrato e os processos pagos não batem (13/10/2026)
+  const nAb = c.abertos.length, algumEst = c.abertos.some(x => x.previsto);
+  const linhaAss = (nAb ? `${nAb} processo${nAb > 1 ? 's' : ''} em aberto: ${c.abertos.map(x => escHtml(x.id.replace(/^FS260/, ''))).join(' · ')}${algumEst ? ' <span style="opacity:.8">(valores estimados até chegar a nota ou o comprovante)</span>' : ''}` : 'nada em aberto')
+    + (Math.abs(dif) < 0.01 ? '' : ' · ' + (dif < 0 ? `<span style="color:var(--yellow)">⚠ faltam ${m(-dif)} no extrato</span>` : `<span style="color:var(--accent)">crédito de ${m(dif)} com o Ademir</span>`));
   const txtDif = Math.abs(dif) < 0.01 ? '<span style="color:var(--green)">conta fechada</span>' : dif < 0 ? `<span style="color:var(--yellow)">faltam ${m(-dif)} no extrato</span>` : `<span style="color:var(--accent)">crédito de ${m(dif)} (pago a mais)</span>`;
   return `<div style="padding:9px 12px;border-radius:10px;background:var(--bg3)">
-    <div style="display:flex;justify-content:space-between;gap:10px;cursor:pointer" onclick="S._contaAss=!S._contaAss;render()"><div><div style="font-size:14px;font-weight:600">Assessoria Ademir / FFA ${aberto ? '▾' : '▸'}</div><div style="font-size:12.5px;color:var(--muted2)">pago ${m(c.pago)} · devido pelos processos pagos ${m(c.devido)} · ${txtDif}</div></div><div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;white-space:nowrap">${m(c.emAberto)} a pagar</div></div>
+    <div style="display:flex;justify-content:space-between;gap:10px;cursor:pointer" onclick="S._contaAss=!S._contaAss;render()"><div><div style="font-size:14px;font-weight:600">Assessoria Ademir / FFA ${aberto ? '▾' : '▸'}</div><div style="font-size:12.5px;color:var(--muted2)">${linhaAss}</div></div><div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;white-space:nowrap">${m(c.emAberto)} a pagar</div></div>
     ${aberto ? `<div style="font-size:12.5px;padding-top:8px;display:grid;gap:4px">
       <div style="font-weight:600">Saídas no extrato para Ademir/FFA</div>${c.linhas.map(l => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${isoToBr(l.data)} · ${escHtml((l.favorecido || l.memo).slice(0, 40))}${ASSESSORIA_VIA_SOCIO.includes(l.chave) ? ' (via Klismann)' : ''}</span><span style="font-family:'JetBrains Mono',monospace">${m(Math.abs(l.valor))}</span></div>`).join('')}
       <div style="font-weight:600;padding-top:6px">Processos já pagos (${c.devidos.length})</div><div style="color:var(--muted2)">${c.devidos.map(x => escHtml(x.id.replace(/^FS260/, '')) + ' ' + m(x.valor)).join(' · ')}</div>
-      <div style="font-weight:600;padding-top:6px">Em aberto (${c.abertos.length})</div><div style="color:var(--muted2)">${c.abertos.map(x => escHtml(x.id.replace(/^FS260/, '')) + ' ' + m(x.valor) + (x.previsto ? ' (previsto)' : '')).join(' · ') || '—'}</div>
+      <div style="font-weight:600;padding-top:6px">Em aberto (${c.abertos.length})</div><div style="color:var(--muted2)">${c.abertos.map(x => escHtml(x.id.replace(/^FS260/, '')) + ' ' + m(x.valor) + (x.previsto ? ' (estimado)' : '')).join(' · ') || '—'}</div>
       ${dif < -0.009 ? `<div style="color:var(--yellow);padding-top:6px">A diferença de ${m(-dif)} pode ter sido paga por outra conta, em dinheiro, ou ainda não foi paga.</div>` : ''}
     </div>` : ''}
   </div>`;
