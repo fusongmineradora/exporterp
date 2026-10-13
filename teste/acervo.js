@@ -386,6 +386,7 @@ function enriquecerInfo(item) {
     info.armador = /\bMSC\b/.test(info.navio) ? 'MSC' : /MAERSK/.test(info.navio) ? 'MAERSK' : /COSCO/.test(info.navio) ? 'COSCO' : /CMA/.test(info.navio) ? 'CMA CGM' : /HAPAG/.test(info.navio) ? 'Hapag-Lloyd' : /EVERGREEN/.test(info.navio) ? 'Evergreen' : '';
   }
   if (item.tipo === 'bl') {
+    info.ruc = info.ruc || ((U.replace(/\s+/g, ' ').match(/\b(\dBR\d{20,40})\b/) || [])[1]) || '';   // RUC da exportação ("Export references") = o da DU-E (13/10/2026)
     // BL / waybill: Maersk ("Booking No. 2761xxxxx", "Shipped on Board Date AAAA-MM-DD") e MSC
     // ("BOOKING REF. EBKGxxxxxxxx", "SHIPPED ON BOARD DATE dd-Mon-aaaa", navio "MSC NOME - VIAGEM").
     // O BL é o documento oficial da companhia marítima: o que ele diz vale sobre o processo (v78).
@@ -409,7 +410,7 @@ function enriquecerInfo(item) {
       if (ord[0]) emb3 = ord[0][0];
     }
     info.embarque = emb ? emb.split('-').reverse().join('/') : emb2 ? `${emb2[1]}/${emb2[2]}/${emb2[3]}` : emb3;
-    info.dueNumero = info.dueNumero || cx(/DU-?E:?(\d{2}BR\d{9}-?\d)/i) || cx(/(\d{2}BR\d{9}-\d)/);
+    info.dueNumero = normDue(info.dueNumero || cx(/DU-?E:?(\d{2}BR\d{9}-?\d)/i) || cx(/(\d{2}BR\d{9}-\d)/));
     info.refProcesso = cx(/INVOICEN[O°º.]*:?(FS\d{6}S?)/i) || ((T.toUpperCase().match(/\bFS\s?\d{6}S?\b/) || [''])[0].replace(/\s/g, ''));
     const lacres = new Set((U.match(/\b[A-Z]{2}\s?-\s?[A-Z]{2}\d{5,9}\b/g) || []).map(x => x.replace(/\s/g, '')));
     info.containers = [...new Set((C.match(/[A-Z]{3}U\d{7}/g) || []))].filter(c => !lacres.has(c));
@@ -435,11 +436,18 @@ function enriquecerInfo(item) {
     info.refProcesso = ((T.toUpperCase().match(/\bFS\s?\d{6}S?\b/) || [''])[0].replace(/\s/g, ''));
   }
   if (item.tipo === 'due') {
-    info.dueNumero = info.dueNumero || mx(/\b(\d{2}BR\d{9}-?\d)\b/i);
+    info.dueNumero = normDue(info.dueNumero || mx(/\b(\d{2}BR\d{9}-?\d)\b/i));
     info.dueChave = info.dueChave || mx(/Chave de acesso:?\s*([0-9A-Z]{14})\b/i);
     // para conferir com a invoice: VMLE (na moeda da venda) e peso líquido
     if (!info.vmle) info.vmle = numBR(mx(/VMLE\b[^0-9]{0,80}?([\d.]+,\d{2})/i)) || 0;
     if (!info.pesoLiq) info.pesoLiq = numBR(mx(/Peso\s+l[ií]quido\s*\(?KG\)?\s*([\d.]+,\d+)/i)) || 0;
+    // cruzamentos (13/10/2026): RUC (= o do BL), notas de saída da Fu Song citadas, chaves de notas (extrato completo/XML) e porto de embarque
+    info.ruc = info.ruc || ((U.replace(/\s+/g, ' ').match(/\bRUC\s*:?\s*(\dBR\d{20,40})\b/) || [])[1]) || '';
+    info.nfsSaida = [...new Set([...T.matchAll(/NF-?e\s+(\d{1,3})\s*\/\s*(\d{1,9})\b/gi)].map(m => String(Number(m[2]))))];
+    info.refs = [...new Set([...(info.refs || []), ...(typeof chavesDoTexto === 'function' ? chavesDoTexto(T) : [])])];
+    { const le = semAcento(T).toUpperCase().replace(/\s+/g, ' '); const trecho = (le.match(/LOCAL DE EMBARQUE.{0,200}/) || [le])[0];
+      const porto = ['SALVADOR', 'SANTOS', 'PARANAGUA', 'ITAGUAI', 'PECEM', 'SUAPE', 'RIO GRANDE', 'VITORIA', 'ITAJAI', 'NAVEGANTES', 'SAO FRANCISCO DO SUL', 'RIO DE JANEIRO'].find(x => trecho.includes(x));
+      if (porto) info.dueporto = porto; }
   }
   {
     const ct = U.match(/\b(FS\d{6})S?\s+(\d{9,10})\s+([A-Z]{4}\d{7})\b/);   // "FS260097 271229537 SEKU1633624"
@@ -528,13 +536,16 @@ function aplicarCambioNoProcesso(p, c, url) {
 // BL anexado = embarcado. O BL é o documento oficial da companhia marítima: booking, data de embarque,
 // portos, containers, armador e DU-E do BL substituem os do processo (decidido em 13/10/2026). Campo vazio no BL não apaga nada.
 const PORTO_STATUS_FIM = ['No Destino', 'Concluído', 'Cancelado'];
+// número da DU-E sempre no mesmo formato: 26BR000000000-0 (o arquivo pode vir sem o traço)
+function normDue(v) { const d = String(v || '').replace(/\W/g, '').toUpperCase(); return /^\d{2}BR\d{10}$/.test(d) ? d.slice(0, 13) + '-' + d.slice(13) : String(v || ''); }
 function aplicarBL(p, info, url, mud) {
   p.docs = p.docs || {};
   const antes = {};
   const set = (k, v) => { if (!v) return; if (String(p[k] || '') !== String(v)) { antes[k] = p[k] || ''; p[k] = v; mud.push(k); } };
   set('booking', info.booking);
   set('saida', info.embarque);
-  set('dueNumero', info.dueNumero);
+  // o número da DU-E vale pela própria DU-E: o do BL só entra se o processo ainda não tem DU-E anexada (13/10/2026)
+  if (!Object.keys(p.docs._dues || {}).some(k => /BR\d{9}/i.test(k))) set('dueNumero', info.dueNumero);
   set('pol', info.pol);
   set('pod', info.pod);
   set('companhia', info.armador);
@@ -545,7 +556,7 @@ function aplicarBL(p, info, url, mud) {
   }
   if (!PORTO_STATUS_FIM.includes(p.status) && p.status !== 'Embarcado') { antes.status = p.status; p.status = 'Embarcado'; mud.push('status'); }
   const velho = p.docs._bl || {};
-  const novo = { booking: info.booking, embarque: info.embarque, navio: info.navio, viagem: info.viagem, lacre: info.lacre, containers: conts, due: info.dueNumero, pol: info.pol, pod: info.pod, numero: info.blNumero, url: url || velho.url || '' };
+  const novo = { booking: info.booking, embarque: info.embarque, navio: info.navio, viagem: info.viagem, lacre: info.lacre, containers: conts, due: info.dueNumero, pol: info.pol, pod: info.pod, numero: info.blNumero, ruc: info.ruc, url: url || velho.url || '' };
   Object.keys(novo).forEach(k => { const v = novo[k]; if (v == null || v === '' || (Array.isArray(v) && !v.length)) novo[k] = velho[k]; });   // campo vazio não apaga o que já estava
   p.docs._bl = novo;
   if (info.navio) p.docs._viagem = Object.assign({}, p.docs._viagem, { navio: info.navio, atd: info.embarque || (p.docs._viagem || {}).atd });
@@ -586,10 +597,12 @@ function aplicarDocNoProcesso(item, p, upd) {
   }
   if (item.tipo === 'nfe' && info.transpNome && !p.logTransportadora) { p.logTransportadora = titulo(info.transpNome); mud.push('logTransportadora'); }
   if (item.tipo === 'due') {
-    if (info.dueNumero && !p.dueNumero) { p.dueNumero = info.dueNumero; mud.push('dueNumero'); }
-    if (info.dueChave && !p.dueChave) { p.dueChave = info.dueChave; mud.push('dueChave'); }
-    // cada DU-E do processo (há processos com mais de uma carga): VMLE e peso para conferir com a invoice
-    if (info.vmle || info.pesoLiq) { p.docs._dues = p.docs._dues || {}; p.docs._dues[info.dueNumero || url || 'due'] = { vmle: Number(info.vmle) || 0, peso: Number(info.pesoLiq) || 0 }; }
+    // o número da DU-E vale pela DU-E: troca o que veio do BL, mas não o de outra DU-E já anexada (processo com duas cargas)
+    const doDoc = Object.keys(p.docs._dues || {}).filter(k => /BR\d{9}/i.test(k));
+    if (info.dueNumero && (!p.dueNumero || !doDoc.includes(p.dueNumero))) { if (p.dueNumero !== info.dueNumero) { p.dueNumero = info.dueNumero; mud.push('dueNumero'); } if (info.dueChave && p.dueChave !== info.dueChave) { p.dueChave = info.dueChave; mud.push('dueChave'); } }
+    else if (info.dueChave && !p.dueChave) { p.dueChave = info.dueChave; mud.push('dueChave'); }
+    // cada DU-E do processo (há processos com mais de uma carga): VMLE, peso, RUC, notas de saída e porto, para conferir
+    if (info.vmle || info.pesoLiq || info.dueNumero) { p.docs._dues = p.docs._dues || {}; p.docs._dues[info.dueNumero || url || 'due'] = { vmle: Number(info.vmle) || 0, peso: Number(info.pesoLiq) || 0, ruc: info.ruc || '', nfs: info.nfsSaida || [], porto: info.dueporto || '' }; }
   }
   if (item.tipo === 'faturaFrete') {
     const set = (k, v) => { if (v && !p[k]) { p[k] = v; mud.push(k); } };
@@ -1873,7 +1886,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '81';
+const VERSAO_TESTE = '82';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
