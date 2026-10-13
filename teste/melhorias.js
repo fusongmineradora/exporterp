@@ -147,13 +147,23 @@ async function salvarDivisaoCambio(ref, pesos) {
 
 // ── 5. CONFERÊNCIA DE DOCUMENTOS ────────────────────────────
 function divergenciasDocs(p) {
-  if (!p || p.status === 'Cancelado' || ehProcessoS(p)) return [];
+  if (!p || p.status === 'Cancelado') return [];
   const d = p.docs || {}, out = [];
+  // BL × DU-E anexada (vale também para o "S"): o BL cita outra DU-E (13/10/2026)
+  { const n = x => String(x || '').replace(/\W/g, '').toUpperCase(); const ks = Object.keys(d._dues || {}).filter(k => /BR\d{9}/i.test(k));
+    if (d._bl && d._bl.due && ks.length && !ks.map(n).includes(n(d._bl.due))) out.push(`O BL cita a DU-E ${d._bl.due}, mas a DU-E anexada é ${ks.join(' e ')} (o BL pode ter saído com o número errado)`);
+    // porto de embarque da DU-E × porto do processo
+    const pol = semAcento(String(p.pol || '')).toUpperCase();
+    const portos = [...new Set(Object.values(d._dues || {}).map(x => x && x.porto).filter(Boolean))];
+    if (pol && portos.length && !portos.some(x => pol.includes(x))) out.push(`DU-E com embarque por ${portos.map(x => x[0] + x.slice(1).toLowerCase()).join(' e ')} e o processo diz ${p.pol}`); }
+  if (ehProcessoS(p)) return out;
   const cc = Number(d._contratoCont) || 0, bl = ((d._bl && d._bl.containers) || []).filter(Boolean).length;
   if (cc && bl && cc !== bl) out.push(`Sales Contract com ${cc} container(s) e BL com ${bl}`);
-  const dues = Object.entries(d._dues || {});
+  // venda dividida com o processo "S": as DU-Es dos dois somam (uma por container)
+  const pS = (S.processos || []).find(q => q.id === p.id + 'S');
+  const dues = Object.entries(d._dues || {}).concat(pS ? Object.entries((pS.docs && pS.docs._dues) || {}).filter(([k]) => !(d._dues || {})[k]) : []);
   // DU-E anexada a mais de um processo: não dá para comparar com uma invoice só
-  const compartilhada = dues.some(([k]) => (S.processos || []).some(q => q !== p && q.docs && q.docs._dues && q.docs._dues[k]));
+  const compartilhada = dues.some(([k]) => (S.processos || []).some(q => q !== p && q !== pS && q.docs && q.docs._dues && q.docs._dues[k]));
   if (dues.length && !compartilhada) {
     const peso = dues.reduce((a, [, x]) => a + (Number(x.peso) || 0), 0), vmle = dues.reduce((a, [, x]) => a + (Number(x.vmle) || 0), 0);
     const kg = (typeof toneladas === 'function' ? toneladas(p) : 0) * 1000;
@@ -710,7 +720,7 @@ async function textoDoArquivo(f) {
   return { texto: await pdfTexto(buf) };
 }
 async function relerDocsProcessos(forcar) {
-  const ps = (S.processos || []).filter(p => p.status !== 'Cancelado' && (forcar || !(p.docs && p.docs._relido78)));
+  const ps = (S.processos || []).filter(p => p.status !== 'Cancelado' && (forcar || !(p.docs && p.docs._relido82)));
   const norm = c => String(c || '').toUpperCase().replace(/[\s-]/g, '');
   let mud = 0;
   for (const p of ps) {
@@ -742,6 +752,21 @@ async function relerDocsProcessos(forcar) {
       const esc = cand.find(x => x.info.booking && x.info.booking === p.booking) || cand.find(x => (x.info.containers || []).some(c => meus.includes(norm(c)))) || cand.find(x => x.info.refProcesso === p.id) || cand[0];
       if (esc) { const m = []; aplicarBL(p, esc.info, esc.f.url, m); if (m.length) mud++; }
     }
+    // DU-Es já anexadas: RUC, notas de saída e porto (para os cruzamentos da v82); o número vale pela DU-E
+    for (const f of (p.docs._files.due || [])) {
+      if (!idArq(f)) continue;
+      try {
+        const { texto } = await textoDoArquivo(f); if (!texto) continue;
+        const it = { tipo: 'due', texto, info: {}, nome: f.name }; enriquecerInfo(it); const i = it.info;
+        if (!i.dueNumero) continue;
+        p.docs._dues = p.docs._dues || {};
+        const ant = p.docs._dues[i.dueNumero] || {};
+        const nv = Object.assign({}, ant, { vmle: Number(i.vmle) || ant.vmle || 0, peso: Number(i.pesoLiq) || ant.peso || 0, ruc: i.ruc || ant.ruc || '', nfs: (i.nfsSaida && i.nfsSaida.length) ? i.nfsSaida : (ant.nfs || []), porto: i.dueporto || ant.porto || '' });
+        if (JSON.stringify(nv) !== JSON.stringify(ant)) { p.docs._dues[i.dueNumero] = nv; mud++; }
+      } catch (e) { console.warn('reler DU-E', p.id, e); }
+    }
+    { const ks = Object.keys(p.docs._dues || {}).filter(k => /BR\d{9}/i.test(k));
+      if (ks.length && !ks.includes(p.dueNumero)) { logAction('editar', 'PROCESSOS', p.id, 'DU-E: ' + (p.dueNumero || '(vazio)') + ' → ' + ks[0] + ' (vale o número da DU-E anexada)'); p.dueNumero = ks[0]; mud++; } }
     // NCM das NFs de entrada (a NF de maior valor manda; se as NFs tiverem NCMs diferentes, guarda todos)
     if (forcar || !p.docs._ncmNF) {
       const porNum = {};
@@ -774,6 +799,7 @@ async function relerDocsProcessos(forcar) {
       }
     }
     if (!p.docs._relido78) { p.docs._relido78 = true; mud++; }
+    if (!p.docs._relido82) { p.docs._relido82 = true; mud++; }
   }
   return { mud, n: ps.length };
 }
@@ -782,7 +808,7 @@ let _relendo = false;
 (function agendarReleitura() {
   const t = setInterval(async () => {
     if (_relendo || !window._sheetsToken || !(S.processos || []).length || typeof aplicarBL !== 'function') return;
-    if (!(S.processos || []).some(p => p.status !== 'Cancelado' && !(p.docs && p.docs._relido78))) { clearInterval(t); return; }
+    if (!(S.processos || []).some(p => p.status !== 'Cancelado' && !(p.docs && p.docs._relido82))) { clearInterval(t); return; }
     _relendo = true; clearInterval(t);
     try { const r = await relerDocsProcessos(false); if (r.mud) { autoUpdateStatus(); await saveToSheets(); render(); } } catch (e) { console.warn('releitura', e); }
     _relendo = false;

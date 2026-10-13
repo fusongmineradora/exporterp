@@ -598,7 +598,20 @@ function identificarProcesso(info, texto, nome) {
     const bk = String(p.booking || '').replace(/\s/g, '').toUpperCase();
     if (bk.length >= 6 && compact.includes(bk)) { score += 60; motivos.push('booking ' + bk); }
     const due = String(p.dueNumero || '').replace(/\W/g, '').toUpperCase();
-    if (due.length >= 8 && compact.includes(due)) { score += 80; motivos.push('DU-E'); }
+    const duesDoc = Object.keys((p.docs && p.docs._dues) || {}).map(k => k.replace(/\W/g, '').toUpperCase()).filter(k => /BR\d{9}/.test(k));
+    const ehDue = !!(info.dueNumero || info.ruc || (info.nfsSaida || []).length);
+    if (due.length >= 8 && compact.includes(due)) { score += ehDue ? 100 : 80; motivos.push('número da DU-E'); }
+    else if (duesDoc.some(k => compact.includes(k))) { score += 100; motivos.push('número da DU-E'); }
+    // DU-E: RUC igual ao do BL (ou de outra DU-E do processo) e nota de saída da Fu Song citada (13/10/2026)
+    if (info.ruc) {
+      const rucs = [((p.docs && p.docs._bl) || {}).ruc, ...Object.values((p.docs && p.docs._dues) || {}).map(x => x && x.ruc)].filter(Boolean);
+      if (rucs.includes(info.ruc)) { score += 100; motivos.push('RUC do BL'); }
+    }
+    if ((info.nfsSaida || []).length) {
+      const minhas = [...new Set(((p.docs && p.docs._files && p.docs._files.nfeSaida) || []).map(f => String(Number(f.numero || 0))).filter(n => n !== '0'))];
+      const bate = info.nfsSaida.filter(n => minhas.includes(n));
+      if (bate.length) { score += 100; motivos.push('nota de saída ' + bate.join(' e ')); }
+    }
     const refs = [...(info.refs || []), ...(info.outrasChaves || [])];
     refs.forEach(ch => { if (idx[ch] === p.id) { score += 100; motivos.push('cita nota já anexada'); } });
     if (info.chave && idx[info.chave] === p.id) { score += 100; motivos.push('mesma chave já anexada'); }
@@ -904,8 +917,31 @@ function identificarItem(item) {
     }
   }
   if (item.processo === '__ADM' && !item.categoriaManual && typeof categoriaAdm === 'function') { const c = categoriaAdm(item); if (c) item.categoria = c; }
+  if (item.tipo === 'due') ajustarDue(item);
   item.duplicado = procurarDuplicado(item);
   return item;
+}
+
+// DU-E (13/10/2026): o par "S" (FS260109 + FS260109S) tem uma DU-E por container — a segunda DU-E de uma nota do
+// principal vai para o "S"; e pista forte (número da DU-E, RUC do BL, nota de saída, chave de nota) = "identificado"
+function ajustarDue(item) {
+  const info = item.info || {}, num = String(info.dueNumero || '').replace(/\W/g, '').toUpperCase();
+  const top = (item.candidatos || [])[0];
+  if (!top || !item.processo || item.processo !== top.id) return;
+  const P = (S.processos || []).find(p => p.id === item.processo), PS = P && (S.processos || []).find(q => q.id === P.id + 'S');
+  if (P && PS && num) {
+    const n = x => String(x || '').replace(/\W/g, '').toUpperCase();
+    const daP = [n(P.dueNumero), ...Object.keys((P.docs && P.docs._dues) || {}).map(n)].filter(k => /BR\d{9}/.test(k));
+    const doPS = Object.keys((PS.docs && PS.docs._dues) || {}).map(n).filter(k => /BR\d{9}/.test(k));
+    if (daP.length && !daP.includes(num) && !doPS.length) {
+      item.processo = PS.id;
+      item.candidatos = [{ id: PS.id, score: top.score, motivos: top.motivos.concat(['segunda DU-E da venda ' + P.id + ' (uma por container): vai para o ' + PS.id]) }].concat(item.candidatos.filter(c => c.id !== PS.id));
+      item.aviso = (item.aviso ? item.aviso + ' ' : '') + `O ${P.id} já tem a DU-E ${P.dueNumero || daP[0]}: esta é a do outro container, ficou no ${PS.id}.`;
+    }
+  }
+  const c = item.candidatos[0], seg = item.candidatos[1];
+  const forte = c && c.score >= 100 && (!seg || seg.score < c.score) && c.motivos.some(m => /DU-E|RUC|nota de saída|nota já anexada|segunda DU-E/.test(m));
+  if (forte && item.confianca !== 'manual' && !item.pastaErrada) item.confianca = 'alta';
 }
 
 // ── Importar acervo existente (cópia; originais intactos) ───
