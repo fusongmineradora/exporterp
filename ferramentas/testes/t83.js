@@ -15,8 +15,8 @@ add(X.blIds.bl112,'FS260112_BL.pdf',BL.bl112); add(X.blIds.bk112,'FS260112_BL.pd
 const due107=DU[X.arqDue107];
 (ids['FS260107:due']||[]).forEach(id=>add(id,'FS260107_DU-E.pdf',due107));
 const est=async pg=>pg.evaluate(()=>{ const g=id=>S.processos.find(x=>x.id===id); const o={};
-  ['FS260107','FS260112','FS260113','FS260114'].forEach(id=>{ const p=g(id); const r=resultadoProcesso(p), t=procTotals(p); o[id]={status:p.status,fase:faseProcesso(p),exp:valorExportado(p),fonte:p.docs._valorExportadoFonte||'',inv:p.cambioInvoice,antUsd:r.antecipacaoUsd||0,antR:r.antecipacaoReais||0,antT:t.antecipacao||0,div:divergenciasDocs(p)}; });
-  o.saldo=contaClientes().map(c=>c.nome.slice(0,22)+' '+Math.round(c.saldoUsd)); return o; });
+  ['FS260107','FS260112','FS260113','FS260114'].forEach(id=>{ const p=g(id); const s=saldoDoProcesso(p), t=procTotals(p); o[id]={status:p.status,fase:faseProcesso(p),exp:usdExportado(p),inv:p.cambioInvoice,gerou:s.gerou,usou:s.usou,adiantado:s.adiantado,ajT:t.ajusteSaldo||0,div:divergenciasDocs(p)}; });
+  o.saldo=saldoClientes().map(c=>c.nome.slice(0,22)+' '+Math.round(c.disponivel)+' (adiantado '+Math.round(c.adiantado)+')'); return o; });
 (async()=>{
  const R={}; let {b,pg,errs}=await H.open({wait:45000});
  R.inicio=await est(pg);
@@ -27,7 +27,7 @@ const est=async pg=>pg.evaluate(()=>{ const g=id=>S.processos.find(x=>x.id===id)
  R.avisoEntrada=await pg.evaluate(()=>S.entrada.itens.filter(i=>i.aviso).map(i=>i.processo+': '+i.aviso));
  R.anexou=await pg.evaluate(async()=>{ const n=await confirmarTodosEntrada(false,true); autoUpdateStatus(); await saveToSheets(); return n; });
  R.depois=await est(pg);
- R.tela=await pg.evaluate(()=>{ const o={}; ['FS260107','FS260112','FS260114'].forEach(id=>{ S.sub=S.processos.find(x=>x.id===id); const h=renderProcesso2(); o[id]=((h.match(/Valor exportado:[^<]*<b>[^<]*<\/b>[^<]*|A DU-E diz <b>[^<]*<\/b> e a invoice <b>[^<]*<\/b>/)||[''])[0]); }); S.sub=null; return o; });
+ R.tela=await pg.evaluate(()=>{ const o={}; ['FS260107','FS260112','FS260114'].forEach(id=>{ S.sub=S.processos.find(x=>x.id===id); const h=renderProcesso2(); o[id]=((h.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').match(/(Fecha pela nota|Usou R\$|Nota de saída \().{0,160}/)||[''])[0]); }); S.sub=null; return o; });
  R.escolha=await pg.evaluate(async()=>{ await usarValorExportado('FS260114','invoice'); const p=S.processos.find(x=>x.id==='FS260114'); return divergenciasDocs(p); });
  // chega a DU-E retificada do FS260114 (peso 27.000 kg e USD 5.400)
  const k114=X.arqDue114; H.pdf('Extrato-DUE RETIFICADA FS260114.pdf',ent,DU[k114].replace('Peso líquido (KG) 5.400,00000','Peso líquido (KG) 27.000,00000').split('27.000,00\n\nVMCV').join('5.400,00\n\nVMCV').replace('VMCV (Valor da Mercadoria na Condição de Venda) 27.000,00','VMCV (Valor da Mercadoria na Condição de Venda) 5.400,00'));

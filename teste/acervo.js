@@ -447,6 +447,7 @@ function enriquecerInfo(item) {
     info.refs = [...new Set([...(info.refs || []), ...(typeof chavesDoTexto === 'function' ? chavesDoTexto(T) : [])])];
     // situação (13/10/2026): averbada / carga exportada / embarque bloqueado — a DU-E confirma o embarque
     if (!info.vmcv) info.vmcv = numBR(mx(/VMCV\b[^0-9]{0,80}?([\d.]+,\d{2})/i)) || 0;
+    if (!info.dueReais) info.dueReais = numBR(mx(/Valor total (?:das )?mercadorias\s*\(R\$\)\s*([\d.]+,\d{2})/i)) || 0;
     info.dueSituacao = mx(/Situa[cç][aã]o atual da DU-?E.{0,160}?\b(Averbada|Desembara[cç]ada|Registrada|Cancelada|Liberada|Em an[aá]lise)\b/i);
     info.dueExportada = /Carga Completamente Exportada|\bAverba[cç][aã]o\b/i.test(U) || /^Averbada$/i.test(info.dueSituacao || '');
     { const evs = [...U.matchAll(/(\d{2}\/\d{2}\/\d{4})\s+\d{2}:\d{2}(?::\d{2})?\s+(Embarque bloqueado|Embarque desbloqueado|Desbloqueio[^0-9]{0,30})/gi)].map(m => ({ d: m[1], bloq: /bloqueado/i.test(m[2]) && !/desbloq/i.test(m[2]) }));
@@ -614,7 +615,7 @@ function aplicarDocNoProcesso(item, p, upd) {
       const bate = x => x && (!kg || !x.peso || Math.abs(x.peso - kg) <= Math.max(50, kg * 0.005)) && (!inv || !(x.vmcv || x.vmle) || Math.abs((x.vmcv || x.vmle) - inv) <= 1);
       const novo = { peso: Number(info.pesoLiq) || 0, vmcv: Number(info.vmcv) || 0, vmle: Number(info.vmle) || 0 };
       if (ant && !bate(ant) && bate(novo) && typeof logAction === 'function') logAction('editar', 'PROCESSOS', p.id, `DU-E ${info.dueNumero} retificada: agora bate com a invoice`); }
-    if (info.vmle || info.pesoLiq || info.dueNumero) { p.docs._dues = p.docs._dues || {}; p.docs._dues[info.dueNumero || url || 'due'] = { vmle: Number(info.vmle) || 0, vmcv: Number(info.vmcv) || 0, peso: Number(info.pesoLiq) || 0, ruc: info.ruc || '', nfs: info.nfsSaida || [], porto: info.dueporto || '', situacao: info.dueSituacao || '', exportada: !!info.dueExportada, bloqueio: info.dueBloqueio || '' }; }
+    if (info.vmle || info.pesoLiq || info.dueNumero) { p.docs._dues = p.docs._dues || {}; p.docs._dues[info.dueNumero || url || 'due'] = { vmle: Number(info.vmle) || 0, vmcv: Number(info.vmcv) || 0, reais: Number(info.dueReais) || 0, peso: Number(info.pesoLiq) || 0, ruc: info.ruc || '', nfs: info.nfsSaida || [], porto: info.dueporto || '', situacao: info.dueSituacao || '', exportada: !!info.dueExportada, bloqueio: info.dueBloqueio || '' }; }
   }
   if (item.tipo === 'faturaFrete') {
     const set = (k, v) => { if (v && !p[k]) { p[k] = v; mud.push(k); } };
@@ -1898,7 +1899,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '83';
+const VERSAO_TESTE = '84';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)

@@ -901,22 +901,22 @@ function renderResultados() {
   const tabs = `<div class="tabs"><button class="tab ${tab === 'clientes' ? 'active' : ''}" onclick="S.resTab='clientes';render()">🤝 Saldo dos clientes</button><button class="tab ${tab === 'processos' ? 'active' : ''}" onclick="S.resTab='processos';render()">📦 Resultado por processo</button></div>`;
   const usd = n => 'USD ' + fmt(n);
 
-  const clientesHtml = clientes.map(c => {
-    const cor = c.saldoUsd > 0.01 ? 'var(--green)' : c.saldoUsd < -0.01 ? 'var(--red)' : 'var(--muted2)';
-    const rotulo = c.saldoUsd > 0.01 ? 'crédito do cliente (adiantamento)' : c.saldoUsd < -0.01 ? 'cliente deve' : 'quitado';
+  // saldo do cliente em reais, com extrato (13/10/2026): gerou crédito (pagou mais do que exportou) − usou em outros processos
+  const brl = n => 'R$ ' + fmt(n);
+  const sc = typeof saldoClientes === 'function' ? saldoClientes() : [];
+  const clientesHtml = sc.map(c => {
+    const cor = c.disponivel > 0.009 ? 'var(--green)' : c.disponivel < -0.009 ? 'var(--red)' : 'var(--muted2)';
+    const rotulo = c.disponivel > 0.009 ? 'crédito disponível (antecipação)' : c.disponivel < -0.009 ? 'usou mais do que tinha' : 'sem saldo';
+    const linhas = c.linhas.map(l => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;${l.adiantado ? 'color:var(--muted2)' : ''}"><span>${escHtml(l.id)} · ${escHtml(l.texto)}</span><span style="font-family:'JetBrains Mono',monospace;color:${l.adiantado ? 'var(--muted2)' : l.valor >= 0 ? 'var(--green)' : 'var(--red)'}">${l.valor >= 0 ? '+' : '−'} ${brl(Math.abs(l.valor))}</span></div>`).join('');
     return `<div class="card" style="padding:14px 16px">
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">
         <div style="min-width:0"><div style="font-weight:800;font-size:14px">${escHtml(c.nome)}</div>
-          <div style="font-size:11px;color:var(--muted)">${c.processos.length} processo(s)</div></div>
-        <div style="text-align:right"><div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:18px;color:${cor}">${usd(Math.abs(c.saldoUsd))}</div>
-          <div style="font-size:10.5px;color:${cor}">${rotulo}</div></div>
+          <div style="font-size:11px;color:var(--muted)">extrato do saldo</div></div>
+        <div style="text-align:right"><div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:18px;color:${cor}">${brl(Math.abs(c.disponivel))}</div>
+          <div style="font-size:10.5px;color:${cor}">${rotulo}${c.usdEq ? ' · ≈ ' + usd(Math.round(Math.abs(c.usdEq))) : ''}</div></div>
       </div>
-      <div class="g2" style="margin-top:10px;font-size:12px">
-        <div class="total-box" style="margin-top:0"><span style="color:var(--muted)">Câmbio recebido</span><span class="num">${usd(c.recebidoUsd)}</span></div>
-        <div class="total-box" style="margin-top:0"><span style="color:var(--muted)">Valor exportado</span><span class="num">${usd(c.embarcadoUsd)}</span></div>
-      </div>
-      ${(() => { const ant = c.processos.filter(p => p.docs && p.docs._valorExportado != null && (Number(p.cambioInvoice) || 0) - valorExportado(p) > 1); return ant.length ? `<div style="margin-top:8px;font-size:11.5px;color:var(--green)">Antecipação de venda futura: ${ant.map(p => escHtml(p.id) + ' ' + usd((Number(p.cambioInvoice) || 0) - valorExportado(p))).join(' · ')}</div>` : ''; })()}
-      <div style="margin-top:8px;font-size:11px;color:var(--muted2)">${c.processos.map(p => `${escHtml(p.id)} (${escHtml(p.status || '—')}${p.cambioInvoice ? ', ' + usd(valorExportado(p)) + (valorExportado(p) !== (Number(p.cambioInvoice) || 0) ? ' exportado de ' + usd(p.cambioInvoice) : '') : ''})`).join(' · ')}</div>
+      <div style="margin-top:10px;display:flex;flex-direction:column;gap:4px">${linhas}</div>
+      ${c.adiantado ? `<div style="margin-top:6px;font-size:11px;color:var(--muted2)">"Pago e ainda não embarcado" não entra no crédito: quando embarcar, fecha pelo processo.</div>` : ''}
     </div>`;
   }).join('');
 
@@ -943,7 +943,7 @@ function renderResultados() {
   return `
   ${backBtn()}
   <div class="page-header"><div><div class="page-title">Clientes & Resultado</div>
-    <div style="color:var(--muted);font-size:11px;margin-top:2px">Saldo em dólar de cada cliente e lucro ou prejuízo de cada processo</div></div></div>
+    <div style="color:var(--muted);font-size:11px;margin-top:2px">Saldo de cada cliente (crédito em reais, com extrato) e lucro ou prejuízo de cada processo</div></div></div>
   ${tabs}
   ${tab === 'clientes' ? clientesHtml || '<div class="card" style="padding:20px;color:var(--muted)">Nenhum cliente.</div>' : procHtml}
   <div style="font-size:11px;color:var(--muted);margin-top:10px;line-height:1.6">${tab === 'clientes'

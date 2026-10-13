@@ -38,7 +38,7 @@ node t72.js   # envio dos modelos (reconhece qual é qual, recusa preenchido)
 node t73.js   # Novo processo + nome interno + pasta renomeada + recarregar
 node t79.js   # Caixa de Entrada: 4 CT-es + 4 MDF-es juntos → todos identificados (MDF-e segue o CT-e citado)
 node t82.js   # 20 extratos de DU-E reais → todos no processo certo (número, RUC do BL, nota de saída, par 109/109S) + conferências
-node t83.js   # DU-E bloqueada → No Porto; valor exportado (antecipação vira crédito do cliente); aviso de DU-E errada e DU-E retificada
+node t83.js   # DU-E bloqueada → No Porto; fechamento pela nota de saída e saldo do cliente em reais (gerou/usou); aviso de DU-E errada e retificada
 node t50.js; node t51.js; node t62.js   # versão OFICIAL (t51: 2ª abertura sem gravações)
 ```
 Resultados esperados (base de 12/10/2026, versão 77):
