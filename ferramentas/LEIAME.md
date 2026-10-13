@@ -39,6 +39,7 @@ node t73.js   # Novo processo + nome interno + pasta renomeada + recarregar
 node t79.js   # Caixa de Entrada: 4 CT-es + 4 MDF-es juntos → todos identificados (MDF-e segue o CT-e citado)
 node t82.js   # 20 extratos de DU-E reais → todos no processo certo (número, RUC do BL, nota de saída, par 109/109S) + conferências
 node t83.js   # DU-E bloqueada → No Porto; fechamento pela nota de saída e saldo do cliente em reais (gerou/usou); aviso de DU-E errada e retificada
+node t85.js   # texto quebrado como no navegador ("DU- E", "NF- e"): releitura das DU-Es anexadas + 4 extratos reais acham o processo
 node t50.js; node t51.js; node t62.js   # versão OFICIAL (t51: 2ª abertura sem gravações)
 ```
 Resultados esperados (base de 12/10/2026, versão 77):
@@ -49,10 +50,11 @@ Resultados esperados (base de 12/10/2026, versão 77):
 - `t72`: 2 modelos aceitos, 1 recusado por estar preenchido, 1 recusado por não ser da Fu Song.
 - `t82`: `certos: 20`, `anexou: 20`; FS260109S com a segunda DU-E da venda e aviso "O BL cita a DU-E …"; FS260114 com aviso de peso/VMLE trocados (precisa de `dados/store_oficial.json`, `dados/fixtures/dues_lote.json` e `bl_textos.json`).
 - `t83`: `anexou: 20`, `mudou2: false`; FS260113 "No Porto" (fase 2) com aviso de embarque bloqueado; FS260107 com valor exportado pela DU-E e antecipação; FS260114 com aviso na Caixa de Entrada e sem aviso depois da DU-E retificada.
+- `t85`: `semNf: []` (toda DU-E anexada com nota de saída, situação e exportada); `certos: 4` com motivo "cabeçalho" e "nota de saída N" (precisa de `dados/fixtures/dues_reais4.json` = texto dos 4 extratos reais e `dues_lote.json`).
 - `t79`: os 8 documentos com processo e "alta"; `anexou: 8`; FS260100/104/108/111 com 1 CT-e e 1 MDF-e cada (precisa de `dados/fixtures/cte_mdfe_lote.json`).
 - `t73`: FS260119 / embarque 32; armazém 3.200, marítimo 6.500, assessoria 1.200, despachante 550; pasta renomeada com o booking; recarregar mantém tudo.
 Versão 78: além dos acima, abrir duas vezes esperando 45 s (para a releitura dos BLs/NFs rodar) — a 2ª abertura não pode gravar nada. Rodar com `WARN=1 node tNN.js` mostra avisos do console (um `ReferenceError` dentro da manutenção não aparece de outro jeito: a rotina para no meio sem quebrar a tela).
-Observações do simulador: o pdf.js é falso (devolve os bytes do arquivo como texto — para testar leitura de PDF use arquivos de texto); o CDN (cdnjs) é bloqueado, então o sistema usa o `pdf-lib.min.js` do próprio site; os testes de PDF trocam a rota de upload para guardar os bytes.
+Observações do simulador: o pdf.js é falso (devolve os bytes do arquivo como texto — para testar leitura de PDF use arquivos de texto). Desde a v85 ele quebra o texto depois de "-" e "/" antes de letra, como o pdf.js 3.11 do navegador faz ("DU-" + "E"); `window.__PDFRAW=true` desliga. Para ver o texto exato que o navegador lê de um PDF real: baixar `pdfjs-3.11.174-legacy-dist.zip` das releases do pdf.js no GitHub (o cdnjs e o npm são bloqueados aqui) e rodar `getTextContent` no Node; o CDN (cdnjs) é bloqueado, então o sistema usa o `pdf-lib.min.js` do próprio site; os testes de PDF trocam a rota de upload para guardar os bytes.
 
 Chromium já instalado no ambiente (`PLAYWRIGHT_BROWSERS_PATH`); Playwright e pdf-lib em `/opt/npm-tools/node_modules`.
 

@@ -64,7 +64,7 @@ function mk(store){
     });
     const PFX=opts.oficial?'oficial:':'teste:';
     await pg.addInitScript((PFX)=>{sessionStorage.setItem(PFX+'erp-user',JSON.stringify({email:'lai@fusongmineradora.com',name:'Klismann Lai',picture:'',expires:Date.now()+3600e3}));sessionStorage.setItem(PFX+'erp-gtoken',JSON.stringify({token:'tok',expiry:Date.now()+3600e3}));localStorage.setItem(PFX+'sheet-id-4','TEST4');localStorage.setItem(PFX+'geracao','4');
-      window.pdfjsLib={__pronto:true,GlobalWorkerOptions:{},getDocument:({data})=>({promise:Promise.resolve({numPages:1,getPage:async()=>({getTextContent:async()=>({items:[{str:new TextDecoder().decode(data)}]})})})})};},PFX);
+      window.pdfjsLib={__pronto:true,GlobalWorkerOptions:{},getDocument:({data})=>({promise:Promise.resolve({numPages:1,getPage:async()=>({getTextContent:async()=>({items:(window.__PDFRAW?[new TextDecoder().decode(data)]:new TextDecoder().decode(data).split(/(?<=\S[-\/])(?=[A-Za-zÀ-ú*])/)).map(str=>({str}))})})})})};},PFX);
     if(opts.trace) await pg.addInitScript(()=>{ window._saves=[]; const t=setInterval(()=>{ if(typeof window.renderProcesso2==='function' && typeof window.saveToSheets==='function' && !window.saveToSheets._tr){ const o=window.saveToSheets; const w=function(){ window._saves.push((new Error().stack||'').split('\n').slice(2,7).map(x=>x.trim().replace(/file:.*\//,'')).join(' < ')); return o.apply(this,arguments); }; w._tr=1; window.saveToSheets=w; clearInterval(t);} },20); });
     await pg.goto(opts.oficial?'file://'+require('path').resolve(__dirname,'../../index.html'):'file://'+require('path').resolve(__dirname,'../../teste/index.html'));
     await pg.waitForTimeout(opts.wait||16000);
