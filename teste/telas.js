@@ -187,14 +187,18 @@ function renderInicio() {
 
 
   // resumo das cargas por fase (cabeçalho de "Onde estão as cargas")
-  const nomeFase = f => (f >= 0 ? FASES[f] : 'A coletar');
-  const resumoCargas = (() => { const g = {}; cargas.forEach(x => { (g[x.f] = g[x.f] || []).push(x.p.id); }); return Object.keys(g).map(Number).sort((a, b) => a - b).map(f => `<span style="white-space:nowrap"><b style="font-weight:600;color:${f >= 3 ? 'var(--accent)' : f >= 0 ? 'var(--yellow)' : 'var(--muted2)'}">${nomeFase(f)}</b> ${g[f].length <= 2 ? g[f].map(id => linkProc(id)).join(', ') : g[f].length}</span>`).join(' · '); })();
+  // v89: embarcadas separadas em Em Trânsito e No Destino (mesma regra do Rastreio)
+  cargas.forEach(x => { x.grupo = x.f >= 3 ? grupoEmbarcada(x.p, x.f) : ''; });
+  const ORDEM_C = ['A coletar', 'Coleta', 'Armazém', 'Porto', 'Em Trânsito', 'No Destino'];
+  const nomeCarga = x => (x.f >= 3 ? (x.grupo === 'destino' ? 'No Destino' : 'Em Trânsito') : x.f >= 0 ? FASES[x.f] : 'A coletar');
+  const corCarga = n => (n === 'No Destino' ? 'var(--green)' : n === 'Em Trânsito' ? 'var(--accent)' : n === 'A coletar' ? 'var(--muted2)' : 'var(--yellow)');
+  const resumoCargas = (() => { const g = {}; cargas.forEach(x => { const n = nomeCarga(x); (g[n] = g[n] || []).push(x.p.id); }); return ORDEM_C.filter(n => g[n]).map(n => `<span style="white-space:nowrap"><b style="font-weight:600;color:${corCarga(n)}">${n}</b> ${g[n].length <= 2 ? g[n].map(id => linkProc(id)).join(', ') : g[n].length}</span>`).join(' · '); })();
   const cargasCorpo = `${cargas.length ? cargas.map(x => {
       const p = x.p, v = (p.docs && p.docs._viagem) || {}, dl = brParaDate(p.deadlineCarga), dlDias = dl ? Math.ceil((dl - new Date()) / 864e5) : null;
       const info = x.f >= 3 ? [(p.containers || []).filter(Boolean).join(', '), v.navio, 'saiu ' + p.saida, v.eta ? 'chega ' + v.eta : '', p.pod].filter(Boolean).join(' · ')
         : [p.logTransportadora, p.logCidade, (p.containers || []).filter(Boolean).join(', ')].filter(Boolean).join(' · ') || (p.produto || '');
       return `<div style="display:flex;flex-direction:column;gap:6px">
-        <div style="display:flex;justify-content:space-between;gap:8px"><span>${linkProc(p.id)} <span style="font-size:12.5px;color:var(--muted2)">${escHtml(p.cliente || '')}</span></span><span style="font-size:12.5px;font-weight:600;color:${x.f >= 3 ? 'var(--accent)' : x.f >= 0 ? 'var(--yellow)' : 'var(--muted2)'}">${x.f >= 0 ? FASES[x.f] : 'A coletar'}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:8px"><span>${linkProc(p.id)} <span style="font-size:12.5px;color:var(--muted2)">${escHtml(p.cliente || '')}</span></span><span style="font-size:12.5px;font-weight:600;color:${corCarga(nomeCarga(x))}">${nomeCarga(x)}</span></div>
         ${barraFases(x.f)}
         <div style="font-size:12.5px;color:var(--muted2)">${escHtml(info)}${dlDias != null && dlDias >= 0 && dlDias <= 5 && x.f < 3 ? ` · <span style="color:var(--yellow);font-weight:600">dead line de carga em ${dlDias} dia(s)</span>` : ''}</div>
       </div>`;
@@ -226,7 +230,7 @@ function renderInicio() {
 
 
   // ── v88: layout "Resumo" (escolhido por ele em 13/10): números principais no topo e cada parte abre e fecha ──
-  const nEmb = cargas.filter(x => x.f >= 3).length;
+  const nEmb = cargas.filter(x => x.f >= 3).length, nDest = cargas.filter(x => x.grupo === 'destino').length;
   const fech = resultadosVis.filter(x => !x.prov), nProv = resultadosVis.length - fech.length, lucroFech = fech.reduce((a, x) => a + (x.c.lucro || 0), 0);
   const abreSecao = k => `S._iniAberto=S._iniAberto||{};S._iniAberto['${k}']=true;try{localStorage.setItem('teste:inicio-abertos',JSON.stringify(S._iniAberto))}catch(e){};render();setTimeout(()=>{const e=document.getElementById('ini-${k}');if(e)e.scrollIntoView({behavior:'smooth',block:'start'})},60)`;
   const kpi = (rot, val, sub, cor, acao) => `<div ${acao ? `onclick="${acao}" ` : ''}style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;${acao ? 'cursor:pointer;' : ''}min-width:0"><div style="font-size:12px;color:var(--muted2)">${rot}</div><div class="v" style="font-family:'JetBrains Mono',monospace;font-size:17px;color:${cor || 'var(--text)'};white-space:nowrap">${val}</div><div style="font-size:11.5px;color:var(--muted2);line-height:1.4">${sub || ''}</div></div>`;
@@ -236,7 +240,7 @@ function renderInicio() {
     ${kpi('Pago neste mês', brl(pagoMes), 'custos e despesas')}
     ${kpi('Dólar (PTAX venda)', px ? 'R$ ' + px.toLocaleString('pt-BR', { minimumFractionDigits: 4 }) : (S._ptax && S._ptax.erro ? 'indisponível' : '…'), px ? 'Banco Central · ' + S._ptax.data : 'Banco Central')}
     ${kpi('O que falta', String(pend.length), `${nDocs} documentos e custos · ${nComp} notas ou comprovantes`, pend.length ? 'var(--orange)' : 'var(--green)', abreSecao('falta'))}
-    ${kpi('Cargas', String(cargas.length), `${nEmb} embarcadas · ${cargas.length - nEmb} no Brasil`, 'var(--accent)', abreSecao('cargas'))}
+    ${kpi('Cargas', String(cargas.length), `${nEmb - nDest} em trânsito · ${nDest} no destino · ${cargas.length - nEmb} no Brasil`, 'var(--accent)', abreSecao('cargas'))}
   </div>`;
   // cada parte abre e fecha clicando no cabeçalho; o aparelho lembra (começa só com "O que falta" aberto)
   const aberto = k => { S._iniAberto = S._iniAberto || (() => { try { return JSON.parse(localStorage.getItem('teste:inicio-abertos') || 'null') || { falta: true }; } catch (e) { return { falta: true }; } })(); return !!S._iniAberto[k]; };
@@ -390,27 +394,40 @@ function linkArmador(p) {
   if (/YANG\s*MING|YML/.test(arm)) return 'https://www.yangming.com/en/esolution/cargo_tracking';
   return '';
 }
+// v89: viagem de uma carga embarcada — ETA do BL/fatura do agente; sem ETA, estima saída + 40 dias (China)
+function viagemCarga(p) {
+  const v = (p.docs && p.docs._viagem) || {}, atd = brParaDate(p.saida); let eta = brParaDate(v.eta), est = false;
+  if (atd && !eta) { eta = new Date(atd.getTime() + 40 * 864e5); est = true; }
+  const pct = atd && eta ? Math.max(0, Math.min(100, Math.round((Date.now() - atd) / (eta - atd) * 100))) : 0;
+  return { v, atd, eta, est, pct, faltam: eta ? Math.ceil((eta - Date.now()) / 864e5) : null };
+}
+// embarcada: "No Destino" quando já passou da chegada prevista (ou o status diz No Destino/Concluído); senão "Em Trânsito"
+function grupoEmbarcada(p, f) { if (f >= 4) return 'destino'; return viagemCarga(p).pct >= 100 ? 'destino' : 'transito'; }
 function renderRastreio2() {
   const lista = (S.processos || []).filter(p => p.status !== 'Cancelado').map(p => ({ p, f: faseProcesso(p) }));
-  const emb = lista.filter(x => x.f >= 3).sort((a, b) => (brParaDate(b.p.saida) || 0) - (brParaDate(a.p.saida) || 0));
+  const emb = lista.filter(x => x.f >= 3).map(x => Object.assign(x, { g: viagemCarga(x.p), grupo: grupoEmbarcada(x.p, x.f) }));
+  const transito = emb.filter(x => x.grupo === 'transito').sort((a, b) => (a.g.eta || 0) - (b.g.eta || 0));      // a que chega primeiro em cima
+  const destino = emb.filter(x => x.grupo === 'destino').sort((a, b) => (b.g.eta || 0) - (a.g.eta || 0));       // a que chegou por último em cima
   const antes = lista.filter(x => x.f < 3).sort((a, b) => b.f - a.f);
-  const viagem = p => {
-    const v = (p.docs && p.docs._viagem) || {}, atd = brParaDate(p.saida); let eta = brParaDate(v.eta), est = false;
-    if (atd && !eta) { eta = new Date(atd.getTime() + 40 * 864e5); est = true; }   // China: ~40 dias quando a ETA não veio no documento
-    const pct = atd && eta ? Math.max(0, Math.min(100, Math.round((Date.now() - atd) / (eta - atd) * 100))) : 0;
-    return { v, atd, eta, est, pct, faltam: eta ? Math.ceil((eta - Date.now()) / 864e5) : null };
-  };
+  // v89: grupos que abrem e fecham (o aparelho lembra); No Destino começa fechado
+  if (!S._rastAberto) { try { S._rastAberto = JSON.parse(localStorage.getItem('teste:rastreio-abertos') || 'null'); } catch (e) {} S._rastAberto = S._rastAberto || { transito: true, destino: false, antes: true }; }
+  const cabGrupo = (k, nome, n, cor, itens) => `<div onclick="if(event.target.closest('a'))return;S._rastAberto['${k}']=!S._rastAberto['${k}'];try{localStorage.setItem('teste:rastreio-abertos',JSON.stringify(S._rastAberto))}catch(e){};render()" style="display:flex;justify-content:space-between;align-items:baseline;gap:4px 10px;flex-wrap:wrap;cursor:pointer;user-select:none;margin:18px 0 10px"><h2 style="margin:0;font-family:'Outfit',sans-serif;font-size:18px;color:${cor};white-space:nowrap">${nome} <span style="font-size:14px;color:var(--muted2)">(${n}) ${S._rastAberto[k] ? '▾' : '▸'}</span></h2>${!S._rastAberto[k] && itens.length ? `<span style="font-size:12.5px;color:var(--muted2)">${itens.length <= 12 ? itens.map(id => linkProc(id)).join(' · ') : ''}</span>` : ''}</div>`;
+  const cartao = ({ p, g, grupo }) => { const link = linkArmador(p); return card(`
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>${linkProc(p.id)} <span style="font-size:12.5px;color:var(--muted2)">${escHtml(p.cliente || '')}</span></span><span style="font-size:12.5px;font-weight:600;color:${grupo === 'destino' ? 'var(--green)' : 'var(--accent)'}">${grupo === 'destino' ? 'No destino' : 'Em trânsito'}</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;gap:8px"><span>${escHtml(p.pol || 'Origem')}<br><span style="color:var(--muted2);font-size:12px">saiu ${escHtml(p.saida || '—')}</span></span><span style="text-align:right">${escHtml(p.pod || 'Destino')}<br><span style="color:var(--muted2);font-size:12px">${g.eta ? (g.est ? 'estimada ' : 'ETA ') + g.eta.toLocaleDateString('pt-BR') : '—'}</span></span></div>
+      <div style="height:8px;border-radius:4px;background:var(--border2);overflow:hidden"><div style="height:100%;width:${g.pct}%;background:${grupo === 'destino' ? 'var(--green)' : 'var(--accent)'}"></div></div>
+      <div style="font-size:12.5px;color:var(--muted2)">${escHtml([g.v.navio, p.companhia, (p.containers || []).filter(Boolean).join(', '), p.booking ? 'booking ' + p.booking : ''].filter(Boolean).join(' · '))}${g.faltam != null && g.faltam > 0 ? ` · faltam ${g.faltam} dias` : ''}</div>
+      ${link ? `<a class="btn btn-secondary btn-sm" style="min-height:44px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none" href="${sanitizeUrl(link)}" target="_blank" rel="noopener noreferrer">Rastrear no site do armador</a>` : '<div style="font-size:12px;color:var(--muted2)">Sem container/armador para rastrear.</div>'}`); };
   return `
   <div style="max-width:760px;margin:0 auto">
     <div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:26px;margin-bottom:4px">Rastreio</div>
     <div style="font-size:13px;color:var(--muted2);margin-bottom:14px">Cargas embarcadas: saída (ATD) e chegada prevista (ETA) vêm do BL e da fatura do agente. O botão abre o rastreio do armador com o container.</div>
-    ${emb.length ? emb.map(({ p }) => { const g = viagem(p), link = linkArmador(p); return card(`
-      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>${linkProc(p.id)} <span style="font-size:12.5px;color:var(--muted2)">${escHtml(p.cliente || '')}</span></span><span style="font-size:12.5px;font-weight:600;color:${g.pct >= 100 ? 'var(--green)' : 'var(--accent)'}">${g.pct >= 100 ? 'No destino / chegando' : 'Em viagem'}</span></div>
-      <div style="display:flex;justify-content:space-between;font-size:13px;gap:8px"><span>${escHtml(p.pol || 'Origem')}<br><span style="color:var(--muted2);font-size:12px">saiu ${escHtml(p.saida || '—')}</span></span><span style="text-align:right">${escHtml(p.pod || 'Destino')}<br><span style="color:var(--muted2);font-size:12px">${g.eta ? (g.est ? 'estimada ' : 'ETA ') + g.eta.toLocaleDateString('pt-BR') : '—'}</span></span></div>
-      <div style="height:8px;border-radius:4px;background:var(--border2);overflow:hidden"><div style="height:100%;width:${g.pct}%;background:var(--accent)"></div></div>
-      <div style="font-size:12.5px;color:var(--muted2)">${escHtml([g.v.navio, p.companhia, (p.containers || []).filter(Boolean).join(', '), p.booking ? 'booking ' + p.booking : ''].filter(Boolean).join(' · '))}${g.faltam != null && g.faltam > 0 ? ` · faltam ${g.faltam} dias` : ''}</div>
-      ${link ? `<a class="btn btn-secondary btn-sm" style="min-height:44px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none" href="${sanitizeUrl(link)}" target="_blank" rel="noopener noreferrer">Rastrear no site do armador</a>` : '<div style="font-size:12px;color:var(--muted2)">Sem container/armador para rastrear.</div>'}`); }).join('') : card('<div style="font-size:13.5px;color:var(--muted2)">Nenhuma carga embarcada.</div>')}
-    ${antes.length ? card(`${titulo2('Antes do embarque')}${antes.map(({ p, f }) => `<div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;gap:8px"><span>${linkProc(p.id)}</span><span style="font-size:12.5px;font-weight:600;color:var(--muted2)">${f >= 0 ? FASES[f] : 'A coletar'}</span></div>${barraFases(f)}<div style="font-size:12.5px;color:var(--muted2)">${escHtml([p.logTransportadora, p.logCidade, p.deadlineCarga ? 'dead line ' + p.deadlineCarga : ''].filter(Boolean).join(' · ') || p.produto || '')}</div></div>`).join('')}`) : ''}
+    ${cabGrupo('transito', 'Em Trânsito', transito.length, 'var(--accent)', transito.map(x => x.p.id))}
+    ${S._rastAberto.transito ? (transito.length ? transito.map(cartao).join('') : card('<div style="font-size:13.5px;color:var(--muted2)">Nenhuma carga em viagem.</div>')) : ''}
+    ${cabGrupo('destino', 'No Destino', destino.length, 'var(--green)', destino.map(x => x.p.id))}
+    ${S._rastAberto.destino ? (destino.length ? destino.map(cartao).join('') : card('<div style="font-size:13.5px;color:var(--muted2)">Nenhuma carga no destino.</div>')) : ''}
+    ${antes.length ? cabGrupo('antes', 'Antes do embarque', antes.length, 'var(--text)', antes.map(x => x.p.id)) : ''}
+    ${antes.length && S._rastAberto.antes ? card(`${antes.map(({ p, f }) => `<div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;gap:8px"><span>${linkProc(p.id)}</span><span style="font-size:12.5px;font-weight:600;color:var(--muted2)">${f >= 0 ? FASES[f] : 'A coletar'}</span></div>${barraFases(f)}<div style="font-size:12.5px;color:var(--muted2)">${escHtml([p.logTransportadora, p.logCidade, p.deadlineCarga ? 'dead line ' + p.deadlineCarga : ''].filter(Boolean).join(' · ') || p.produto || '')}</div></div>`).join('')}`) : ''}
   </div>`;
 }
 
