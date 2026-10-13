@@ -692,6 +692,36 @@ if (typeof aplicarDocNoProcesso === 'function' && !aplicarDocNoProcesso._dv) {
   };
   aplicarDocNoProcesso._dv = true;
 }
+// ── v90: versões da invoice e do contrato gerados; a versão errada (substituída) pode ser apagada ──
+// apagar = vai para a lixeira do Google Drive (recupera por 30 dias) e sai do processo; a versão que vale nunca é apagada
+function dvVersoes(p) {
+  const por = {};
+  ['invoice', 'contrato'].forEach(tipo => ((p.docs && p.docs._files && p.docs._files[tipo]) || []).forEach(f => {
+    if (!f || !(f.versao || f.origem === 'gerado')) return;
+    const v = Number(f.versao) || 1; (por[v] = por[v] || { versao: v, arquivos: [], substituida: true }).arquivos.push({ tipo, f });
+    if (!f.substituido) por[v].substituida = false;
+  }));
+  return Object.values(por).sort((a, b) => a.versao - b.versao);
+}
+async function dvApagarVersao(pid, versao) {
+  const p = (S.processos || []).find(x => x.id === pid); if (!p) return;
+  const v = dvVersoes(p).find(x => x.versao === Number(versao));
+  if (!v) { showToast('Versão não encontrada'); return; }
+  if (!v.substituida) { showToast('Esta é a versão que vale — gere uma nova versão antes de apagar esta'); return; }
+  const nomes = v.arquivos.map(a => a.f.name).join(', ');
+  if (!await uiConfirm(`Apagar a versão ${v.versao} do ${pid}?\n\n${nomes}\n\nOs arquivos vão para a lixeira do Google Drive (dá para recuperar por 30 dias) e saem do processo. A versão que vale continua.`, 'Apagar versão errada', 'Apagar', 'Cancelar')) return;
+  showSyncIndicator('Apagando...');
+  try {
+    for (const a of v.arquivos) {
+      if (a.f.id) { try { await driveAPI('PATCH', '/files/' + a.f.id, { trashed: true }, 'fields=id'); } catch (e) { if (!/404|not ?found/i.test(String(e && e.message))) throw e; } }
+      const lista = p.docs._files[a.tipo] || []; const i = lista.indexOf(a.f); if (i >= 0) lista.splice(i, 1);
+      if (!lista.length) delete p.docs._files[a.tipo];
+      if (p.docs[a.tipo] === a.f.url) { const atual = (p.docs._files[a.tipo] || []).filter(x => !x.substituido).slice(-1)[0]; if (atual) p.docs[a.tipo] = atual.url; else delete p.docs[a.tipo]; }
+    }
+    logAction('excluir', 'PROCESSOS', pid, `Invoice/contrato versão ${v.versao} apagados (lixeira do Drive): ${nomes}`);
+    await saveToSheets(); hideSyncIndicator(); showToast(`🗑 Versão ${v.versao} apagada (está na lixeira do Drive por 30 dias)`); render();
+  } catch (e) { hideSyncIndicator(); showToast('⚠️ Não consegui apagar: ' + (e.message || e)); }
+}
 // página do processo: botão e aviso de NCM
 if (typeof renderProcesso2 === 'function' && !renderProcesso2._dv) {
   const base = renderProcesso2;
@@ -703,7 +733,10 @@ if (typeof renderProcesso2 === 'function' && !renderProcesso2._dv) {
     const a = dvAvisoNcm(p);
     const aviso = a ? `<div style="font-size:12.5px;color:var(--orange);background:rgba(251,146,60,.14);border-radius:8px;padding:8px 10px;margin-top:6px">⚠️ A NF ${escHtml(a.numero)} de ${escHtml(a.emitente)} diz NCM <b>${escHtml(dvNcmFmt(a.nf))}</b>, mas ${a.gerado ? 'a invoice e o contrato gerados dizem' : 'o processo diz'} <b>${escHtml(dvNcmFmt(a.doc))}</b>.
       <span style="display:inline-flex;gap:6px;flex-wrap:wrap;margin-top:4px"><button class="btn btn-secondary btn-xs" onclick="gerarDocVendaUI('${escHtml(p.id)}','${a.nf}')">Gerar nova versão com ${escHtml(dvNcmFmt(a.nf))}</button><button class="btn btn-secondary btn-xs" onclick="dvManterNcm('${escHtml(p.id)}')">Manter ${escHtml(dvNcmFmt(a.doc))}</button></span></div>` : '';
-    const info = g ? `<div style="font-size:11.5px;color:var(--muted2);margin-top:4px">Gerados pelo ERP: versão ${g.versao} · ${escHtml(g.comprador)}${g.notify ? ' (consignee ' + escHtml(g.consignatario) + ')' : ''} · ${fmtKg(g.kg)} kg × USD ${Number(g.preco).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })} = USD ${fmt(g.total)} · NCM ${escHtml(dvNcmFmt(g.ncm))}</div>` : '';
+    const velhas = dvVersoes(p).filter(x => x.substituida);
+    const rotDoc = t => (t === 'invoice' ? 'Invoice' : 'Sales Contract');
+    const listaVelhas = velhas.length ? `<div style="font-size:12px;color:var(--muted2);margin-top:6px;display:flex;flex-direction:column;gap:4px">${velhas.map(x => `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span>Versão ${x.versao} (substituída): ${x.arquivos.map(a => a.f.url ? `<a href="${sanitizeUrl(a.f.url)}" target="_blank" rel="noopener noreferrer" style="color:var(--muted2)">${rotDoc(a.tipo)}</a>` : rotDoc(a.tipo)).join(' · ')}</span><button class="btn btn-danger btn-xs" style="padding:3px 8px" onclick="dvApagarVersao('${escHtml(p.id)}',${x.versao})">🗑 Apagar esta versão</button></div>`).join('')}</div>` : '';
+    const info = g ? `<div style="font-size:11.5px;color:var(--muted2);margin-top:4px">Gerados pelo ERP: versão ${g.versao} · ${escHtml(g.comprador)}${g.notify ? ' (consignee ' + escHtml(g.consignatario) + ')' : ''} · ${fmtKg(g.kg)} kg × USD ${Number(g.preco).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })} = USD ${fmt(g.total)} · NCM ${escHtml(dvNcmFmt(g.ncm))}</div>${listaVelhas}` : listaVelhas;
     const ni = dvInterno(p);
     const linhaNome = `<div style="font-size:12.5px;color:#E0E7FF;margin-top:2px">Interno: ${escHtml(ni.inter || '—')} · ${escHtml(ni.prod || '—')} <a href="#" onclick="editarNomeInternoUI('${escHtml(p.id)}');return false" style="color:#BFDBFE;font-size:12px">editar</a></div>`;
     h = h.replace(`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">`, linhaNome + `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">`);
