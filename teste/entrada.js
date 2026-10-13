@@ -64,7 +64,9 @@ async function _ensureTestSheet() {
 // Carrega e garante que nenhum processo aponte para pastas da produção
 async function loadFromSheets() {
   await ensureTestSheet();
+  const marcaAntes = await _lerMarca();   // v86: qual foi a última gravação que estes dados já incluem
   await _loadFromSheetsBase();
+  _fotoBase86(); _marcaVista = marcaAntes;   // v86: como a planilha estava ao abrir (para juntar com o que outro aparelho gravar)
   let changed = 0;
   (S.processos || []).forEach(p => {
     if (p.docs && p.docs._folderId && !p.docs[FLAG_PASTA]) {
@@ -89,16 +91,103 @@ let _carregadoEm = '';
 async function _lerMarca() {
   try { const r = await sheetsAPI('GET', `/${SHEET_ID}/values/CONFIG!E1`); return String(((r.values || [])[0] || [])[0] || ''); } catch (e) { return ''; }
 }
+let _marcaVista = '';   // v86: marca da última gravação que este aparelho já tem (dele ou de outro lugar)
 async function _gravarMarca() {
-  try { await sheetsAPI('PUT', `/${SHEET_ID}/values/CONFIG!D1:E1?valueInputOption=RAW`, { values: [['ultima_gravacao', _SESSAO + '|' + new Date().toISOString()]] }); } catch (e) {}
+  const v = _SESSAO + '|' + new Date().toISOString();
+  try { await sheetsAPI('PUT', `/${SHEET_ID}/values/CONFIG!D1:E1?valueInputOption=RAW`, { values: [['ultima_gravacao', v]] }); return v; } catch (e) { return ''; }
+}
+// ── v86: gravação segura com dois aparelhos ou abas abertos ──
+// A gravação reescreve a planilha inteira. Se outro lugar gravou depois que este abriu, antes de gravar
+// o sistema lê a planilha e junta: o que só o outro lugar mudou entra aqui; o que os dois mudaram fica
+// como está aqui; arquivo anexado lá nunca é apagado; registro criado lá (processo, lançamento...) é mantido.
+const _ABAS86 = [['PROCESSOS', 'processos'], ['CLIENTES', 'clientes'], ['FORNECEDORES', 'fornecedores'], ['EXTRATO_CAIXA', 'lancamentos'], ['CUSTOS_FIXOS', 'custosMensais']];
+let _base86 = null;
+const _copia86 = o => (o === undefined ? undefined : JSON.parse(JSON.stringify(o)));
+const _ehObj86 = v => !!v && typeof v === 'object' && !Array.isArray(v);
+const _ehListaArq86 = v => Array.isArray(v) && v.length > 0 && v.every(x => _ehObj86(x) && (x.id || x.url));
+function _estavel86(v) {
+  if (v === undefined || v === null || typeof v !== 'object') return JSON.stringify(v === undefined ? null : v);
+  if (Array.isArray(v)) return '[' + v.map(_estavel86).join(',') + ']';
+  return '{' + Object.keys(v).filter(k => v[k] !== undefined).sort().map(k => JSON.stringify(k) + ':' + _estavel86(v[k])).join(',') + '}';
+}
+function _fotoBase86() {
+  try { const b = {}; _ABAS86.forEach(([aba, k]) => { const m = {}; (S[k] || []).forEach(o => { if (o && o.id) m[o.id] = _copia86(o); }); b[aba] = m; }); _base86 = b; }
+  catch (e) { console.warn('foto da planilha', e); _base86 = null; }
+}
+// junta "r" (o que está na planilha) em "l" (este aparelho), sabendo como era ao abrir ("b"); muda "l" no lugar
+function _juntaEm86(b, l, r) {
+  const bb = _ehObj86(b) ? b : {}; let n = 0;
+  new Set([...Object.keys(l), ...Object.keys(r), ...Object.keys(bb)]).forEach(k => {
+    const bk = bb[k], lk = l[k], rk = r[k];
+    const sb = _estavel86(bk), sr = _estavel86(rk); if (sr === sb) return;     // o outro lugar não mexeu
+    const sl = _estavel86(lk); if (sl === sr) return;
+    if (_ehObj86(lk) && _ehObj86(rk)) { n += _juntaEm86(bk, lk, rk); return; }
+    if (sl === sb) {                                                           // só o outro lugar mexeu
+      if (rk === undefined) delete l[k];
+      else if (Array.isArray(lk) && Array.isArray(rk)) lk.splice(0, lk.length, ..._copia86(rk));
+      else l[k] = _copia86(rk);
+      n++; return;
+    }
+    if ((Array.isArray(lk) || lk === undefined) && _ehListaArq86(rk)) {        // os dois mexeram numa lista de arquivos: soma o que foi anexado lá
+      const ch = x => x.id || x.url, temL = new Set((lk || []).map(ch)), temB = new Set((Array.isArray(bk) ? bk : []).map(ch));
+      const novos = rk.filter(x => !temL.has(ch(x)) && !temB.has(ch(x)));
+      if (novos.length) { if (!Array.isArray(l[k])) l[k] = []; l[k].push(..._copia86(novos)); n += novos.length; }
+    }
+    // os dois mexeram no mesmo campo: fica o deste aparelho
+  });
+  return n;
+}
+function _normaliza86(aba, o) {   // igual à leitura da planilha ao abrir
+  const num = ks => ks.forEach(k => { o[k] = parseFloat(o[k]) || 0; });
+  const docs = () => { if (o.docs && typeof o.docs === 'string') { try { o.docs = JSON.parse(o.docs); } catch (e) { o.docs = {}; } } else if (!o.docs) o.docs = {}; };
+  if (aba === 'PROCESSOS') {
+    num(['custoMaritimo', 'custoFrete', 'custoCertificado', 'custoArmazem', 'custoPorto', 'custoDespachante', 'custoServTerceiros', 'custoImpostos', 'custoProduto', 'cambioInvoice', 'cambioTaxa', 'cambioReais', 'cambioIOF', 'cambioSpread', 'cambioRecebido']);
+    if (typeof calcTaxa === 'function') o.cambioTaxa = calcTaxa(o.cambioReais, o.cambioRecebido);
+    if (o.containers && typeof o.containers === 'string') { try { const x = JSON.parse(o.containers); o.containers = Array.isArray(x) && x.length > 0 ? x : [o.container || '']; } catch (e) { o.containers = [o.container || '']; } }
+    else if (!Array.isArray(o.containers) || !o.containers.length) o.containers = [o.container || ''];
+    docs();
+  } else if (aba === 'EXTRATO_CAIXA') { o.valor = parseFloat(o.valor) || 0; docs(); }
+  else if (aba === 'CUSTOS_FIXOS') { num(['contador', 'aluguel', 'software', 'internet', 'telefone', 'impostos', 'outros']); docs(); }
+  return o;
+}
+async function _juntarComPlanilha86() {
+  if (!_base86) return null;
+  const abas = _ABAS86.map(a => a[0]);
+  const res = await sheetsAPI('GET', `/${SHEET_ID}/values:batchGet?ranges=${abas.join('&ranges=')}&majorDimension=ROWS`);
+  let n = 0;
+  (res.valueRanges || []).forEach((vr, i) => {
+    const [aba, chave] = _ABAS86[i], vals = (vr && vr.values) || [];
+    if (vals.length < 2 || !Array.isArray(S[chave])) return;   // aba vazia (ou no meio de outra gravação): não usa
+    const hs = vals[0], base = _base86[aba] || {}, meus = {}, deLa = new Set();
+    S[chave].forEach(o => { if (o && o.id) meus[o.id] = o; });
+    vals.slice(1).forEach(row => {
+      const o = {}; hs.forEach((h, j) => { o[h] = row[j] || ''; }); if (!o.id) return;
+      const r = _normaliza86(aba, o), l = meus[r.id], b = base[r.id]; deLa.add(r.id);
+      if (!l) { if (!b) { S[chave].push(r); n++; } return; }                 // criado no outro lugar (apagado aqui: não volta)
+      n += _juntaEm86(b || {}, l, r);
+    });
+    // apagado no outro lugar (ex.: lançamento repetido): sai daqui também, se aqui não mudou
+    if (deLa.size >= Object.keys(base).length / 2) {
+      for (let i = S[chave].length - 1; i >= 0; i--) { const o = S[chave][i], b = o && o.id && base[o.id];
+        if (b && !deLa.has(o.id) && _estavel86(o) === _estavel86(b)) { S[chave].splice(i, 1); n++; } }
+    }
+  });
+  return { n };
 }
 const _saveToSheetsBase = saveToSheets;
 let _conflitoAberto = false;
 saveToSheets = async function () {
   await ensureTestSheet();
   if (_carregadoEm && !_conflitoAberto) {
-    const [sid, quando] = (await _lerMarca()).split('|');
-    if (sid && sid !== _SESSAO && quando > _carregadoEm) {
+    const marca = await _lerMarca(), [sid, quando] = marca.split('|');
+    // outro lugar gravou depois da última gravação que este aparelho tem (pela marca, não pelo relógio dos aparelhos)
+    const outro = !!(sid && sid !== _SESSAO && marca !== _marcaVista);
+    let jr = null;
+    if (outro) {
+      try { jr = await _juntarComPlanilha86(); } catch (e) { console.warn('juntar com a planilha', e); }
+      if (jr) { _marcaVista = marca; if (jr.n) showToast(`🔄 Juntei com o que foi feito em outro aparelho ou aba às ${new Date(quando).toLocaleTimeString('pt-BR')}`); }
+    }
+    if (outro && !jr) {
       _conflitoAberto = true;
       const recarregar = await uiConfirm(`Os dados foram alterados em outro aparelho ou aba às ${new Date(quando).toLocaleTimeString('pt-BR')}, depois que você abriu esta tela.\n\nSe salvar agora, o que foi feito lá pode ser perdido. Recarregar os dados antes? (a sua última alteração precisará ser refeita)`, 'Alterações em outro lugar', 'Recarregar', 'Salvar mesmo assim');
       _conflitoAberto = false;
@@ -111,8 +200,11 @@ saveToSheets = async function () {
   try { if (typeof lancamentosDeCustoViramBaixa === 'function' && lancamentosDeCustoViramBaixa() && typeof salvarBanco === 'function') salvarBanco().catch(() => {}); if (typeof ajustarInvoiceTransferida === 'function') ajustarInvoiceTransferida(); } catch (e) { console.warn('baixas', e); }
   try { if (typeof juntarProcessosRenumerados === 'function') juntarProcessosRenumerados(); if (typeof aplicarPrevistos === 'function') (S.processos || []).forEach(p => aplicarPrevistos(p)); } catch (e) { console.warn('previstos', e); }
   const r = await _saveToSheetsBase.apply(this, arguments);
-  await _gravarMarca();
-  _carregadoEm = new Date().toISOString();
+  if (r === true) {   // v86: só conta como gravado se gravou (antes marcava mesmo com erro de rede)
+    const v = await _gravarMarca(); if (v) _marcaVista = v;
+    _carregadoEm = new Date().toISOString();
+    _fotoBase86();    // a planilha agora é o que este aparelho gravou
+  }
   // gravou: o backup do navegador passa a ser a cópia do que está na planilha (não é mais oferecido para restaurar)
   if (r === true) { try { localStorage.setItem('teste:erp-local-backup', JSON.stringify({ processos: S.processos, clientes: S.clientes, fornecedores: S.fornecedores, lancamentos: S.lancamentos, custosMensais: S.custosMensais, savedAt: Date.now(), sincronizado: true })); } catch (e) { try { localStorage.removeItem('teste:erp-local-backup'); } catch (_) {} } }
   return r;

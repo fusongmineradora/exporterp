@@ -10,7 +10,7 @@ function mk(store){
   const fld=(id,name,parent)=>add({id,name,mimeType:FOLDER,parents:parent?[parent]:[]});
   const pdf=(name,parent,body)=>add({name,mimeType:'application/pdf',parents:[parent],body});
   const png=(name,parent,ocr,md5)=>add({name,mimeType:'image/png',parents:[parent],size:'300000',md5Checksum:md5||('png_'+(++seq)),ocr});
-  const setRange=(range,values)=>{const m=range.match(/^'?([^'!]+)'?!?([A-Z]+)?(\d+)?/); const t=m[1]; const r0=(m[3]?+m[3]:1)-1; store[t]=store[t]||[]; values.forEach((v,i)=>store[t][r0+i]=v);};
+  const setRange=(range,values)=>{const m=range.match(/^'?([^'!]+)'?!?([A-Z]+)?(\d+)?/); const t=m[1]; const r0=(m[3]?+m[3]:1)-1; const c0=m[2]?[...m[2]].reduce((a,ch)=>a*26+ch.charCodeAt(0)-64,0)-1:0; store[t]=store[t]||[]; values.forEach((v,i)=>{ if(!c0){ store[t][r0+i]=v; return; } const row=(store[t][r0+i]||[]).slice(); v.forEach((x,j)=>row[c0+j]=x); for(let k=0;k<c0;k++) if(row[k]===undefined) row[k]=''; store[t][r0+i]=row; });};
   const clearRange=(range)=>{const m=range.match(/^'?([^'!]+)'?(?:!([A-Z]+)(\d+))?/); const t=m[1]; if(!store[t]) return; const r0=m[3]?+m[3]-1:0; store[t]=store[t].slice(0,r0);};
   const listQ=(q)=>{ let r=Object.values(D).filter(f=>!f.trashed);
     const pm=q.match(/'([^']+)' in parents/); if(pm) r=r.filter(f=>f.parents.includes(pm[1]));
