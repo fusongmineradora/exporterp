@@ -159,7 +159,7 @@ const DUPLICADOS_FOLDER = '🔁 Duplicados';
 const ENTRADA_TIPOS = [
   ['invoice', 'Invoice'], ['contrato', 'Contrato'], ['packingList', 'Packing List'], ['bl', 'BL'],
   ['due', 'DU-E'], ['nfe', 'NF-E Entrada'], ['nfeSaida', 'NF-E Saída'], ['cte', 'CT-e (frete)'],
-  ['mdfe', 'MDF-e'], ['nfse', 'NFS-e (serviço)'], ['recibo', 'Recibo / RPA'], ['comprovantes', 'Comprovantes Câmbio'], ['certOrigem', 'Cert. Origem'],
+  ['mdfe', 'MDF-e'], ['booking', 'Booking (reserva)'], ['nfse', 'NFS-e (serviço)'], ['recibo', 'Recibo / RPA'], ['comprovantes', 'Comprovantes Câmbio'], ['certOrigem', 'Cert. Origem'],
   ['seguro', 'Seguro de Carga'], ['pesagem', 'Pesagem'], ['pagamento', 'Comprovante de Pagamento'],
   ['faturaFrete', 'Fatura de frete (agente)'], ['planilhaCambio', 'Planilha de câmbio (banco)'], ['boleto', 'Boleto (cobrança)'], ['outros', 'Outros Documentos'],
 ];
@@ -387,6 +387,15 @@ function categoriaPeloNome(N) {
 }
 
 // Contrato de câmbio do Itaú: referência, valores e as faturas (processos) que ele paga
+// número digitado nas telas: aceita "0,53", "0.53", "6500.50", "6.500,50", "13.500" (ponto com 3 casas = milhar) — 13/10/2026
+function numEntrada(s) {
+  s = String(s == null ? '' : s).trim().replace(/[^\d.,-]/g, '');
+  if (!s) return 0;
+  if (s.includes(',')) return numBR(s);
+  const ps = s.split('.');
+  if (ps.length === 2 && ps[1].length !== 3) return Number(s) || 0;   // um ponto sem 3 casas depois = decimal
+  return Number(s.replace(/\./g, '')) || 0;
+}
 function numBR(s) { // "53.238,18" | "10,740.00" | "4,957000000"
   s = String(s || '').trim();
   if (/^\d{1,3}(,\d{3})+\.\d+$/.test(s)) return Number(s.replace(/,/g, ''));
@@ -523,6 +532,10 @@ function normTxt(s) { return String(s || '').toUpperCase().replace(/\s+/g, ' ');
 function classificarDocumento(texto, nome) {
   const T = normTxt(texto), N = normTxt(nome);
   const C = T.replace(/\s+/g, '');
+  // confirmação / atualização de booking (reserva no navio): não é o BL — só traz o booking (v78)
+  if (!/SHIPPEDONBOARD/.test(C) && (/(ATUALIZA[CÇ][AÃ]O|CONFIRMA[CÇ][AÃ]O|ALTERA[CÇ][AÃ]O)\s+DE\s+(BOOKING|RESERVA)|BOOKING\s+(CONFIRMATION|AMENDMENT|UPDATE)/.test(T) || (/\bBOOKING\b/.test(N) && !/\bB\/?L\b|BILL OF LADING/.test(N)))) {
+    return { tipo: 'booking', confianca: 'alta', motivo: 'confirmação de booking' };
+  }
   if (/WAYBILL|BILLOFLADING/.test(C) && /SHIPPEDONBOARD|BOOKINGNO|PORTOFLOADING/.test(C) && !chavesDoTexto(String(texto || '')).length) {
     return { tipo: 'bl', confianca: 'alta', motivo: 'BL / waybill' };
   }
@@ -597,6 +610,34 @@ function identificarProcesso(info, texto, nome) {
   return cands.sort((a, b) => b.score - a.score);
 }
 
+// Documento que cita outro do MESMO lote da Entrada (MDF-e → CT-e, CT-e → NF-e): vai para o mesmo processo,
+// sem precisar anexar um antes do outro (13/10/2026). Escolha manual nunca é trocada.
+const _ordemConf = { nenhuma: 0, media: 1, alta: 2, manual: 2 };
+function ligarPeloLote(lista) {
+  lista = lista || (S.entrada && S.entrada.itens) || [];
+  const rotulo = it => { const t = (ENTRADA_TIPOS.find(x => x[0] === it.tipo) || [])[1] || it.tipo; return t + (it.info && it.info.numero ? ' ' + String(it.info.numero).replace(/^0+/, '') : ''); };
+  for (let volta = 0; volta < 3; volta++) {
+    const porChave = {};
+    lista.forEach(it => { const ch = it.info && it.info.chave; if (ch && it.tipo && it.processo && it.processo !== '__ADM') porChave[ch] = it; });
+    let mudou = false;
+    lista.forEach(it => {
+      if (!it.info || it.confianca === 'manual') return;
+      if (it.processo && !it._peloLote) return;   // o próprio documento já disse o processo
+      const fonte = [...(it.info.refs || []), ...(it.info.outrasChaves || [])].map(ch => porChave[ch]).find(x => x && x !== it);
+      if (!fonte || it.processo === fonte.processo) return;
+      if (it._confBase == null) it._confBase = it.confianca || 'nenhuma';
+      it.processo = fonte.processo; it._peloLote = true;
+      it.confianca = _ordemConf[fonte.confianca] >= 2 && _ordemConf[it._confBase] >= 2 ? 'alta' : (it.tipo ? 'media' : it._confBase);
+      const mot = 'cita o ' + rotulo(fonte) + ' que está na Entrada (' + fonte.processo + ')';
+      it.candidatos = [{ id: fonte.processo, score: 100, motivos: [mot] }].concat((it.candidatos || []).filter(c => c.id !== fonte.processo));
+      it.duplicado = procurarDuplicado(it);
+      mudou = true;
+    });
+    if (!mudou) break;
+  }
+  return lista;
+}
+
 function procurarDuplicado(item) {
   for (const p of S.processos || []) {
     const files = (p.docs && p.docs._files) || {};
@@ -637,6 +678,7 @@ async function lerEntrada() {
     itens.forEach(it => { if (!it.md5) return; if (vistos[it.md5] && !it.duplicado) it.duplicado = { processo: 'Entrada', nome: vistos[it.md5], motivo: 'arquivo idêntico na Entrada' }; else vistos[it.md5] = it.nome; });
     if (gen !== window._lerEntradaGen) return;   // uma leitura mais nova já está valendo
     E.itens = itens; E.lido = true;
+    try { ligarPeloLote(E.itens); } catch (e) { console.warn('lote', e); }
     const planilhas = itens.filter(it => it.tipo === 'planilhaCambio');
     if (planilhas.length && typeof aplicarMapaCambio === 'function') {
       E.progresso = 'Aplicando a planilha de câmbio do banco...'; render();
@@ -650,6 +692,7 @@ async function lerEntrada() {
       }
       E.itens = itens.filter(it => it.tipo !== 'planilhaCambio');
       E.itens.forEach(it => { try { identificarItem(it); } catch (e) {} });
+      try { ligarPeloLote(E.itens); } catch (e) {}
       try { await saveToSheets(); } catch (e) {}
     }
   } catch (e) {
@@ -720,7 +763,7 @@ async function analisarArquivo(f) {
 function identificarItem(item) {
   const nome = item.nome || '';
   if (item._base) { item.tipo = item._base.tipo; item.confianca = item._base.confianca; item.motivo = item._base.motivo; }
-  ['processo', 'pastaErrada', 'corrigido', 'aviso', 'processosExtras', 'divisao', 'admAuto'].forEach(k => delete item[k]);
+  ['processo', 'pastaErrada', 'corrigido', 'aviso', 'processosExtras', 'divisao', 'admAuto', '_peloLote', '_confBase'].forEach(k => delete item[k]);
   if (item.tipo === 'planilhaCambio') { item.processo = '__CAMBIO'; return item; }
   // câmbio: número antigo → novo (FS260105 → FS260107) e "S" → principal (FS260109S recebe pelo FS260109)
   if (item.info && item.info.cambio && Array.isArray(item.info.cambio.faturas)) {
@@ -963,7 +1006,7 @@ function nomePadrao(item, p) {
 }
 
 // pasta do processo (oficial): cada documento vai para a subpasta de sempre
-const SUBPASTA_DO_TIPO = { invoice: '01 Comercial', contrato: '01 Comercial', packingList: '01 Comercial', nfe: '02 Fiscal', nfeSaida: '02 Fiscal', nfse: '02 Fiscal', cte: '03 Transporte', mdfe: '03 Transporte', pesagem: '03 Transporte', bl: '04 Embarque', due: '04 Embarque', certOrigem: '04 Embarque', seguro: '04 Embarque', pagamento: '05 Financeiro', comprovantes: '05 Financeiro', recibo: '05 Financeiro', faturaFrete: '05 Financeiro', outros: '06 Fotos' };
+const SUBPASTA_DO_TIPO = { invoice: '01 Comercial', contrato: '01 Comercial', packingList: '01 Comercial', nfe: '02 Fiscal', nfeSaida: '02 Fiscal', nfse: '02 Fiscal', cte: '03 Transporte', mdfe: '03 Transporte', pesagem: '03 Transporte', bl: '04 Embarque', booking: '04 Embarque', due: '04 Embarque', certOrigem: '04 Embarque', seguro: '04 Embarque', pagamento: '05 Financeiro', comprovantes: '05 Financeiro', recibo: '05 Financeiro', faturaFrete: '05 Financeiro', outros: '06 Fotos' };
 async function confirmarEntrada(i, silencioso) {
   const E = S.entrada, item = E.itens[i];
   if (!item || item.salvando) return;
@@ -1158,7 +1201,7 @@ function setInfoEntrada(i, campo, valor) {
   const it = S.entrada.itens[i];
   if (!it) return;
   it.info = it.info || {};
-  if (campo === 'valor') { it.info.valor = numBR(String(valor).replace(/[^\d.,]/g, '')) || 0; it.valorManual = true; if (it.info.pagamento) it.info.pagamento.valor = it.info.valor; }
+  if (campo === 'valor') { it.info.valor = numEntrada(valor) || 0; it.valorManual = true; if (it.info.pagamento) it.info.pagamento.valor = it.info.valor; }
   else it.info[campo] = valor;
   render();
 }
@@ -1167,6 +1210,7 @@ function setEntrada(i, campo, valor) {
   if (!it) return;
   it[campo] = valor;
   if (campo === 'tipo' || campo === 'processo') { it.confianca = 'manual'; it.duplicado = procurarDuplicado(it); }
+  if (campo === 'processo' || campo === 'tipo') { try { ligarPeloLote(S.entrada.itens); } catch (e) {} }   // quem cita este documento acompanha
   render();
 }
 
