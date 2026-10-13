@@ -720,14 +720,15 @@ async function textoDoArquivo(f) {
   return { texto: await pdfTexto(buf) };
 }
 async function relerDocsProcessos(forcar) {
-  const ps = (S.processos || []).filter(p => p.status !== 'Cancelado' && (forcar || !(p.docs && p.docs._relido84)));
+  const ps = (S.processos || []).filter(p => p.status !== 'Cancelado' && (forcar || !(p.docs && p.docs._relido85)));
   const norm = c => String(c || '').toUpperCase().replace(/[\s-]/g, '');
   let mud = 0;
   for (const p of ps) {
     p.docs = p.docs || {}; p.docs._files = p.docs._files || {};
-    // BLs (e a confirmação de booking que tinha entrado como BL)
+    // BLs (e a confirmação de booking que tinha entrado como BL) — a releitura automática da v85 é só das DU-Es
+    const soDue = !forcar && p.docs._relido84;
     const lidos = [];
-    for (const f of (p.docs._files.bl || []).slice()) {
+    for (const f of (soDue ? [] : (p.docs._files.bl || []).slice())) {
       if (!idArq(f)) continue;
       try {
         const { texto } = await textoDoArquivo(f); if (!texto) continue;
@@ -802,6 +803,7 @@ async function relerDocsProcessos(forcar) {
     if (!p.docs._relido82) { p.docs._relido82 = true; mud++; }
     if (!p.docs._relido83) { p.docs._relido83 = true; mud++; }
     if (!p.docs._relido84) { p.docs._relido84 = true; mud++; }
+    if (!p.docs._relido85) { p.docs._relido85 = true; mud++; }
   }
   return { mud, n: ps.length };
 }
@@ -810,7 +812,7 @@ let _relendo = false;
 (function agendarReleitura() {
   const t = setInterval(async () => {
     if (_relendo || !window._sheetsToken || !(S.processos || []).length || typeof aplicarBL !== 'function') return;
-    if (!(S.processos || []).some(p => p.status !== 'Cancelado' && !(p.docs && p.docs._relido84))) { clearInterval(t); return; }
+    if (!(S.processos || []).some(p => p.status !== 'Cancelado' && !(p.docs && p.docs._relido85))) { clearInterval(t); return; }
     _relendo = true; clearInterval(t);
     try { const r = await relerDocsProcessos(false); if (typeof aplicarValorExportadoDecidido === 'function') r.mud += aplicarValorExportadoDecidido(); if (typeof aplicarUsosSaldoDecididos === 'function') r.mud += aplicarUsosSaldoDecididos(); if (r.mud) { autoUpdateStatus(); await saveToSheets(); render(); } } catch (e) { console.warn('releitura', e); }
     _relendo = false;

@@ -230,7 +230,14 @@ async function pdfTexto(buf) {
   for (let i = 1; i <= n; i++) {
     const page = await doc.getPage(i);
     const tc = await page.getTextContent();
-    out += tc.items.map(it => it.str + (it.hasEOL ? '\n' : ' ')).join('') + '\n';
+    // v85: o pdf.js do navegador quebra o texto depois de "-" e "/" ("DU-" + "E", "NF-" + "e 001/...", "S/" + "A");
+    // nesses pontos junta sem espaço, senão "DU- E" e "NF- e" não eram reconhecidos (DU-E sem nota de saída e sem situação)
+    const its = tc.items;
+    out += its.map((it, i) => {
+      if (it.hasEOL) return it.str + '\n';
+      const prox = its[i + 1];
+      return it.str + ((/\S[-\/]$/.test(it.str || '') && prox && /^\S/.test(prox.str || '')) ? '' : ' ');
+    }).join('') + '\n';
   }
   return out;
 }
