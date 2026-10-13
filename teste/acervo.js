@@ -1435,7 +1435,8 @@ function juntarProcessosRenumerados() {
 const PREVISTOS_PADRAO = [
   { campo: 'custoServTerceiros', nome: 'Assessoria (Ademir / FFA)', valor: 1200, por: 'container' },
   { campo: 'custoDespachante', nome: 'Despachante (CGA)', valor: 500, por: 'processo', certificado: 50 },
-  { campo: 'custoArmazem', nome: 'Armazém (estimado)', valor: 3200, por: 'container', soArmazem: true },
+  // armazém: Santos R$ 3.200, Salvador R$ 1.100 por container (12/10/2026)
+  { campo: 'custoArmazem', nome: 'Armazém (estimado)', valor: 3200, valorSalvador: 1100, por: 'container', soArmazem: true, porPorto: true },
   // frete marítimo (CFR/CIF): depende do porto de embarque — Santos R$ 6.500, Salvador R$ 11.500 por container (12/10/2026)
   { campo: 'custoMaritimo', nome: 'Frete marítimo (estimado)', valor: 6500, valorSalvador: 11500, por: 'container', porPorto: true },
 ];
@@ -1472,7 +1473,7 @@ function aplicarPrevistos(p) {
     const real = (reg && ((reg.fiscais || []).length || (reg.pagos || []).length)) || (p.docs._costBanco && p.docs._costBanco[r.campo])
       || (S.lancamentos || []).some(l => l.vinculo === 'processo' && l.vinculoId === p.id && l.categoria === PROCESS_COST_FIELDS[r.campo] && l.status !== 'Cancelado');
     if (real) { if (pv[r.campo]) { delete pv[r.campo]; mud++; } return; }   // chegou o valor real: deixa de ser previsto
-    if (p.status === 'Cancelado' || off[r.campo] || valorDaRegra(r, p) <= 0 || (r.soArmazem && !vaiProArmazem(p)) || (r.porPorto && freteDoComprador(p))) { tirar(r.campo); return; }
+    if (p.status === 'Cancelado' || off[r.campo] || valorDaRegra(r, p) <= 0 || (r.soArmazem && !vaiProArmazem(p)) || (r.campo === 'custoMaritimo' && freteDoComprador(p))) { tirar(r.campo); return; }
     if (Number(p[r.campo]) > 0 && !pv[r.campo]) return;                    // valor digitado por você antes: não mexe
     if (pv[r.campo] && Math.abs((Number(p[r.campo]) || 0) - (Number(pv[r.campo].valor) || 0)) >= 0.01) {  // você alterou o valor
       if (!(Number(p[r.campo]) > 0)) { tirar(r.campo); return; }
@@ -1811,7 +1812,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '76';
+const VERSAO_TESTE = '77';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
