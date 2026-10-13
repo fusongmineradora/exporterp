@@ -386,20 +386,53 @@ function enriquecerInfo(item) {
     info.armador = /\bMSC\b/.test(info.navio) ? 'MSC' : /MAERSK/.test(info.navio) ? 'MAERSK' : /COSCO/.test(info.navio) ? 'COSCO' : /CMA/.test(info.navio) ? 'CMA CGM' : /HAPAG/.test(info.navio) ? 'Hapag-Lloyd' : /EVERGREEN/.test(info.navio) ? 'Evergreen' : '';
   }
   if (item.tipo === 'bl') {
+    // BL / waybill: Maersk ("Booking No. 2761xxxxx", "Shipped on Board Date AAAA-MM-DD") e MSC
+    // ("BOOKING REF. EBKGxxxxxxxx", "SHIPPED ON BOARD DATE dd-Mon-aaaa", navio "MSC NOME - VIAGEM").
+    // O BL é o documento oficial da companhia marítima: o que ele diz vale sobre o processo (v78).
     const C = T.replace(/\s+/g, '');
     const cx = re => { const m = C.match(re); return m ? m[1] : ''; };
-    info.booking = info.booking || cx(/BookingNo\.?(\d{8,12})/i) || cx(/B\/LNo\.?:?(\d{8,12})/i) || cx(/B\/L:(\d{8,12})/i);
+    info.booking = info.booking || cx(/BookingNo\.?(\d{8,12})/i) || cx(/B\/LNo\.?:?(\d{8,12})/i) || cx(/B\/L:(\d{8,12})/i) || ((U.match(/\b(EBKG\d{6,10})\b/) || [])[1] || '');
+    info.blNumero = ((U.match(/\b(MEDU[A-Z]{0,2}\d{6,8})\b/) || [])[1]) || cx(/B\/L:(\d{8,12})/i) || info.booking;
     const emb = cx(/ShippedonBoardDate(?:\(LocalTime\))?:?(\d{4}-\d{2}-\d{2})/i) || cx(/ShippedonBoard[^0-9]{0,40}(\d{4}-\d{2}-\d{2})/i);
-    const emb2 = !emb && (C.match(/ShippedonBoard[^0-9]{0,40}(\d{2})[\/.-](\d{2})[\/.-](\d{4})/i));
-    info.embarque = emb ? emb.split('-').reverse().join('/') : emb2 ? `${emb2[1]}/${emb2[2]}/${emb2[3]}` : '';
+    const emb2 = !emb && (C.match(/ShippedonBoard[^0-9]{0,40}(\d{2})[\/.](\d{2})[\/.](\d{4})/i));
+    // MSC: "05-Oct-2026" perto de "SHIPPED ON BOARD DATE" (vale a data que mais aparece; empate = a mais recente)
+    let emb3 = '';
+    if (!emb && !emb2) {
+      const MES = { JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06', JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12' };
+      const cont = {};
+      [...U.matchAll(/SHIPPED\s+ON\s+BOARD(?:\s+DATE)?/gi)].forEach(m => {
+        const trecho = U.slice(m.index, m.index + 220);
+        const d = trecho.match(/\b(\d{1,2})[-\s]([A-Za-z]{3})[-\s](\d{4})\b/);
+        if (d && MES[d[2].toUpperCase()]) { const k = `${d[1].padStart(2, '0')}/${MES[d[2].toUpperCase()]}/${d[3]}`; cont[k] = (cont[k] || 0) + 1; }
+      });
+      const ord = Object.entries(cont).sort((a, b) => b[1] - a[1] || b[0].split('/').reverse().join('').localeCompare(a[0].split('/').reverse().join('')));
+      if (ord[0]) emb3 = ord[0][0];
+    }
+    info.embarque = emb ? emb.split('-').reverse().join('/') : emb2 ? `${emb2[1]}/${emb2[2]}/${emb2[3]}` : emb3;
     info.dueNumero = info.dueNumero || cx(/DU-?E:?(\d{2}BR\d{9}-?\d)/i) || cx(/(\d{2}BR\d{9}-\d)/);
-    info.refProcesso = cx(/INVOICEN[O°º.]*:?(FS\d{6})/i) || ((T.toUpperCase().match(/\bFS\s?\d{6}\b/) || [''])[0].replace(/\s/g, ''));
+    info.refProcesso = cx(/INVOICEN[O°º.]*:?(FS\d{6}S?)/i) || ((T.toUpperCase().match(/\bFS\s?\d{6}S?\b/) || [''])[0].replace(/\s/g, ''));
     const lacres = new Set((U.match(/\b[A-Z]{2}\s?-\s?[A-Z]{2}\d{5,9}\b/g) || []).map(x => x.replace(/\s/g, '')));
     info.containers = [...new Set((C.match(/[A-Z]{3}U\d{7}/g) || []))].filter(c => !lacres.has(c));
     info.lacre = [...lacres][0] || '';
-    info.navio = (U.match(/V\s*e\s*s\s*s\s*e\s*l\s+(.{3,40}?)\s+V\s*o\s*y\s*a\s*g\s*e/i) || [])[1] || '';
-    info.navio = info.navio.replace(/\s+(?=\S\s)/g, m => m).replace(/\s+/g, ' ').trim();
-    info.armador = /MAEU|MAERSK/i.test(C) ? 'MAERSK' : /COSU|COSCO/i.test(C) ? 'COSCO' : /MSCU|\bMSC\b/i.test(C) ? 'MSC' : /CMDU|CMA/i.test(C) ? 'CMA CGM' : /HLCU|HAPAG/i.test(C) ? 'Hapag-Lloyd' : /EGLV|EVERGREEN/i.test(C) ? 'Evergreen' : /YMLU|YANGMING/i.test(C) ? 'Yang Ming' : '';
+    info.navio = (U.match(/V\s*e\s*s\s*s\s*e\s*l\s+(?!AND\b)(.{3,40}?)\s+V\s*o\s*y\s*a\s*g\s*e/i) || [])[1] || '';
+    if (!info.navio) { const mn = U.match(/\b(MSC\s+[A-Z]{3,}(?:\s+[A-Z]{2,})?)\s+-\s+([A-Z0-9]{4,8})\b/); if (mn && !/MEDITERRANEAN/.test(mn[1])) { info.navio = mn[1]; info.viagem = mn[2]; } }
+    if (!info.navio) info.navio = ((U.match(/\bVessel\s+([A-Z][A-Z .\-]{2,30}?)\s+\d{6,}/i) || [])[1] || '').trim();
+    info.navio = info.navio.replace(/\s+/g, ' ').trim();
+    info.armador = /MAEU|MAERSK/i.test(C) ? 'MAERSK' : /COSU|COSCO/i.test(C) ? 'COSCO' : /MEDU|MSCU|\bMSC\b/i.test(C) ? 'MSC' : /CMDU|CMA/i.test(C) ? 'CMA CGM' : /HLCU|HAPAG/i.test(C) ? 'Hapag-Lloyd' : /EGLV|EVERGREEN/i.test(C) ? 'Evergreen' : /YMLU|YANGMING/i.test(C) ? 'Yang Ming' : '';
+    // porto de embarque: Salvador vale sobre Santos (os BLs de Santos citam Santos em cláusulas; os de Salvador citam Salvador como porto)
+    const PORTOS_BR = [['SALVADOR', 'Salvador Port, Brazil'], ['SANTOS', 'Santos Port, Brazil'], ['PARANAGUA', 'Paranaguá Port, Brazil'], ['ITAGUAI', 'Itaguaí Port, Brazil'], ['PECEM', 'Pecém Port, Brazil'], ['SUAPE', 'Suape Port, Brazil']];
+    const UU = semAcento(U);
+    for (const [pn, nome] of PORTOS_BR) { if (new RegExp('\\b' + pn + '\\b').test(UU)) { info.pol = nome; break; } }
+    // porto de destino: só pelos campos do próprio BL (MSC: "PLACE OF DELIVERY : (Combined Transport ONLY…) YANTIAN";
+    // Maersk: "(see clause 1) Santos Qingdao"); se não achar, o destino do processo fica como está
+    const PORTOS_CN = ['XIAMEN', 'QINGDAO', 'YANTIAN', 'SHANGHAI', 'NINGBO', 'TIANJIN', 'XINGANG', 'SHEKOU', 'NANSHA', 'GUANGZHOU', 'DALIAN', 'LIANYUNGANG', 'FUZHOU', 'SHENZHEN'];
+    const pm = UU.match(/PLACE\s+OF\s+DELIVERY\s*:?\s*\(COMBINED\s+TRANSPORT\s+ONLY[^)]*\)\s*([A-Z]{4,})/) || UU.match(/MULTIMODAL\s+TRANSPORT\s+B\/L\.?\s*\(SEE\s+CLAUSE\s+1\)\s+[A-Z]+\s+([A-Z]{4,})/);
+    if (pm && PORTOS_CN.includes(pm[1])) info.pod = pm[1][0] + pm[1].slice(1).toLowerCase() + ', China';
+  }
+  // confirmação de booking (não é o BL): só dá o booking
+  if (item.tipo === 'booking') {
+    info.booking = info.booking || ((U.match(/\b(EBKG\d{6,10})\b/) || [])[1]) || ((U.replace(/\s+/g, '').match(/BookingNo\.?:?(\d{8,12})/i) || [])[1]) || '';
+    info.refProcesso = ((T.toUpperCase().match(/\bFS\s?\d{6}S?\b/) || [''])[0].replace(/\s/g, ''));
   }
   if (item.tipo === 'due') {
     info.dueNumero = info.dueNumero || mx(/\b(\d{2}BR\d{9}-?\d)\b/i);
@@ -464,8 +497,8 @@ function recalcularCustos(p, campo) {
   if (comp && !lanc.comprovante) lanc.comprovante = comp.url;
   const nota = (reg.fiscais || []).find(d => d.url);
   if (nota && !lanc.nfe) lanc.nfe = nota.url;
-  const emp = [...(reg.fiscais || []), ...(reg.pagos || [])].map(d => d.de).find(Boolean);
-  if (emp) { p.docs._costEmpresa = p.docs._costEmpresa || {}; if (!p.docs._costEmpresa[campo]) p.docs._costEmpresa[campo] = titulo(emp); }
+  const docEmp = [...(reg.fiscais || []), ...(reg.pagos || [])].find(d => d && d.de), emp = docEmp ? docEmp.de : '';
+  if (emp) { p.docs._costEmpresa = p.docs._costEmpresa || {}; if (!p.docs._costEmpresa[campo] || nomeDeEstimado(p.docs._costEmpresa[campo])) p.docs._costEmpresa[campo] = (typeof nomeCanonico === 'function' ? nomeCanonico(emp, docEmp.cnpj || '') : '') || titulo(emp); }
 }
 
 function aplicarCambioNoProcesso(p, c, url) {
@@ -492,6 +525,33 @@ function aplicarCambioNoProcesso(p, c, url) {
   return true;
 }
 
+// BL anexado = embarcado. O BL é o documento oficial da companhia marítima: booking, data de embarque,
+// portos, containers, armador e DU-E do BL substituem os do processo (decidido em 13/10/2026). Campo vazio no BL não apaga nada.
+const PORTO_STATUS_FIM = ['No Destino', 'Concluído', 'Cancelado'];
+function aplicarBL(p, info, url, mud) {
+  p.docs = p.docs || {};
+  const antes = {};
+  const set = (k, v) => { if (!v) return; if (String(p[k] || '') !== String(v)) { antes[k] = p[k] || ''; p[k] = v; mud.push(k); } };
+  set('booking', info.booking);
+  set('saida', info.embarque);
+  set('dueNumero', info.dueNumero);
+  set('pol', info.pol);
+  set('pod', info.pod);
+  set('companhia', info.armador);
+  const conts = (info.containers || []).map(c => String(c).toUpperCase().replace(/[\s-]/g, '')).filter(Boolean);
+  if (conts.length) {
+    const atuais = (p.containers || []).map(c => String(c).toUpperCase().replace(/[\s-]/g, '')).filter(Boolean);
+    if (atuais.join(',') !== conts.join(',')) { antes.containers = atuais.join(', '); p.containers = conts.slice(); p.container = conts[0]; p.qtdContainer = String(conts.length); mud.push('container'); }
+  }
+  if (!PORTO_STATUS_FIM.includes(p.status) && p.status !== 'Embarcado') { antes.status = p.status; p.status = 'Embarcado'; mud.push('status'); }
+  const velho = p.docs._bl || {};
+  const novo = { booking: info.booking, embarque: info.embarque, navio: info.navio, viagem: info.viagem, lacre: info.lacre, containers: conts, due: info.dueNumero, pol: info.pol, pod: info.pod, numero: info.blNumero, url: url || velho.url || '' };
+  Object.keys(novo).forEach(k => { const v = novo[k]; if (v == null || v === '' || (Array.isArray(v) && !v.length)) novo[k] = velho[k]; });   // campo vazio não apaga o que já estava
+  p.docs._bl = novo;
+  if (info.navio) p.docs._viagem = Object.assign({}, p.docs._viagem, { navio: info.navio, atd: info.embarque || (p.docs._viagem || {}).atd });
+  const trocas = Object.keys(antes).filter(k => antes[k]).map(k => `${k}: ${antes[k]} → ${k === 'containers' ? conts.join(', ') : p[k]}`);
+  if (trocas.length && typeof logAction === 'function') logAction('editar', 'PROCESSOS', p.id, 'Pelo BL (vale o BL): ' + trocas.join(' · '));
+}
 function aplicarDocNoProcesso(item, p, upd) {
   if (!p) return;
   p.docs = p.docs || {};
@@ -539,15 +599,8 @@ function aplicarDocNoProcesso(item, p, upd) {
     if (somarContainers(p, info.containers)) mud.push('container');
     p.docs._viagem = Object.assign({}, p.docs._viagem, { navio: info.navio, eta: info.eta, atd: info.embarque, refAgente: info.refAgente });
   }
-  if (item.tipo === 'bl') {
-    const set = (k, v) => { if (v && !p[k]) { p[k] = v; mud.push(k); } };
-    set('booking', info.booking);
-    set('saida', info.embarque);
-    set('dueNumero', info.dueNumero);
-    if (info.armador && (!p.companhia || p.companhia === 'MAERSK')) { if (p.companhia !== info.armador) mud.push('companhia'); p.companhia = info.armador; }
-    if (somarContainers(p, info.containers)) mud.push('container');
-    p.docs._bl = { booking: info.booking, embarque: info.embarque, navio: info.navio, lacre: info.lacre, containers: info.containers, due: info.dueNumero };
-  }
+  if (item.tipo === 'bl') aplicarBL(p, info, url, mud);
+  if (item.tipo === 'booking' && info.booking && !p.booking) { p.booking = info.booking; mud.push('booking'); }
   if (info.refProcesso === p.id && item.tipo !== 'bl') {
     if (info.booking && !p.booking) { p.booking = info.booking; mud.push('booking'); }
     if (somarContainers(p, [info.container])) mud.push('container');
@@ -856,6 +909,7 @@ async function executarImportacaoTudo() {
     }
     // ── 5. identifica de novo (agora os processos existem) e anexa o que é seguro ──
     E.itens.forEach(it => { try { identificarItem(it); } catch (e) { console.warn('identificar', it.nome, e); } });
+    try { ligarPeloLote(E.itens); } catch (e) {}
     E.itens.forEach(it => {
       if (it.pastaErrada) rel.pastaErrada.push({ nome: (it.nome || '').replace(/^((?:FS\d{6}S?)(?:\+FS\d{6}S?)*|ADM) - /i, ''), estava: it.pastaErrada.estava.join(', '), certo: it.pastaErrada.certo, motivos: it.pastaErrada.motivos || [], auto: !!it.corrigido });
       else if (it.aviso && /^Conflito/.test(it.aviso)) rel.pastaErrada.push({ nome: it.nome, estava: (it.pastaProcessos || []).join(', '), certo: '?', motivos: [it.aviso], auto: false });
@@ -1349,7 +1403,7 @@ function setModoDivisao(i, modo) {
   else delete it.divisaoValores;
   render();
 }
-function setValorDivisao(i, id, v) { const it = S.entrada.itens[i]; if (!it) return; it.divisaoValores = it.divisaoValores || {}; it.divisaoValores[id] = numBR(String(v).replace(/[^\d.,]/g, '')) || 0; render(); }
+function setValorDivisao(i, id, v) { const it = S.entrada.itens[i]; if (!it) return; it.divisaoValores = it.divisaoValores || {}; it.divisaoValores[id] = numEntrada(v) || 0; render(); }
 function somaDivisaoOk(it) { if (!it.divisaoValores) return true; const soma = Object.values(it.divisaoValores).reduce((a, v) => a + (Number(v) || 0), 0); return Math.abs(soma - (Number(it.info.valor) || 0)) < 0.01; }
 function blocoDivisao(it, i) {
   const ids = procsDoItem(it);
@@ -1440,6 +1494,8 @@ const PREVISTOS_PADRAO = [
   // frete marítimo (CFR/CIF): depende do porto de embarque — Santos R$ 6.500, Salvador R$ 11.500 por container (12/10/2026)
   { campo: 'custoMaritimo', nome: 'Frete marítimo (estimado)', valor: 6500, valorSalvador: 11500, por: 'container', porPorto: true },
 ];
+// nome posto pelo estimado ("Armazém (estimado)", "Despachante (CGA)"…): quando chega o documento real, dá lugar à empresa do documento
+const nomeDeEstimado = n => PREVISTOS_PADRAO.some(r => r.nome === n) || /\(estimado\)/i.test(String(n || ''));
 const ehSalvador = p => /SALVADOR/i.test(String((p && (p.pol || '')) + ' ' + ((p && p.logPorto) || '')));
 const valorDaRegra = (r, p) => r.porPorto && ehSalvador(p) ? r.valorSalvador : r.valor;
 const freteDoComprador = p => /\b(FOB|FCA|EXW)\b/i.test(String((p && p.incoterm) || ''));
@@ -1472,7 +1528,12 @@ function aplicarPrevistos(p) {
     const reg = p.docs._custoDocs && p.docs._custoDocs[r.campo];
     const real = (reg && ((reg.fiscais || []).length || (reg.pagos || []).length)) || (p.docs._costBanco && p.docs._costBanco[r.campo])
       || (S.lancamentos || []).some(l => l.vinculo === 'processo' && l.vinculoId === p.id && l.categoria === PROCESS_COST_FIELDS[r.campo] && l.status !== 'Cancelado');
-    if (real) { if (pv[r.campo]) { delete pv[r.campo]; mud++; } return; }   // chegou o valor real: deixa de ser previsto
+    if (real) {   // chegou o valor real: deixa de ser estimado e a empresa passa a ser a do documento
+      if (pv[r.campo]) { delete pv[r.campo]; mud++; }
+      const ce = p.docs._costEmpresa || {};
+      if (ce[r.campo] && nomeDeEstimado(ce[r.campo])) { const doc = (reg && ((reg.fiscais || [])[0] || (reg.pagos || [])[0])) || null; const nome = doc && doc.de ? ((typeof nomeCanonico === 'function' ? nomeCanonico(doc.de) : '') || titulo(doc.de)) : ''; if (nome && !nomeDeEstimado(nome)) { ce[r.campo] = nome; mud++; } }
+      return;
+    }
     if (p.status === 'Cancelado' || off[r.campo] || valorDaRegra(r, p) <= 0 || (r.soArmazem && !vaiProArmazem(p)) || (r.campo === 'custoMaritimo' && freteDoComprador(p))) { tirar(r.campo); return; }
     if (Number(p[r.campo]) > 0 && !pv[r.campo]) return;                    // valor digitado por você antes: não mexe
     if (pv[r.campo] && Math.abs((Number(p[r.campo]) || 0) - (Number(pv[r.campo].valor) || 0)) >= 0.01) {  // você alterou o valor
@@ -1494,7 +1555,7 @@ async function alterarPrevisto(id, campo) {
   const atual = Number(p[campo]) || 0;
   const v = await uiPrompt(`Valor estimado de ${PROCESS_COST_FIELDS[campo]} no ${id} (R$). Deixe 0 se não vai ter esse custo.`, fmtBR2(atual), 'Custo previsto');
   if (v == null) return;
-  const n = numBR(String(v).replace(/[^\d.,]/g, '')) || 0;
+  const n = numEntrada(v) || 0;
   p.docs._previstoOff = p.docs._previstoOff || {};
   if (n <= 0) { p.docs._previstoOff[campo] = true; } else { delete p.docs._previstoOff[campo]; p[campo] = n; }
   aplicarPrevistos(p);
@@ -1515,9 +1576,9 @@ async function editarPadroesPrevistos() {
     const v = await uiPrompt(`${r.nome}: valor padrão em R$ ${r.por === 'container' ? 'por container' : 'por processo'}${r.soArmazem ? ' (só quando o container vai para o armazém)' : ''}${r.porPorto ? ' — embarque por Santos' : ''}.`, fmtBR2(r.valor), 'Custos estimados');
     if (v == null) return;
     let cert = '';
-    if (r.porPorto) { const c = await uiPrompt(`${r.nome}: valor por container quando embarca por Salvador (R$). O valor anterior é o de Santos.`, fmtBR2(r.valorSalvador), 'Custos estimados'); if (c == null) return; cert = String(numBR(String(c).replace(/[^\d.,]/g, '')) || 0); }
-    if (r.certificado != null) { const c = await uiPrompt(`${r.nome}: valor a mais quando tem certificado de origem (R$).`, fmtBR2(r.certificado), 'Custos estimados'); if (c == null) return; cert = String(numBR(String(c).replace(/[^\d.,]/g, '')) || 0); }
-    novas.push({ id: genId(), tipo: 'previsto', valor: r.campo, categoria: String(numBR(String(v).replace(/[^\d.,]/g, '')) || 0), centro: cert, criadoEm: new Date().toISOString() });
+    if (r.porPorto) { const c = await uiPrompt(`${r.nome}: valor por container quando embarca por Salvador (R$). O valor anterior é o de Santos.`, fmtBR2(r.valorSalvador), 'Custos estimados'); if (c == null) return; cert = String(numEntrada(c) || 0); }
+    if (r.certificado != null) { const c = await uiPrompt(`${r.nome}: valor a mais quando tem certificado de origem (R$).`, fmtBR2(r.certificado), 'Custos estimados'); if (c == null) return; cert = String(numEntrada(c) || 0); }
+    novas.push({ id: genId(), tipo: 'previsto', valor: r.campo, categoria: String(numEntrada(v) || 0), centro: cert, criadoEm: new Date().toISOString() });
   }
   S.banco.regras = (S.banco.regras || []).filter(r => r.tipo !== 'previsto').concat(novas);
   // processos com previsto automático (não alterado por você) passam a usar o novo padrão
@@ -1812,7 +1873,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '77';
+const VERSAO_TESTE = '79';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -1840,7 +1901,7 @@ async function alterarValorCusto(id, campo) {
   if (v == null) return;
   p.docs = p.docs || {}; p.docs._valorManual = p.docs._valorManual || {};
   if (!String(v).trim()) delete p.docs._valorManual[campo];
-  else p.docs._valorManual[campo] = numBR(String(v).replace(/[^\d.,]/g, '')) || 0;
+  else p.docs._valorManual[campo] = numEntrada(v) || 0;
   if (p.docs._custoDocs && p.docs._custoDocs[campo]) recalcularCustos(p, campo);
   else if (p.docs._valorManual[campo] != null) { p[campo] = p.docs._valorManual[campo]; p[campo + '_status'] = p[campo + '_status'] || 'Em Aberto'; }
   logAction('editar', 'PROCESSOS', id, `${PROCESS_COST_FIELDS[campo]}: valor ${p.docs._valorManual[campo] != null ? 'alterado para R$ ' + p.docs._valorManual[campo] : 'volta aos documentos'}`);
@@ -2091,7 +2152,7 @@ function lancamentosViramCusto() {
     p.docs = p.docs || {}; p.docs._custoDocs = p.docs._custoDocs || {};
     p.docs._custoDocs[campo] = { fiscais: [], pagos: [{ k: 'banco:' + l.docs._banco, tipo: 'banco', valor: Number(l.valor) || 0, data: l.data || '', nome: 'extrato: ' + (l.empresa || ''), de: l.empresa || '', url: l.docs.comprovante || '' }] };
     p.docs._costBanco = Object.assign({}, p.docs._costBanco, { [campo]: l.docs._banco });
-    if (!p.docs._costEmpresa) p.docs._costEmpresa = {}; if (!p.docs._costEmpresa[campo] && l.empresa) p.docs._costEmpresa[campo] = titulo(l.empresa);
+    if (!p.docs._costEmpresa) p.docs._costEmpresa = {}; if ((!p.docs._costEmpresa[campo] || nomeDeEstimado(p.docs._costEmpresa[campo])) && l.empresa) p.docs._costEmpresa[campo] = (typeof nomeCanonico === 'function' ? nomeCanonico(l.empresa) : '') || titulo(l.empresa);
     ((S.banco && S.banco.linhas) || []).forEach(b => { if (b.lancId === l.id) b.lancId = 'custo:' + p.id + '/' + campo; });
     recalcularCustos(p, campo); n++;
   });
