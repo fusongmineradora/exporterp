@@ -1454,7 +1454,7 @@ function regrasPrevisto() {
 }
 function qtdContainers(p) { return Math.max(1, (p.containers || []).filter(Boolean).length, parseInt(p.qtdContainer, 10) || 0); }
 function temCertificadoOrigem(p) { const d = p.docs || {}; if (d._semCertificado) return false; if (d._semCertificado === undefined) return true; return Number(p.custoCertificado) > 0 || Object.keys(d._files || {}).some(k => /certific/i.test(k) && (d._files[k] || []).length) || !!(d._custoDocs && d._custoDocs.custoCertificado); }
-function vaiProArmazem(p) { const d = p.docs || {}; if (d._armazem != null) return !!d._armazem; return !!(p.logArmazem || /ARMAZ/i.test(p.logModalidade || '')); }
+function vaiProArmazem(p) { const d = p.docs || {}; if (d._armazem != null) return !!d._armazem; return !!(p.logArmazem || /ARMAZ|CROSS\s*-?\s*DOCK/i.test(p.logModalidade || '')); }   // crossdock passa pelo armazém (T5S)
 function textoPrevisto(r, p) {
   const q = qtdContainers(p);
   if (r.porPorto) return `R$ ${fmtBR2(valorDaRegra(r, p))} × ${q} container${q > 1 ? 's' : ''} (${ehSalvador(p) ? 'Salvador' : 'Santos'})`;
@@ -1491,13 +1491,13 @@ function aplicarPrevistos(p) {
 async function alterarPrevisto(id, campo) {
   const p = (S.processos || []).find(x => x.id === id); if (!p) return;
   const atual = Number(p[campo]) || 0;
-  const v = await uiPrompt(`Valor previsto de ${PROCESS_COST_FIELDS[campo]} no ${id} (R$). Deixe 0 se não vai ter esse custo.`, fmtBR2(atual), 'Custo previsto');
+  const v = await uiPrompt(`Valor estimado de ${PROCESS_COST_FIELDS[campo]} no ${id} (R$). Deixe 0 se não vai ter esse custo.`, fmtBR2(atual), 'Custo previsto');
   if (v == null) return;
   const n = numBR(String(v).replace(/[^\d.,]/g, '')) || 0;
   p.docs._previstoOff = p.docs._previstoOff || {};
   if (n <= 0) { p.docs._previstoOff[campo] = true; } else { delete p.docs._previstoOff[campo]; p[campo] = n; }
   aplicarPrevistos(p);
-  try { await saveToSheets(); showToast('✅ Previsto atualizado'); } catch (e) { showToast('⚠️ ' + e.message); }
+  try { await saveToSheets(); showToast('✅ Estimado atualizado'); } catch (e) { showToast('⚠️ ' + e.message); }
   render();
 }
 async function setArmazemPrevisto(id, sim) {
@@ -1511,17 +1511,17 @@ async function setArmazemPrevisto(id, sim) {
 async function editarPadroesPrevistos() {
   const rs = regrasPrevisto(), novas = [];
   for (const r of rs) {
-    const v = await uiPrompt(`${r.nome}: valor padrão em R$ ${r.por === 'container' ? 'por container' : 'por processo'}${r.soArmazem ? ' (só quando o container vai para o armazém)' : ''}${r.porPorto ? ' — embarque por Santos' : ''}.`, fmtBR2(r.valor), 'Custos previstos');
+    const v = await uiPrompt(`${r.nome}: valor padrão em R$ ${r.por === 'container' ? 'por container' : 'por processo'}${r.soArmazem ? ' (só quando o container vai para o armazém)' : ''}${r.porPorto ? ' — embarque por Santos' : ''}.`, fmtBR2(r.valor), 'Custos estimados');
     if (v == null) return;
     let cert = '';
-    if (r.porPorto) { const c = await uiPrompt(`${r.nome}: valor por container quando embarca por Salvador (R$). O valor anterior é o de Santos.`, fmtBR2(r.valorSalvador), 'Custos previstos'); if (c == null) return; cert = String(numBR(String(c).replace(/[^\d.,]/g, '')) || 0); }
-    if (r.certificado != null) { const c = await uiPrompt(`${r.nome}: valor a mais quando tem certificado de origem (R$).`, fmtBR2(r.certificado), 'Custos previstos'); if (c == null) return; cert = String(numBR(String(c).replace(/[^\d.,]/g, '')) || 0); }
+    if (r.porPorto) { const c = await uiPrompt(`${r.nome}: valor por container quando embarca por Salvador (R$). O valor anterior é o de Santos.`, fmtBR2(r.valorSalvador), 'Custos estimados'); if (c == null) return; cert = String(numBR(String(c).replace(/[^\d.,]/g, '')) || 0); }
+    if (r.certificado != null) { const c = await uiPrompt(`${r.nome}: valor a mais quando tem certificado de origem (R$).`, fmtBR2(r.certificado), 'Custos estimados'); if (c == null) return; cert = String(numBR(String(c).replace(/[^\d.,]/g, '')) || 0); }
     novas.push({ id: genId(), tipo: 'previsto', valor: r.campo, categoria: String(numBR(String(v).replace(/[^\d.,]/g, '')) || 0), centro: cert, criadoEm: new Date().toISOString() });
   }
   S.banco.regras = (S.banco.regras || []).filter(r => r.tipo !== 'previsto').concat(novas);
   // processos com previsto automático (não alterado por você) passam a usar o novo padrão
   (S.processos || []).forEach(p => aplicarPrevistos(p));
-  try { if (typeof ensureTabs2 === 'function') await ensureTabs2(); await gravarAba2('REGRAS', S.banco.regras); await saveToSheets(); showToast('✅ Padrões dos previstos salvos'); } catch (e) { showToast('⚠️ ' + e.message); }
+  try { if (typeof ensureTabs2 === 'function') await ensureTabs2(); await gravarAba2('REGRAS', S.banco.regras); await saveToSheets(); showToast('✅ Padrões dos estimados salvos'); } catch (e) { showToast('⚠️ ' + e.message); }
   render();
 }
 
@@ -1811,7 +1811,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '75';
+const VERSAO_TESTE = '76';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
