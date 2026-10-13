@@ -191,9 +191,16 @@ function renderInicio() {
       ${pend.length ? pend.slice(0, S._todasPend ? pend.length : 12).map(x => `<div style="display:flex;gap:10px;align-items:flex-start"><span style="flex:none;width:8px;height:8px;border-radius:50%;background:${x.tipo === 'cambio' ? 'var(--green)' : 'var(--orange)'};margin-top:6px"></span><div>${linkProc(x.p.id)} ${escHtml(x.texto)}</div></div>`).join('') + (pend.length > 12 ? `<button class="btn btn-secondary btn-sm" style="align-self:flex-start;min-height:40px" onclick="S._todasPend=!S._todasPend;render()">${S._todasPend ? 'Mostrar menos' : `Ver todas as pendências (+ ${pend.length - 12})`}</button>` : '') : '<div style="color:var(--muted2)">Nada faltando nos processos.</div>'}
     </div>`);
 
+  // v87: abre e fecha; fechado mostra um resumo por fase (o sistema lembra como ficou neste aparelho)
+  if (S._cargasAbertas === undefined) { try { S._cargasAbertas = localStorage.getItem('teste:inicio-cargas') === '1'; } catch (e) { S._cargasAbertas = false; } }
+  const nomeFase = f => (f >= 0 ? FASES[f] : 'A coletar');
+  const resumoCargas = (() => { const g = {}; cargas.forEach(x => { (g[x.f] = g[x.f] || []).push(x.p.id); }); return Object.keys(g).map(Number).sort((a, b) => a - b).map(f => `<span style="white-space:nowrap"><b style="font-weight:600;color:${f >= 3 ? 'var(--accent)' : f >= 0 ? 'var(--yellow)' : 'var(--muted2)'}">${nomeFase(f)}</b> ${g[f].length <= 2 ? g[f].map(id => linkProc(id)).join(', ') : g[f].length}</span>`).join(' · '); })();
   const blocoCargas = card(`
-    ${titulo2('Onde estão as cargas', `<a href="#" onclick="nav('rastreamento');return false" style="font-size:13px;text-decoration:none">Rastreio →</a>`)}
-    ${cargas.length ? cargas.slice(0, 8).map(x => {
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">
+      <h2 style="margin:0;font-family:'Outfit',sans-serif;font-size:17px;cursor:pointer;user-select:none" onclick="S._cargasAbertas=!S._cargasAbertas;try{localStorage.setItem('teste:inicio-cargas',S._cargasAbertas?'1':'0')}catch(e){};render()">Onde estão as cargas <span style="font-size:13px;color:var(--muted2)">${S._cargasAbertas ? '▾' : '▸'}</span></h2>
+      <a href="#" onclick="nav('rastreamento');return false" style="font-size:13px;text-decoration:none">Rastreio →</a>
+    </div>
+    ${!S._cargasAbertas ? (cargas.length ? `<div style="font-size:13px;line-height:1.7;cursor:pointer" onclick="if(event.target.closest('a'))return;S._cargasAbertas=true;try{localStorage.setItem('teste:inicio-cargas','1')}catch(e){};render()">${cargas.length} carga(s) · ${resumoCargas}</div>` : '<div style="font-size:13.5px;color:var(--muted2)">Nenhuma carga ativa.</div>') : cargas.length ? cargas.map(x => {
       const p = x.p, v = (p.docs && p.docs._viagem) || {}, dl = brParaDate(p.deadlineCarga), dlDias = dl ? Math.ceil((dl - new Date()) / 864e5) : null;
       const info = x.f >= 3 ? [(p.containers || []).filter(Boolean).join(', '), v.navio, 'saiu ' + p.saida, v.eta ? 'chega ' + v.eta : '', p.pod].filter(Boolean).join(' · ')
         : [p.logTransportadora, p.logCidade, (p.containers || []).filter(Boolean).join(', ')].filter(Boolean).join(' · ') || (p.produto || '');
@@ -202,36 +209,41 @@ function renderInicio() {
         ${barraFases(x.f)}
         <div style="font-size:12.5px;color:var(--muted2)">${escHtml(info)}${dlDias != null && dlDias >= 0 && dlDias <= 5 && x.f < 3 ? ` · <span style="color:var(--yellow);font-weight:600">dead line de carga em ${dlDias} dia(s)</span>` : ''}</div>
       </div>`;
-    }).join('') : '<div style="font-size:13.5px;color:var(--muted2)">Nenhuma carga ativa.</div>'}
-    <div style="font-size:11.5px;color:var(--muted2)">${FASES.join(' · ')}</div>`);
+    }).join('') + `<div style="font-size:11.5px;color:var(--muted2)">${FASES.join(' · ')}</div>` : '<div style="font-size:13.5px;color:var(--muted2)">Nenhuma carga ativa.</div>'}`);
 
   const porProduto = {};
   // par "S" (FS260109 + FS260109S): é a mesma venda — as toneladas contam uma vez e o resultado aparece junto
   const ehS = p => /^FS\d{6}S$/.test(p.id) && (S.processos || []).some(q => q.id === p.id.slice(0, -1));
   resultados.forEach(x => { if (ehS(x.p)) { const pai = resultados.find(y => y.p.id === x.p.id.slice(0, -1)); if (pai) { pai.c = Object.assign({}, pai.c, { custo: pai.c.custo + x.c.custo, envio: pai.c.envio + x.c.envio + x.c.produto, lucro: pai.c.lucro + x.c.lucro }); pai.par = x.p.id; } } });
   const resultadosVis = resultados.filter(x => !(ehS(x.p) && resultados.some(y => y.p.id === x.p.id.slice(0, -1))));
-  resultadosVis.forEach(x => { if (!x.c.ton) return; const g = grupoProduto(x.p); const o = porProduto[g] = porProduto[g] || { ton: 0, prod: 0, env: 0, n: 0 }; o.ton += x.c.ton; o.prod += x.c.produto; o.env += x.c.envio; o.n++; });
+  const taxaDoProcesso = p => { const t = Number(p.cambioTaxa) || ((Number(p.cambioReais) > 0 && Number(p.cambioRecebido) > 0) ? Number(p.cambioReais) / Number(p.cambioRecebido) : 0); return t > 2 && t < 10 ? t : (Number(px) || 0); };
+  resultadosVis.forEach(x => { if (!x.c.ton) return; const g = grupoProduto(x.p); const o = porProduto[g] = porProduto[g] || { ton: 0, prod: 0, env: 0, envUsd: 0, tonUsd: 0, n: 0 }; o.ton += x.c.ton; o.prod += x.c.produto; o.env += x.c.envio; const tx = taxaDoProcesso(x.p); if (tx) { o.envUsd += x.c.envio / tx; o.tonUsd += x.c.ton; } o.n++; });
+  // v87: linhas com o valor sempre alinhado à direita (o nome quebra linha, o valor não desce)
+  const linhaValor = (esq, dir, extra) => `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;align-items:start;font-size:13.5px;${extra || ''}"><div style="min-width:0">${esq}</div><div style="font-family:'JetBrains Mono',monospace;white-space:nowrap;text-align:right">${dir}</div></div>`;
   const blocoResultado = card(`
     ${titulo2('Resultado')}
     <div style="display:flex;flex-direction:column;gap:8px;font-size:13.5px">
-      ${resultadosVis.slice(0, 10).map(x => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${linkProc(x.p.id)}${x.par ? ' <span style="font-size:12px;color:var(--muted2)">+ ' + escHtml(x.par.slice(-4)) + '</span>' : ''} ${x.prov ? '<span style="color:var(--yellow);font-size:12px">provisório</span>' : '<span style="color:var(--green);font-size:12px">fechado</span>'}</span><span style="font-family:'JetBrains Mono',monospace;color:${x.c.lucro >= 0 ? 'var(--green)' : 'var(--red)'}">${x.c.lucro >= 0 ? '+ ' : '− '}${m2(Math.abs(x.c.lucro))}</span></div>`).join('') || '<div style="color:var(--muted2)">Sem resultado ainda.</div>'}
+      ${resultadosVis.slice(0, 10).map(x => linhaValor(`${linkProc(x.p.id)}${x.par ? ' <span style="font-size:12px;color:var(--muted2)">+ ' + escHtml(x.par.slice(-4)) + '</span>' : ''} ${x.prov ? '<span style="color:var(--yellow);font-size:12px">provisório</span>' : '<span style="color:var(--green);font-size:12px">fechado</span>'}`, `<span style="color:${x.c.lucro >= 0 ? 'var(--green)' : 'var(--red)'}">${x.c.lucro >= 0 ? '+ ' : '− '}${m2(Math.abs(x.c.lucro))}</span>`)).join('') || '<div style="color:var(--muted2)">Sem resultado ainda.</div>'}
     </div>
     ${Object.keys(porProduto).length ? `<div style="border-top:1px solid var(--border);padding-top:12px;display:flex;flex-direction:column;gap:6px">
-      <div style="font-size:12px;color:var(--muted2)">Custo médio por tonelada</div>
-      ${Object.entries(porProduto).map(([g, o]) => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13.5px;flex-wrap:wrap"><span>${escHtml(g)} <span style="color:var(--muted2);font-size:12px">${o.n} proc. · ${m2(o.ton)} t</span></span><span style="font-family:'JetBrains Mono',monospace">produto ${m2(o.prod / o.ton)} · envio ${m2(o.env / o.ton)}</span></div>`).join('')}
+      <div class="ini-custo"><div class="nome" style="font-size:12px;color:var(--muted2)">Custo de envio por tonelada</div><div class="val" style="font-size:12px;color:var(--muted2)">R$ / t</div><div class="val" style="font-size:12px;color:var(--muted2)">USD / t</div>
+      ${Object.entries(porProduto).map(([g, o]) => `<div class="nome">${escHtml(g)} <span style="color:var(--muted2);font-size:12px">${o.n} proc. · ${m2(o.ton)} t</span></div><div class="val">${m2(o.env / o.ton)}</div><div class="val">${o.tonUsd ? m2(o.envUsd / o.tonUsd) : '—'}</div>`).join('')}</div>
+      <div style="font-size:11.5px;color:var(--muted2)">Dólar pelo câmbio de cada processo (sem câmbio ainda, o dólar do dia).</div>
     </div>` : ''}
     ${clientes.length ? `<div style="border-top:1px solid var(--border);padding-top:12px;display:flex;flex-direction:column;gap:6px">
       <div style="font-size:12px;color:var(--muted2)">Saldo dos clientes</div>
-      ${clientes.map(c => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13.5px;flex-wrap:wrap"><span>${escHtml(c.nome)}${c.adiantado ? `<span style="color:var(--muted2);font-size:12px"> · R$ ${m2(c.adiantado)} pago e não embarcado</span>` : ''}</span><span style="font-family:'JetBrains Mono',monospace;color:${c.disponivel > 0.009 ? 'var(--green)' : c.disponivel < -0.009 ? 'var(--red)' : 'var(--muted2)'}">${Math.abs(c.disponivel) < 0.01 ? 'sem saldo' : 'R$ ' + m2(Math.abs(c.disponivel)) + (c.disponivel > 0 ? ' de crédito' : ' usado a mais')}</span></div>`).join('')}
+      ${clientes.map(c => linhaValor(`<div>${escHtml(c.nome)}</div>${c.adiantado ? `<div style="color:var(--muted2);font-size:12px">R$ ${m2(c.adiantado)} pago e não embarcado</div>` : ''}`, `<span style="color:${c.disponivel > 0.009 ? 'var(--green)' : c.disponivel < -0.009 ? 'var(--red)' : 'var(--muted2)'}">${Math.abs(c.disponivel) < 0.01 ? 'sem saldo' : 'R$ ' + m2(Math.abs(c.disponivel)) + (c.disponivel > 0 ? ' de crédito' : ' usado a mais')}</span>`)).join('')}
     </div>` : ''}`);
 
+  // v87: no computador (tela larga) duas colunas: A pagar + O que falta | Cargas + Resultado; no celular, uma coluna
   return `
-  <div style="max-width:760px;margin:0 auto">
+  <style>.ini-wrap{max-width:760px;margin:0 auto}.ini-col{min-width:0}.ini-custo{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:4px 16px;align-items:baseline;font-size:13.5px}.ini-custo .val{font-family:'JetBrains Mono',monospace;white-space:nowrap;text-align:right}@media (max-width:600px){.ini-custo{grid-template-columns:1fr auto auto;gap:2px 12px}.ini-custo .nome{grid-column:1/-1;margin-top:4px}}@media (min-width:1280px){.ini-wrap{max-width:1400px}.ini-cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}}</style>
+  <div class="ini-wrap">
     <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px;gap:10px;flex-wrap:wrap">
       <div><div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:26px">Início</div><div style="font-size:13px;color:var(--muted2)">${new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</div></div>
       <div style="font-size:13px;font-weight:600;color:var(--accent);background:var(--bg4);padding:6px 12px;border-radius:999px">${ativos.filter(p => !processoFechado(p)).length} processos em andamento</div>
     </div>
-    ${blocoPagar}${blocoFalta}${blocoCargas}${blocoResultado}
+    <div class="ini-cols"><div class="ini-col">${blocoPagar}${blocoFalta}</div><div class="ini-col">${blocoCargas}${blocoResultado}</div></div>
   </div>`;
 }
 
