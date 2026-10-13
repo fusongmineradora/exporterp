@@ -306,7 +306,7 @@ function dvDadosDoForm(p, f) {
   const comp = dvCliente(f.comprador), cons = f.notifyOn ? dvCliente(f.consignatario) : null, noti = f.notifyOn ? dvCliente(f.notify) : null;
   return {
     numero: p.id, data: f.data, comprador: dvEmpresa(comp), consignatario: dvEmpresa(cons), notify: dvEmpresa(noti),
-    itens: [{ desc: f.produto, ncm: f.ncm, kg: Number(f.kg) || 0, preco: numBR(String(f.preco)) || 0 }],
+    itens: [{ desc: f.produto, ncm: f.ncm, kg: Number(f.kg) || 0, preco: numEntrada(f.preco) || 0 }],
     pol: f.pol, pod: f.pod, containers: Number(f.containers) || 1, sgs: !!f.sgs,
   };
 }
@@ -318,7 +318,7 @@ function dvProblemas(f) {
   if (!f.produto) out.push('Falta a descrição do produto');
   if (!dvNcm(f.ncm)) out.push('NCM precisa ter 8 dígitos');
   if (!(Number(f.kg) > 0)) out.push('Falta o peso');
-  if (!(numBR(String(f.preco)) > 0)) out.push('Falta o preço por kg');
+  if (!(numEntrada(f.preco) > 0)) out.push('Falta o preço por kg');
   if (!f.pol || !f.pod) out.push('Falta o porto de embarque ou de destino');
   if (!f.invoice && !f.contrato) out.push('Marque invoice e/ou sales contract');
   [comp, f.notifyOn && dvCliente(f.consignatario), f.notifyOn && dvCliente(f.notify)].filter(Boolean).forEach(c => { if (!c.end) out.push(`${c.nome}: cadastro sem endereço (complete em Cadastros › Clientes)`); });
@@ -567,7 +567,7 @@ function dvDesenhar() {
       <button class="btn btn-primary" id="dv-ok">Gerar e salvar no processo</button>
     </div></div>`;
   const atualizar = () => {
-    const kg = Number(String(f.kg).replace(/\D/g, '')) || 0, pr = numBR(String(f.preco)) || 0;
+    const kg = Number(String(f.kg).replace(/\D/g, '')) || 0, pr = numEntrada(f.preco) || 0;
     modal.querySelector('#dv-total').textContent = kg && pr ? fmt(dvR2(kg * pr)) : '—';
     const nm = modal.querySelector('#dv-nome'); if (nm && f.novo) nm.textContent = 'Fica assim: ' + dvNomeInterno(Object.assign({}, f.novo, { pod: f.pod, docs: { _intermediador: f.inter || '', _produtoInterno: f.prodInterno || '' } }));
     const pb = dvProblemas(f); modal.querySelector('#dv-prob').innerHTML = pb.map(t => '⚠️ ' + escHtml(t)).join('<br>');

@@ -116,13 +116,13 @@ function dividirCambioUI(procId) {
       <button class="btn btn-secondary btn-xs" type="button" id="dc-mais">+ processo</button>
       <div id="dc-soma" style="font-size:12.5px;margin:10px 0;color:var(--muted2)"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn btn-secondary" id="dc-cancelar">Cancelar</button><button class="btn btn-primary" id="dc-ok">Salvar divisão</button></div></div>`;
-    const somar = () => { const v = [...modal.querySelectorAll('.dc-usd')].reduce((a, i) => a + (numBR(i.value) || 0), 0); const dif = c.usd - v; modal.querySelector('#dc-soma').innerHTML = `Soma das invoices: USD ${fmt(v)}${v ? (Math.abs(dif) < 0.01 ? ' · igual ao recebido' : ` · ${dif > 0 ? 'sobra' : 'falta'} USD ${fmt(Math.abs(dif))}${Math.abs(dif) <= 120 ? ' (tarifa do intermediário)' : ''}`) : ''}`; };
+    const somar = () => { const v = [...modal.querySelectorAll('.dc-usd')].reduce((a, i) => a + (numEntrada(i.value) || 0), 0); const dif = c.usd - v; modal.querySelector('#dc-soma').innerHTML = `Soma das invoices: USD ${fmt(v)}${v ? (Math.abs(dif) < 0.01 ? ' · igual ao recebido' : ` · ${dif > 0 ? 'sobra' : 'falta'} USD ${fmt(Math.abs(dif))}${Math.abs(dif) <= 120 ? ' (tarifa do intermediário)' : ''}`) : ''}`; };
     modal.querySelector('#dc-ref').onchange = e => desenhar(e.target.value);
     modal.querySelector('#dc-mais').onclick = () => { modal.querySelector('#dc-linhas').insertAdjacentHTML('beforeend', linhaHtml('', '')); };
     modal.querySelector('#dc-linhas').oninput = somar; somar();
     modal.querySelector('#dc-cancelar').onclick = () => _uiCloseModal();
     modal.querySelector('#dc-ok').onclick = async () => {
-      const pesos = {}; [...modal.querySelectorAll('.dc-linha')].forEach(l => { const id = l.querySelector('.dc-proc').value, v = numBR(l.querySelector('.dc-usd').value) || 0; if (id && v > 0) pesos[id] = Math.round(((pesos[id] || 0) + v) * 100) / 100; });
+      const pesos = {}; [...modal.querySelectorAll('.dc-linha')].forEach(l => { const id = l.querySelector('.dc-proc').value, v = numEntrada(l.querySelector('.dc-usd').value) || 0; if (id && v > 0) pesos[id] = Math.round(((pesos[id] || 0) + v) * 100) / 100; });
       if (!Object.keys(pesos).length) { showToast('Escolha ao menos um processo com valor'); return; }
       _uiCloseModal();
       await salvarDivisaoCambio(c.ref, pesos);
@@ -686,4 +686,116 @@ function padroesFornecedores() {
     <div style="font-weight:700;margin-top:16px">Cadastro por tipo (o tipo decide o custo do documento)</div>${cad}
     <div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="btn btn-primary" onclick="_uiCloseModal()">Fechar</button></div></div>`;
   document.body.appendChild(modal);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 10. CORREÇÕES DA AUDITORIA (v78 · 13/10/2026)
+// · BL anexado = embarcado (o BL é o documento oficial da companhia marítima e vale sobre o processo)
+// · releitura dos documentos já anexados: BLs (inclui MSC), confirmação de booking que estava como BL,
+//   NCM das NFs de entrada (para o aviso de NCM diferente)
+// ═══════════════════════════════════════════════════════════════
+if (typeof autoUpdateStatus === 'function' && !autoUpdateStatus._v78) {
+  const base = autoUpdateStatus;
+  autoUpdateStatus = function () {
+    const r = base.apply(this, arguments);
+    (S.processos || []).forEach(p => { if (!['No Destino', 'Concluído', 'Cancelado', 'Embarcado'].includes(p.status) && temDoc(p, 'bl')) p.status = 'Embarcado'; });
+    return r;
+  };
+  autoUpdateStatus._v78 = true;
+}
+const idArq = f => (f && (f.id || (typeof idDoArquivo === 'function' ? idDoArquivo(f.url) : ''))) || '';
+async function textoDoArquivo(f) {
+  const buf = await driveDownload(idArq(f));
+  if (/\.xml$/i.test(f.name || '') || f.formato === 'xml') return { xml: new TextDecoder().decode(new Uint8Array(buf)) };
+  return { texto: await pdfTexto(buf) };
+}
+async function relerDocsProcessos(forcar) {
+  const ps = (S.processos || []).filter(p => p.status !== 'Cancelado' && (forcar || !(p.docs && p.docs._relido78)));
+  const norm = c => String(c || '').toUpperCase().replace(/[\s-]/g, '');
+  let mud = 0;
+  for (const p of ps) {
+    p.docs = p.docs || {}; p.docs._files = p.docs._files || {};
+    // BLs (e a confirmação de booking que tinha entrado como BL)
+    const lidos = [];
+    for (const f of (p.docs._files.bl || []).slice()) {
+      if (!idArq(f)) continue;
+      try {
+        const { texto } = await textoDoArquivo(f); if (!texto) continue;
+        const c = classificarDocumento(texto, f.nomeOriginal || f.name);
+        if (c.tipo === 'booking') {
+          p.docs._files.bl = p.docs._files.bl.filter(x => x !== f); if (!p.docs._files.bl.length) { delete p.docs._files.bl; delete p.docs.bl; } else if (p.docs.bl === f.url) p.docs.bl = p.docs._files.bl[0].url;
+          (p.docs._files.booking = p.docs._files.booking || []).push(f); if (!p.docs.booking) p.docs.booking = f.url;
+          const it = { tipo: 'booking', texto, info: {}, nome: f.name }; enriquecerInfo(it);
+          if (it.info.booking && !p.booking) p.booking = it.info.booking;
+          logAction('editar', 'PROCESSOS', p.id, (f.nomeOriginal || f.name) + ': é a confirmação de booking, não o BL (corrigido)');
+          mud++; continue;
+        }
+        const it = { tipo: 'bl', texto, info: {}, nome: f.name }; enriquecerInfo(it);
+        lidos.push({ f, info: it.info });
+      } catch (e) { console.warn('reler BL', p.id, e); }
+    }
+    if (lidos.length) {
+      const meus = (p.containers || []).map(norm).filter(Boolean);
+      const pS = (S.processos || []).find(q => q.id === p.id + 'S');
+      const doS = x => pS && x.info.booking && x.info.booking === pS.booking && x.info.booking !== p.booking;   // BL do processo "S" guardado no principal
+      const cand = lidos.filter(x => !doS(x));
+      const esc = cand.find(x => x.info.booking && x.info.booking === p.booking) || cand.find(x => (x.info.containers || []).some(c => meus.includes(norm(c)))) || cand.find(x => x.info.refProcesso === p.id) || cand[0];
+      if (esc) { const m = []; aplicarBL(p, esc.info, esc.f.url, m); if (m.length) mud++; }
+    }
+    // NCM das NFs de entrada (a NF de maior valor manda; se as NFs tiverem NCMs diferentes, guarda todos)
+    if (forcar || !p.docs._ncmNF) {
+      const porNum = {};
+      (p.docs._files.nfe || []).forEach(f => { const k = f.numero || f.chave || f.name; if (!porNum[k] || /xml/i.test(f.formato || f.name || '')) porNum[k] = f; });
+      const achados = [];
+      for (const f of Object.values(porNum)) {
+        if (!idArq(f)) continue;
+        try {
+          const r = await textoDoArquivo(f); let ncm = '', info = {};
+          if (r.xml) { info = lerXmlFiscal(r.xml) || {}; ncm = info.ncm; } else if (r.texto) ncm = ncmDoDanfe(String(r.texto).replace(/\s+/g, ' '));
+          const d = String(ncm || '').replace(/\D/g, '');
+          if (d.length === 8) achados.push({ ncm: d, numero: f.numero || info.numero || '', emitente: (typeof nomeCanonico === 'function' ? nomeCanonico(f.emitente || info.emitNome || '', info.emitCnpj) : '') || f.emitente || '', data: f.data || info.data || '', valor: Number(f.valor || info.valor) || 0 });
+        } catch (e) { console.warn('reler NF', p.id, e); }
+      }
+      if (achados.length) {
+        achados.sort((a, b) => b.valor - a.valor);
+        const a0 = achados[0]; p.docs._ncmNF = { ncm: a0.ncm, numero: a0.numero, emitente: a0.emitente, data: a0.data };
+        if (new Set(achados.map(x => x.ncm)).size > 1) p.docs._ncmNFs = achados.map(x => ({ ncm: x.ncm, numero: x.numero, emitente: x.emitente })); else delete p.docs._ncmNFs;
+        mud++;
+      }
+    }
+    // arquivos do processo "S" que ficaram com o número do principal no nome (ex.: FS260109_BL.pdf no FS260109S) — só no oficial
+    if (/^FS\d{6}S$/.test(p.id) && window.ERP_ENV && ERP_ENV.nome === 'oficial') {
+      const base = p.id.slice(0, -1) + '_';
+      for (const lista of Object.values(p.docs._files)) for (const f of (lista || [])) {
+        if (f && f.name && f.name.startsWith(base) && idArq(f)) {
+          const novo = p.id + '_' + f.name.slice(base.length);
+          try { await driveAPI('PATCH', '/files/' + idArq(f), { name: novo }, 'fields=id'); logAction('renomear', 'PROCESSOS', p.id, f.name + ' → ' + novo); f.name = novo; mud++; } catch (e) { console.warn('renomear arquivo do S', e); }
+        }
+      }
+    }
+    if (!p.docs._relido78) { p.docs._relido78 = true; mud++; }
+  }
+  return { mud, n: ps.length };
+}
+// uma vez, sozinho, depois que os dados carregam (em segundo plano)
+let _relendo = false;
+(function agendarReleitura() {
+  const t = setInterval(async () => {
+    if (_relendo || !window._sheetsToken || !(S.processos || []).length || typeof aplicarBL !== 'function') return;
+    if (!(S.processos || []).some(p => p.status !== 'Cancelado' && !(p.docs && p.docs._relido78))) { clearInterval(t); return; }
+    _relendo = true; clearInterval(t);
+    try { const r = await relerDocsProcessos(false); if (r.mud) { autoUpdateStatus(); await saveToSheets(); render(); } } catch (e) { console.warn('releitura', e); }
+    _relendo = false;
+  }, 25000);
+})();
+// "Conferir documentos" também relê BLs e NFs
+if (typeof conferirDocumentos === 'function' && !conferirDocumentos._v78) {
+  const base = conferirDocumentos;
+  conferirDocumentos = async function () {
+    showSyncIndicator('Relendo BLs e notas...');
+    try { const r = await relerDocsProcessos(true); if (r.mud) autoUpdateStatus(); } catch (e) { console.warn(e); }
+    hideSyncIndicator();
+    return base.apply(this, arguments);
+  };
+  conferirDocumentos._v78 = true;
 }
