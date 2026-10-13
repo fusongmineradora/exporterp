@@ -720,7 +720,7 @@ async function textoDoArquivo(f) {
   return { texto: await pdfTexto(buf) };
 }
 async function relerDocsProcessos(forcar) {
-  const ps = (S.processos || []).filter(p => p.status !== 'Cancelado' && (forcar || !(p.docs && p.docs._relido82)));
+  const ps = (S.processos || []).filter(p => p.status !== 'Cancelado' && (forcar || !(p.docs && p.docs._relido83)));
   const norm = c => String(c || '').toUpperCase().replace(/[\s-]/g, '');
   let mud = 0;
   for (const p of ps) {
@@ -761,7 +761,7 @@ async function relerDocsProcessos(forcar) {
         if (!i.dueNumero) continue;
         p.docs._dues = p.docs._dues || {};
         const ant = p.docs._dues[i.dueNumero] || {};
-        const nv = Object.assign({}, ant, { vmle: Number(i.vmle) || ant.vmle || 0, peso: Number(i.pesoLiq) || ant.peso || 0, ruc: i.ruc || ant.ruc || '', nfs: (i.nfsSaida && i.nfsSaida.length) ? i.nfsSaida : (ant.nfs || []), porto: i.dueporto || ant.porto || '' });
+        const nv = Object.assign({}, ant, { vmle: Number(i.vmle) || ant.vmle || 0, vmcv: Number(i.vmcv) || ant.vmcv || 0, peso: Number(i.pesoLiq) || ant.peso || 0, ruc: i.ruc || ant.ruc || '', nfs: (i.nfsSaida && i.nfsSaida.length) ? i.nfsSaida : (ant.nfs || []), porto: i.dueporto || ant.porto || '', situacao: i.dueSituacao || ant.situacao || '', exportada: !!(i.dueExportada || ant.exportada), bloqueio: i.dueExportada ? '' : (i.dueBloqueio || '') });
         if (JSON.stringify(nv) !== JSON.stringify(ant)) { p.docs._dues[i.dueNumero] = nv; mud++; }
       } catch (e) { console.warn('reler DU-E', p.id, e); }
     }
@@ -800,6 +800,7 @@ async function relerDocsProcessos(forcar) {
     }
     if (!p.docs._relido78) { p.docs._relido78 = true; mud++; }
     if (!p.docs._relido82) { p.docs._relido82 = true; mud++; }
+    if (!p.docs._relido83) { p.docs._relido83 = true; mud++; }
   }
   return { mud, n: ps.length };
 }
@@ -808,9 +809,9 @@ let _relendo = false;
 (function agendarReleitura() {
   const t = setInterval(async () => {
     if (_relendo || !window._sheetsToken || !(S.processos || []).length || typeof aplicarBL !== 'function') return;
-    if (!(S.processos || []).some(p => p.status !== 'Cancelado' && !(p.docs && p.docs._relido82))) { clearInterval(t); return; }
+    if (!(S.processos || []).some(p => p.status !== 'Cancelado' && !(p.docs && p.docs._relido83))) { clearInterval(t); return; }
     _relendo = true; clearInterval(t);
-    try { const r = await relerDocsProcessos(false); if (r.mud) { autoUpdateStatus(); await saveToSheets(); render(); } } catch (e) { console.warn('releitura', e); }
+    try { const r = await relerDocsProcessos(false); if (typeof aplicarValorExportadoDecidido === 'function') r.mud += aplicarValorExportadoDecidido(); if (r.mud) { autoUpdateStatus(); await saveToSheets(); render(); } } catch (e) { console.warn('releitura', e); }
     _relendo = false;
   }, 25000);
 })();
@@ -824,4 +825,127 @@ if (typeof conferirDocumentos === 'function' && !conferirDocumentos._v78) {
     return base.apply(this, arguments);
   };
   conferirDocumentos._v78 = true;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 11. DU-E CONFIRMA O EMBARQUE E VALOR EXPORTADO (v83 · 13/10/2026)
+// · DU-E com "embarque bloqueado" (e carga ainda não exportada): o processo fica "No Porto", mesmo com BL anexado,
+//   até chegar a DU-E averbada / carga exportada (ou um BL novo depois do desbloqueio)
+// · valor exportado por processo (padrão = invoice; pode ser o da DU-E): o que o cliente pagou a mais é crédito dele
+//   (antecipação de venda futura) — não entra no resultado do processo
+// ═══════════════════════════════════════════════════════════════
+function dueBloqueio(p) {
+  const ds = Object.entries((p && p.docs && p.docs._dues) || {}).filter(([k, x]) => x && /BR\d{9}/i.test(k));
+  if (!ds.length || ds.some(([, x]) => x.exportada)) return null;
+  const b = ds.find(([, x]) => x.bloqueio); return b ? { due: b[0], desde: b[1].bloqueio === 'sim' ? '' : b[1].bloqueio } : null;
+}
+// soma do valor da DU-E (VMCV, ou VMLE) do processo e do seu "S" (venda dividida)
+function valorDasDues(p) {
+  const pS = (S.processos || []).find(q => q.id === p.id + 'S');
+  const todas = Object.assign({}, (pS && pS.docs && pS.docs._dues) || {}, (p.docs && p.docs._dues) || {});
+  return Math.round(Object.entries(todas).filter(([k]) => /BR\d{9}/i.test(k)).reduce((a, [, x]) => a + (Number(x && (x.vmcv || x.vmle)) || 0), 0) * 100) / 100;
+}
+function fatorExportado(p) {
+  const d = (p && p.docs) || {}; if (d._valorExportado == null || d._valorExportado === '') return 1;
+  const inv = Number(p.cambioInvoice) || 0, ex = valorExportado(p);
+  return inv > 0 && ex + 0.01 < inv ? Math.max(0, ex / inv) : 1;
+}
+async function usarValorExportado(id, fonte) {
+  const p = (S.processos || []).find(x => x.id === id); if (!p) return;
+  p.docs = p.docs || {};
+  if (fonte === 'limpar') { delete p.docs._valorExportado; delete p.docs._valorExportadoFonte; }
+  else { const v = fonte === 'due' ? valorDasDues(p) : Number(p.cambioInvoice) || 0; p.docs._valorExportado = v; p.docs._valorExportadoFonte = fonte; }
+  logAction('editar', 'PROCESSOS', id, fonte === 'limpar' ? 'Valor exportado: volta a ser o da invoice' : `Valor exportado: USD ${fmt(p.docs._valorExportado)} (${fonte === 'due' ? 'pela DU-E' : 'pela invoice'})`);
+  try { await saveToSheets(); } catch (e) {}
+  render();
+}
+// decisões suas (13/10/2026): o valor exportado do FS260107 é o da DU-E; a diferença fica como antecipação da Xiamen
+const VALOR_EXPORTADO_DECIDIDO = { FS260107: 'due' };
+function aplicarValorExportadoDecidido() {
+  let n = 0;
+  Object.entries(VALOR_EXPORTADO_DECIDIDO).forEach(([id, fonte]) => {
+    const p = (S.processos || []).find(x => x.id === id); if (!p || (p.docs && p.docs._valorExportadoFonte)) return;
+    const v = fonte === 'due' ? valorDasDues(p) : Number(p.cambioInvoice) || 0; if (!(v > 0)) return;
+    p.docs = p.docs || {}; p.docs._valorExportado = v; p.docs._valorExportadoFonte = fonte; n++;
+    logAction('editar', 'PROCESSOS', id, `Valor exportado: USD ${fmt(v)} (pela DU-E) — diferença para a invoice fica como antecipação do cliente`);
+  });
+  return n;
+}
+// status: DU-E bloqueada → "No Porto"
+if (typeof autoUpdateStatus === 'function' && !autoUpdateStatus._v83) {
+  const base = autoUpdateStatus;
+  autoUpdateStatus = function () {
+    const antes = {}; (S.processos || []).forEach(p => { antes[p.id] = p.status; if (p.docs && p.docs._bloqueioDue && !dueBloqueio(p)) delete p.docs._bloqueioDue; });
+    const r = base.apply(this, arguments);   // (a base marca "Embarcado" pela data de saída do BL; a DU-E bloqueada manda de volta para o porto)
+    (S.processos || []).forEach(p => {
+      const b = dueBloqueio(p);
+      if (b && !['No Destino', 'Concluído', 'Cancelado'].includes(p.status)) {
+        if (antes[p.id] !== 'No Porto') logAction('editar', 'PROCESSOS', p.id, `Embarque bloqueado na DU-E ${b.due}${b.desde ? ' desde ' + b.desde : ''}: status ${antes[p.id] || '—'} → No Porto`);
+        p.status = 'No Porto'; if (JSON.stringify(p.docs._bloqueioDue) !== JSON.stringify(b)) p.docs._bloqueioDue = b;
+      }
+    });
+    return r;
+  };
+  autoUpdateStatus._v83 = true;
+}
+// resultado do processo: só o valor exportado é receita dele (a antecipação fica como crédito do cliente)
+if (typeof procTotals === 'function' && !procTotals._v83) {
+  const base = procTotals;
+  procTotals = function (p) {
+    const t = base.apply(this, arguments); const f = fatorExportado(p); if (f >= 1) return t;
+    const es = buildAllEntries({ filtroProcessoId: p.id }).filter(e => e.status !== 'Cancelado');
+    const rc = es.filter(e => e.tipo === 'Receita' && (e.categoria === 'Câmbio' || e._computed)).reduce((a, e) => a + (Number(e.valor) || 0), 0);
+    const aj = Math.round(rc * (1 - f) * 100) / 100;
+    return Object.assign({}, t, { receita: t.receita - aj, lucro: t.lucro - aj, antecipacao: aj });
+  };
+  procTotals._v83 = true;
+}
+if (typeof resultadoProcesso === 'function' && !resultadoProcesso._v83) {
+  const base = resultadoProcesso;
+  resultadoProcesso = function (p) {
+    const r = base.apply(this, arguments); const f = fatorExportado(p); if (f >= 1) return r;
+    const aj = Math.round((Number(r.reaisCambio) || 0) * (1 - f) * 100) / 100;
+    return Object.assign({}, r, { resultado: r.resultado - aj, antecipacaoReais: aj, antecipacaoUsd: Math.round(((Number(p.cambioInvoice) || 0) - valorExportado(p)) * 100) / 100 });
+  };
+  resultadoProcesso._v83 = true;
+}
+// conferência: bloqueio da DU-E; valor da DU-E × invoice vira escolha do valor exportado
+if (typeof divergenciasDocs === 'function' && !divergenciasDocs._v83) {
+  const base = divergenciasDocs;
+  divergenciasDocs = function (p) {
+    let out = base.apply(this, arguments);
+    if (!p || p.status === 'Cancelado') return out;
+    const b = dueBloqueio(p);
+    if (b) out.unshift(`Embarque bloqueado na DU-E ${b.due}${b.desde ? ' desde ' + b.desde : ''} — carga no porto, aguardando desbloqueio`);
+    if (ehProcessoS(p)) return out;
+    const d = p.docs || {}, vd = valorDasDues(p), inv = Number(p.cambioInvoice) || 0;
+    out = out.filter(t => !/^VMLE da DU-E/.test(t));
+    if (vd && inv && Math.abs(vd - inv) > 1) {
+      if (!d._valorExportadoFonte) out.push(`DU-E com USD ${fmt(vd)} e invoice com USD ${fmt(inv)} — escolha o valor exportado (em Receita)`);
+      else if (d._valorExportadoFonte === 'invoice') out.push(`DU-E com USD ${fmt(vd)} e invoice com USD ${fmt(inv)} — DU-E a retificar (o aviso sai quando chegar a DU-E retificada)`);
+    }
+    return out;
+  };
+  divergenciasDocs._v83 = true;
+}
+// tela do processo: bloco "Valor exportado" na Receita
+if (typeof renderProcesso2 === 'function' && !renderProcesso2._v83) {
+  const base = renderProcesso2;
+  renderProcesso2 = function () {
+    const h = base.apply(this, arguments); const p = S.sub;
+    if (!p || !p.id || ehProcessoS(p)) return h;
+    const d = p.docs || {}, vd = valorDasDues(p), inv = Number(p.cambioInvoice) || 0, us = n => 'USD ' + fmt(n);
+    let bloco = '';
+    if (d._valorExportadoFonte) {
+      const ex = valorExportado(p), ant = inv - ex;
+      bloco = `<div style="font-size:12.5px;background:var(--bg3);border-radius:8px;padding:8px 10px;margin:6px 0">Valor exportado: <b>${us(ex)}</b> (${d._valorExportadoFonte === 'due' ? 'pela DU-E' : 'pela invoice'}${d._valorExportadoFonte === 'invoice' && vd && Math.abs(vd - inv) > 1 ? ` · <span style="color:var(--orange)">DU-E com ${us(vd)}, aguardando retificação</span>` : ''})${ant > 1 ? ` · <span style="color:var(--green)">${us(ant)} de crédito do cliente (antecipação de venda futura)</span>` : ''} <button class="btn btn-secondary btn-xs" onclick="usarValorExportado('${escHtml(p.id)}','limpar')">mudar</button></div>`;
+    } else if (vd && inv && Math.abs(vd - inv) > 1) {
+      bloco = `<div style="font-size:12.5px;background:rgba(251,146,60,.14);border-radius:8px;padding:8px 10px;margin:6px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span>A DU-E diz <b>${us(vd)}</b> e a invoice <b>${us(inv)}</b>. Qual foi o valor exportado?</span>
+        <button class="btn btn-primary btn-xs" onclick="usarValorExportado('${escHtml(p.id)}','due')">${us(vd)} (DU-E)</button>
+        <button class="btn btn-secondary btn-xs" onclick="usarValorExportado('${escHtml(p.id)}','invoice')">${us(inv)} (invoice · a DU-E está errada)</button></div>`;
+    }
+    if (!bloco) return h;
+    return h.replace(/(font-size:17px">Receita<\/h2>[\s\S]*?<\/div>)/, m => m + bloco);
+  };
+  renderProcesso2._v83 = true;
 }

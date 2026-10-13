@@ -25,6 +25,7 @@ function faseProcesso(p) {
   const passou = s => { const d = brParaDate(s); return d && d <= hoje; };
   const eta = p.docs && p.docs._viagem && p.docs._viagem.eta;
   if (p.status === 'No Destino' || p.status === 'Concluído' || (passou(p.saida) && eta && passou(eta))) return 4;
+  if (typeof dueBloqueio === 'function' && dueBloqueio(p)) return 2;   // a DU-E diz embarque bloqueado: carga no porto, mesmo com BL (13/10/2026)
   if (passou(p.saida) || temDoc(p, 'bl')) return 3;   // BL anexado = embarcado (13/10/2026)
   if (passou(p.logPorto) || temDoc(p, 'due')) return 2;
   if (passou(p.logChegada)) return 1;

@@ -939,6 +939,18 @@ function ajustarDue(item) {
       item.aviso = (item.aviso ? item.aviso + ' ' : '') + `O ${P.id} já tem a DU-E ${P.dueNumero || daP[0]}: esta é a do outro container, ficou no ${PS.id}.`;
     }
   }
+  // aviso já na Caixa de Entrada: DU-E que não bate com a invoice do processo (peso ou valor) — 13/10/2026
+  { const Q = (S.processos || []).find(p => p.id === item.processo);
+    const par = Q && ((S.processos || []).some(q => q.id === Q.id + 'S') || /^FS\d{6}S$/.test(Q.id));   // venda dividida: confere pelo processo (soma das duas DU-Es)
+    if (Q && !par) {
+      const kg = (typeof toneladas === 'function' ? toneladas(Q) : 0) * 1000, peso = Number(info.pesoLiq) || 0;
+      const inv = Number(Q.cambioInvoice) || 0, val = Number(info.vmcv || info.vmle) || 0, nk = n => Math.round(n).toLocaleString('pt-BR');
+      const prob = [];
+      if (peso && kg && Math.abs(peso - kg) > Math.max(50, kg * 0.005)) prob.push(`peso ${nk(peso)} kg na DU-E × ${nk(kg)} kg na invoice`);
+      const decidido = Q.docs && Q.docs._valorExportadoFonte === 'due' && typeof valorExportado === 'function' && Math.abs(valorExportado(Q) - val) <= 1;   // ex.: FS260107, diferença é antecipação
+      if (val && inv && Math.abs(val - inv) > 1 && !decidido) prob.push(`valor USD ${fmt(val)} na DU-E × USD ${fmt(inv)} na invoice`);
+      if (prob.length) item.aviso = (item.aviso ? item.aviso + ' ' : '') + `⚠️ Esta DU-E não bate com o ${Q.id}: ${prob.join('; ')}. Confira com o despachante (retificação).`;
+    } }
   const c = item.candidatos[0], seg = item.candidatos[1];
   const forte = c && c.score >= 100 && (!seg || seg.score < c.score) && c.motivos.some(m => /DU-E|RUC|nota de saída|nota já anexada|segunda DU-E/.test(m));
   if (forte && item.confianca !== 'manual' && !item.pastaErrada) item.confianca = 'alta';
