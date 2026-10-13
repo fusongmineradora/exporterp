@@ -610,6 +610,34 @@ function identificarProcesso(info, texto, nome) {
   return cands.sort((a, b) => b.score - a.score);
 }
 
+// Documento que cita outro do MESMO lote da Entrada (MDF-e → CT-e, CT-e → NF-e): vai para o mesmo processo,
+// sem precisar anexar um antes do outro (13/10/2026). Escolha manual nunca é trocada.
+const _ordemConf = { nenhuma: 0, media: 1, alta: 2, manual: 2 };
+function ligarPeloLote(lista) {
+  lista = lista || (S.entrada && S.entrada.itens) || [];
+  const rotulo = it => { const t = (ENTRADA_TIPOS.find(x => x[0] === it.tipo) || [])[1] || it.tipo; return t + (it.info && it.info.numero ? ' ' + String(it.info.numero).replace(/^0+/, '') : ''); };
+  for (let volta = 0; volta < 3; volta++) {
+    const porChave = {};
+    lista.forEach(it => { const ch = it.info && it.info.chave; if (ch && it.tipo && it.processo && it.processo !== '__ADM') porChave[ch] = it; });
+    let mudou = false;
+    lista.forEach(it => {
+      if (!it.info || it.confianca === 'manual') return;
+      if (it.processo && !it._peloLote) return;   // o próprio documento já disse o processo
+      const fonte = [...(it.info.refs || []), ...(it.info.outrasChaves || [])].map(ch => porChave[ch]).find(x => x && x !== it);
+      if (!fonte || it.processo === fonte.processo) return;
+      if (it._confBase == null) it._confBase = it.confianca || 'nenhuma';
+      it.processo = fonte.processo; it._peloLote = true;
+      it.confianca = _ordemConf[fonte.confianca] >= 2 && _ordemConf[it._confBase] >= 2 ? 'alta' : (it.tipo ? 'media' : it._confBase);
+      const mot = 'cita o ' + rotulo(fonte) + ' que está na Entrada (' + fonte.processo + ')';
+      it.candidatos = [{ id: fonte.processo, score: 100, motivos: [mot] }].concat((it.candidatos || []).filter(c => c.id !== fonte.processo));
+      it.duplicado = procurarDuplicado(it);
+      mudou = true;
+    });
+    if (!mudou) break;
+  }
+  return lista;
+}
+
 function procurarDuplicado(item) {
   for (const p of S.processos || []) {
     const files = (p.docs && p.docs._files) || {};
@@ -650,6 +678,7 @@ async function lerEntrada() {
     itens.forEach(it => { if (!it.md5) return; if (vistos[it.md5] && !it.duplicado) it.duplicado = { processo: 'Entrada', nome: vistos[it.md5], motivo: 'arquivo idêntico na Entrada' }; else vistos[it.md5] = it.nome; });
     if (gen !== window._lerEntradaGen) return;   // uma leitura mais nova já está valendo
     E.itens = itens; E.lido = true;
+    try { ligarPeloLote(E.itens); } catch (e) { console.warn('lote', e); }
     const planilhas = itens.filter(it => it.tipo === 'planilhaCambio');
     if (planilhas.length && typeof aplicarMapaCambio === 'function') {
       E.progresso = 'Aplicando a planilha de câmbio do banco...'; render();
@@ -663,6 +692,7 @@ async function lerEntrada() {
       }
       E.itens = itens.filter(it => it.tipo !== 'planilhaCambio');
       E.itens.forEach(it => { try { identificarItem(it); } catch (e) {} });
+      try { ligarPeloLote(E.itens); } catch (e) {}
       try { await saveToSheets(); } catch (e) {}
     }
   } catch (e) {
@@ -733,7 +763,7 @@ async function analisarArquivo(f) {
 function identificarItem(item) {
   const nome = item.nome || '';
   if (item._base) { item.tipo = item._base.tipo; item.confianca = item._base.confianca; item.motivo = item._base.motivo; }
-  ['processo', 'pastaErrada', 'corrigido', 'aviso', 'processosExtras', 'divisao', 'admAuto'].forEach(k => delete item[k]);
+  ['processo', 'pastaErrada', 'corrigido', 'aviso', 'processosExtras', 'divisao', 'admAuto', '_peloLote', '_confBase'].forEach(k => delete item[k]);
   if (item.tipo === 'planilhaCambio') { item.processo = '__CAMBIO'; return item; }
   // câmbio: número antigo → novo (FS260105 → FS260107) e "S" → principal (FS260109S recebe pelo FS260109)
   if (item.info && item.info.cambio && Array.isArray(item.info.cambio.faturas)) {
@@ -1180,6 +1210,7 @@ function setEntrada(i, campo, valor) {
   if (!it) return;
   it[campo] = valor;
   if (campo === 'tipo' || campo === 'processo') { it.confianca = 'manual'; it.duplicado = procurarDuplicado(it); }
+  if (campo === 'processo' || campo === 'tipo') { try { ligarPeloLote(S.entrada.itens); } catch (e) {} }   // quem cita este documento acompanha
   render();
 }
 
