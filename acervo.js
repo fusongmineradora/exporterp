@@ -93,7 +93,31 @@ function lerDocVenda(texto) {
     emitida: dt ? `${dt[2].padStart(2, '0')}/${MESES_EN[dt[1].slice(0, 3).toLowerCase()]}/${dt[3]}` : '',
     qtdContainer: cont ? String(parseInt(cont[1], 10)) : '',
     tamanhoContainer: cont && cont[2] ? cont[2] : '',
+    ...lerDocVendaExtra(T),
   };
+}
+// Comprador × consignatário, linhas da tabela (kg × preço = total) e conta bancária impressa
+// Invoice: CONSIGNEE (recebe) + NOTIFY ou BUYER; Sales Contract: BUYER (compra) + NOTIFY PARTY (recebe)
+const RE_EMPRESA = /([A-Z][A-Za-z0-9&.,'()\- ]{2,90}?\b(?:LIMITED|Limited|LIMITE\s?D|LTD\.?|Ltd\.?|Co\.,?\s?Ltd\.?|CO\.,?\s?LTD\.?|INC\.?|Inc\.?|CORPORATION|Corporation|COMPANY|Company|S\.?A\.?))(?![A-Za-z])/;
+function empresaDepois(T, re, ultima) {
+  const ms = [...T.matchAll(re)]; if (!ms.length) return '';
+  const m = ultima ? ms[ms.length - 1] : ms[0];
+  const trecho = T.slice(m.index + m[0].length, m.index + m[0].length + 220).replace(/\bCEP\s*[\d.\-]+/g, ' ').replace(/\b(?:Vat\.?|Add\.?|Ad\s?dress|Address|TEL|E-?MAIL)\b[^A-Z]*/gi, ' ');
+  const e = trecho.match(RE_EMPRESA);
+  return e ? e[1].replace(/\s+/g, ' ').replace(/LIMITE\s?D\b/, 'LIMITED').replace(/^(?:The\s+)?(?:Buyer|Seller)\s*:?\s*/i, '').trim() : '';
+}
+function lerDocVendaExtra(T) {
+  const out = {};
+  const consig = empresaDepois(T, /CONSIGNEE\s*:/gi) || empresaDepois(T, /NOTIFY\s+PARTY\s*:/gi);
+  const comp = empresaDepois(T, /THE\s+BUYER\s*:/gi, true) || empresaDepois(T, /\bBUYER\s*:/gi) || (/CONSIGNEE\s*:/i.test(T) ? empresaDepois(T, /\bNOTIFY\s*:/gi) : '');
+  if (comp) out.comprador = comp;
+  if (consig) out.consignatario = consig;
+  // linhas: NCM (8 dígitos) · quantidade em kg · preço por kg · total da linha
+  const linhas = [...T.matchAll(/\b\d{8}\s+([\d.]+(?:,\d+)?)\s+(\d+(?:,\d+)?)\s*USD\s+([\d.]+,\d{2})\s*USD/gi)].map(m => ({ kg: numBR(m[1].includes(',') ? m[1] : m[1].replace(/\./g, '')), preco: numBR(m[2]), dec: (m[2].split(',')[1] || '').length, total: numBR(m[3]) }));
+  if (linhas.length) { out.linhas = linhas; out.qtdKg = linhas.reduce((a, l) => a + l.kg, 0); }
+  const ct = T.match(/BRANCH\s+NUMBER\s*\/\s*ACCOUNT\s+NUMBER\s*:?\s*(\d{3,5})\s*\/\s*([\d\s\-]{5,20}?)(?=\s*(?:IBAN|$|[A-Z]))/i);
+  if (ct) out.contaBanco = { agencia: ct[1], conta: ct[2].replace(/\D/g, '') };
+  return out;
 }
 
 // ── OCR pelo Google Drive (prints, fotos e PDFs escaneados) ──
@@ -151,6 +175,35 @@ function garantirCliente(p) {
 
 
 // ── Criar processo a partir da invoice / contrato que está na Entrada ──
+// guarda o que a invoice / o contrato dizem (para conferir um com o outro e com BL / DU-E)
+function guardarDadosVenda(p, d) {
+  if (!p || !d) return;
+  p.docs = p.docs || {};
+  const k = d.contrato ? '_contrato' : '_invoice';
+  const o = { kg: Number(d.qtdKg) || numBR(String(d.peso || '')) || 0, total: Number(d.totalUsd) || 0, produto: d.produto || '', pod: d.pod || '', pol: d.pol || '', containers: Number(d.qtdContainer) || 0 };
+  if (d.linhas && d.linhas.length) o.linhas = d.linhas.map(l => ({ kg: l.kg, preco: l.preco, dec: l.dec, total: l.total }));
+  if (d.contaBanco) o.conta = d.contaBanco;
+  p.docs[k] = o;
+  if (d.comprador) p.docs._comprador = d.comprador;
+  if (d.consignatario) p.docs._consignatario = d.consignatario;
+}
+// nº de containers: o contrato diz; sem contrato, o peso da invoice ÷ 27.000 kg. Só aumenta (nunca apaga container já informado).
+const KG_POR_CONTAINER = 27000;
+function ajustarContainersPelosDocs(p) {
+  const d = p.docs || {};
+  // venda dividida em processo principal + "S" (FS260109 / FS260109S): a invoice e o contrato somam os dois — não mexe
+  if (/S$/.test(p.id) || (S.processos || []).some(q => q.id === p.id + 'S')) return false;
+  // com BL, os containers do BL são a verdade (diferença vira aviso, não muda o processo)
+  if (((d._bl && d._bl.containers) || []).filter(Boolean).length) return false;
+  let n = Number(d._contratoCont) || 0;
+  if (!n) { const kg = (d._invoice && d._invoice.kg) || 0; if (kg && kg % KG_POR_CONTAINER === 0) n = kg / KG_POR_CONTAINER; }
+  if (!n) return false;
+  const atual = Math.max((p.containers || []).filter(Boolean).length, parseInt(p.qtdContainer, 10) || 0);
+  if (n <= atual) return false;
+  p.qtdContainer = String(n);
+  const cs = (p.containers || []).filter(Boolean); while (cs.length < n) cs.push(''); p.containers = cs; p.container = cs[0] || '';
+  return true;
+}
 function docVendaDoItem(it) {
   if (!it || !['invoice', 'contrato'].includes(it.tipo)) return null;
   if (it._venda === undefined) it._venda = lerDocVenda(it.texto) || null;
@@ -242,6 +295,11 @@ const MESES_PT = { janeiro: '01', fevereiro: '02', marco: '03', 'março': '03', 
 const titulo = s => String(s || '').toLowerCase().replace(/(^|[\s\/-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase()).replace(/\b(Ltda|S\.?a\.?|Me|Epp)\b/gi, x => x.toUpperCase()).replace(/([\s\/-])([A-Za-z]{2})$/, (m, a, b) => a + b.toUpperCase());
 const dataBrDe = t => { const m = String(t || '').match(/\b(\d{2}\/\d{2}\/\d{4})\b/); return m ? m[1] : ''; };
 
+// NCM do produto no DANFE: "PEGMATITO 25291000 0102 6501 KG" (NCM · CST · CFOP · unidade)
+function ncmDoDanfe(U) {
+  const m = String(U || '').match(/\b(\d{4}\.?\d{2}\.?\d{2})\s+\d{2,4}\s+[1-7]\d{3}\s+[A-Z³]{1,6}\b/);
+  return m ? m[1].replace(/\D/g, '') : '';
+}
 function enriquecerInfo(item) {
   const T = String(item.texto || ''), U = T.replace(/\s+/g, ' ');
   const info = item.info = item.info || {};
@@ -262,6 +320,7 @@ function enriquecerInfo(item) {
     if (!info.emitNome) info.emitNome = mx(/RECEBEMOS DE\s+(.+?)\s+OS PRODUTOS/i);
     if (!info.valor) info.valor = valorDanfe(T);
     if (!info.data) { const d = mx(/DATA (?:DA )?EMISS[AÃ]O[\s\S]{0,120}?(\d{2}\/\d{2}\/\d{4})/i) || dataBrDe(U); if (d) info.data = brToIso(d); }
+    if (!info.ncm) info.ncm = ncmDoDanfe(U);
     if (!info.transpNome) info.transpNome = mx(/TRANSPORTADOR[\s\S]{0,140}?CNPJ \/ CPF\s+([A-ZÀ-Ú][A-ZÀ-Ú .&-]{3,60}?)\s+\d-/i);
   }
   if (item.tipo === 'nfse') {
@@ -443,12 +502,17 @@ function aplicarDocNoProcesso(item, p, upd) {
   if ((item.tipo === 'invoice' || item.tipo === 'contrato') && !/ADEMIR/i.test(semAcento(item.nome || (upd && upd.name) || ''))) {
     const d = docVendaDoItem(item);
     if (d && d.totalUsd && !p.docs._invoiceCorrigida && (!d.numero || processoAtual(d.numero) === p.id || d.numero === p.id)) {
-      if (d.contrato) { p.docs._contratoUsd = d.totalUsd; if (d.qtdContainer) p.docs._contratoCont = Number(d.qtdContainer) || 0; }
-      else {
+      guardarDadosVenda(p, d);
+      if (d.contrato) {
+        p.docs._contratoUsd = d.totalUsd; if (d.qtdContainer) p.docs._contratoCont = Number(d.qtdContainer) || 0;
+        // a invoice manda; o contrato só completa o que ainda está vazio
+        ['produto', 'ncm', 'pod', 'peso'].forEach(k => { if (d[k] && !p[k]) { p[k] = d[k]; mud.push(k); } });
+      } else {
         p.docs._invoiceUsd = d.totalUsd;
         if (!(Number(p.cambioInvoice) > 0)) { p.cambioInvoice = d.totalUsd; mud.push('cambioInvoice'); }
         ['cliente', 'produto', 'ncm', 'pol', 'pod', 'incoterm', 'pagamento', 'peso'].forEach(k => { if (d[k] && !p[k]) { p[k] = d[k]; mud.push(k); } });
       }
+      if (ajustarContainersPelosDocs(p)) mud.push('qtdContainer');
     }
   }
   // logística
@@ -930,7 +994,7 @@ function cadastrarPeloDoc(item) {
     cnpj = docs[0] || '';
   }
   const campo = item.campoCusto || (typeof campoCustoSugerido === 'function' ? campoCustoSugerido(item) : '') || CAMPO_POR_CATEG[item.categoria] || '';
-  const tipo = item.tipo === 'cte' || item.tipo === 'mdfe' ? 'Transportadora' : item.tipo === 'faturaFrete' ? 'Agente de Carga' : item.tipo === 'nfe' ? 'Fornecedor' : (TIPO_FORN_POR_CAMPO[campo] || 'Serviço de Terceiros');
+  const tipo = item._adm ? 'Despesas gerais (ADM)' : item.tipo === 'cte' || item.tipo === 'mdfe' ? 'Transportadora' : item.tipo === 'faturaFrete' ? 'Agente de Carga' : item.tipo === 'nfe' ? 'Fornecedor' : (TIPO_FORN_POR_CAMPO[campo] || 'Serviço de Terceiros');
   return garantirFornecedor({ nome, cnpj, tipo, ie: info.emitIE, cep: info.emitCep, end: info.emitEnd, origem: tipoLabel(item.tipo) });
 }
 // Completa os cadastros com o que já está anexado nos processos (roda ao abrir; não duplica)
@@ -1001,6 +1065,7 @@ setTimeout(async function esperarDados() {
     try { mudou += assessoriaPeloSaldo(); } catch (e) { console.warn('assessoria', e); }
     try { mudou += await pastasOficiais(); } catch (e) { console.warn('pastas oficiais', e); }
     const novosCad = cadastrosPelosArquivos();
+    try { if (typeof organizarCadastro === 'function') mudou += organizarCadastro(); } catch (e) { console.warn('cadastro organizado', e); }
     // só grava se algo mudou de verdade (evita regravar a planilha inteira a cada vez que abre)
     if (novosCad > 0 || (f0 == null ? mudou : foto() !== f0)) saveToSheets().catch(() => {});
     if (b0 != null && fotoBanco() !== b0 && typeof salvarBanco === 'function') salvarBanco().catch(() => {});
@@ -1370,22 +1435,30 @@ function juntarProcessosRenumerados() {
 const PREVISTOS_PADRAO = [
   { campo: 'custoServTerceiros', nome: 'Assessoria (Ademir / FFA)', valor: 1200, por: 'container' },
   { campo: 'custoDespachante', nome: 'Despachante (CGA)', valor: 500, por: 'processo', certificado: 50 },
-  { campo: 'custoArmazem', nome: 'Armazém (estimado)', valor: 3200, por: 'container', soArmazem: true },
+  // armazém: Santos R$ 3.200, Salvador R$ 1.100 por container (12/10/2026)
+  { campo: 'custoArmazem', nome: 'Armazém (estimado)', valor: 3200, valorSalvador: 1100, por: 'container', soArmazem: true, porPorto: true },
+  // frete marítimo (CFR/CIF): depende do porto de embarque — Santos R$ 6.500, Salvador R$ 11.500 por container (12/10/2026)
+  { campo: 'custoMaritimo', nome: 'Frete marítimo (estimado)', valor: 6500, valorSalvador: 11500, por: 'container', porPorto: true },
 ];
+const ehSalvador = p => /SALVADOR/i.test(String((p && (p.pol || '')) + ' ' + ((p && p.logPorto) || '')));
+const valorDaRegra = (r, p) => r.porPorto && ehSalvador(p) ? r.valorSalvador : r.valor;
+const freteDoComprador = p => /\b(FOB|FCA|EXW)\b/i.test(String((p && p.incoterm) || ''));
 function regrasPrevisto() {
   const rs = ((S.banco && S.banco.regras) || []).filter(r => r.tipo === 'previsto');
   return PREVISTOS_PADRAO.map(d => {
     const r = rs.find(x => x.valor === d.campo); if (!r) return Object.assign({}, d);
     const o = Object.assign({}, d, { valor: Number(r.categoria) || 0 });
     if (d.certificado != null && r.centro !== '' && r.centro != null) o.certificado = Number(r.centro) || 0;
+    if (d.porPorto && r.centro !== '' && r.centro != null) o.valorSalvador = Number(r.centro) || 0;
     return o;
   });
 }
 function qtdContainers(p) { return Math.max(1, (p.containers || []).filter(Boolean).length, parseInt(p.qtdContainer, 10) || 0); }
 function temCertificadoOrigem(p) { const d = p.docs || {}; if (d._semCertificado) return false; if (d._semCertificado === undefined) return true; return Number(p.custoCertificado) > 0 || Object.keys(d._files || {}).some(k => /certific/i.test(k) && (d._files[k] || []).length) || !!(d._custoDocs && d._custoDocs.custoCertificado); }
-function vaiProArmazem(p) { const d = p.docs || {}; if (d._armazem != null) return !!d._armazem; return !!(p.logArmazem || /ARMAZ/i.test(p.logModalidade || '')); }
+function vaiProArmazem(p) { const d = p.docs || {}; if (d._armazem != null) return !!d._armazem; return !!(p.logArmazem || /ARMAZ|CROSS\s*-?\s*DOCK/i.test(p.logModalidade || '')); }   // crossdock passa pelo armazém (T5S)
 function textoPrevisto(r, p) {
   const q = qtdContainers(p);
+  if (r.porPorto) return `R$ ${fmtBR2(valorDaRegra(r, p))} × ${q} container${q > 1 ? 's' : ''} (${ehSalvador(p) ? 'Salvador' : 'Santos'})`;
   return r.por === 'container' ? `R$ ${fmtBR2(r.valor)} × ${q} container${q > 1 ? 's' : ''}` : `R$ ${fmtBR2(r.valor)} por processo` + (r.certificado && temCertificadoOrigem(p) ? ` + R$ ${fmtBR2(r.certificado)} (certificado de origem)` : '');
 }
 function fmtBR2(v) { return (Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -1400,14 +1473,14 @@ function aplicarPrevistos(p) {
     const real = (reg && ((reg.fiscais || []).length || (reg.pagos || []).length)) || (p.docs._costBanco && p.docs._costBanco[r.campo])
       || (S.lancamentos || []).some(l => l.vinculo === 'processo' && l.vinculoId === p.id && l.categoria === PROCESS_COST_FIELDS[r.campo] && l.status !== 'Cancelado');
     if (real) { if (pv[r.campo]) { delete pv[r.campo]; mud++; } return; }   // chegou o valor real: deixa de ser previsto
-    if (p.status === 'Cancelado' || off[r.campo] || r.valor <= 0 || (r.soArmazem && !vaiProArmazem(p))) { tirar(r.campo); return; }
+    if (p.status === 'Cancelado' || off[r.campo] || valorDaRegra(r, p) <= 0 || (r.soArmazem && !vaiProArmazem(p)) || (r.campo === 'custoMaritimo' && freteDoComprador(p))) { tirar(r.campo); return; }
     if (Number(p[r.campo]) > 0 && !pv[r.campo]) return;                    // valor digitado por você antes: não mexe
     if (pv[r.campo] && Math.abs((Number(p[r.campo]) || 0) - (Number(pv[r.campo].valor) || 0)) >= 0.01) {  // você alterou o valor
       if (!(Number(p[r.campo]) > 0)) { tirar(r.campo); return; }
       pv[r.campo] = { valor: Number(p[r.campo]), regra: 'alterado por você', editado: true }; mud++; return;
     }
     if (pv[r.campo] && pv[r.campo].editado) return;
-    const valor = Math.round(((r.por === 'container' ? r.valor * qtdContainers(p) : r.valor) + (r.certificado && temCertificadoOrigem(p) ? r.certificado : 0)) * 100) / 100;
+    const valor = Math.round(((r.por === 'container' ? valorDaRegra(r, p) * qtdContainers(p) : valorDaRegra(r, p)) + (r.certificado && temCertificadoOrigem(p) ? r.certificado : 0)) * 100) / 100;
     const regra = textoPrevisto(r, p);
     if (!pv[r.campo] || pv[r.campo].valor !== valor || Number(p[r.campo]) !== valor) mud++;
     pv[r.campo] = { valor, regra }; p[r.campo] = valor; p[r.campo + '_status'] = 'Em Aberto';
@@ -1419,13 +1492,13 @@ function aplicarPrevistos(p) {
 async function alterarPrevisto(id, campo) {
   const p = (S.processos || []).find(x => x.id === id); if (!p) return;
   const atual = Number(p[campo]) || 0;
-  const v = await uiPrompt(`Valor previsto de ${PROCESS_COST_FIELDS[campo]} no ${id} (R$). Deixe 0 se não vai ter esse custo.`, fmtBR2(atual), 'Custo previsto');
+  const v = await uiPrompt(`Valor estimado de ${PROCESS_COST_FIELDS[campo]} no ${id} (R$). Deixe 0 se não vai ter esse custo.`, fmtBR2(atual), 'Custo previsto');
   if (v == null) return;
   const n = numBR(String(v).replace(/[^\d.,]/g, '')) || 0;
   p.docs._previstoOff = p.docs._previstoOff || {};
   if (n <= 0) { p.docs._previstoOff[campo] = true; } else { delete p.docs._previstoOff[campo]; p[campo] = n; }
   aplicarPrevistos(p);
-  try { await saveToSheets(); showToast('✅ Previsto atualizado'); } catch (e) { showToast('⚠️ ' + e.message); }
+  try { await saveToSheets(); showToast('✅ Estimado atualizado'); } catch (e) { showToast('⚠️ ' + e.message); }
   render();
 }
 async function setArmazemPrevisto(id, sim) {
@@ -1439,16 +1512,17 @@ async function setArmazemPrevisto(id, sim) {
 async function editarPadroesPrevistos() {
   const rs = regrasPrevisto(), novas = [];
   for (const r of rs) {
-    const v = await uiPrompt(`${r.nome}: valor padrão em R$ ${r.por === 'container' ? 'por container' : 'por processo'}${r.soArmazem ? ' (só quando o container vai para o armazém)' : ''}.`, fmtBR2(r.valor), 'Custos previstos');
+    const v = await uiPrompt(`${r.nome}: valor padrão em R$ ${r.por === 'container' ? 'por container' : 'por processo'}${r.soArmazem ? ' (só quando o container vai para o armazém)' : ''}${r.porPorto ? ' — embarque por Santos' : ''}.`, fmtBR2(r.valor), 'Custos estimados');
     if (v == null) return;
     let cert = '';
-    if (r.certificado != null) { const c = await uiPrompt(`${r.nome}: valor a mais quando tem certificado de origem (R$).`, fmtBR2(r.certificado), 'Custos previstos'); if (c == null) return; cert = String(numBR(String(c).replace(/[^\d.,]/g, '')) || 0); }
+    if (r.porPorto) { const c = await uiPrompt(`${r.nome}: valor por container quando embarca por Salvador (R$). O valor anterior é o de Santos.`, fmtBR2(r.valorSalvador), 'Custos estimados'); if (c == null) return; cert = String(numBR(String(c).replace(/[^\d.,]/g, '')) || 0); }
+    if (r.certificado != null) { const c = await uiPrompt(`${r.nome}: valor a mais quando tem certificado de origem (R$).`, fmtBR2(r.certificado), 'Custos estimados'); if (c == null) return; cert = String(numBR(String(c).replace(/[^\d.,]/g, '')) || 0); }
     novas.push({ id: genId(), tipo: 'previsto', valor: r.campo, categoria: String(numBR(String(v).replace(/[^\d.,]/g, '')) || 0), centro: cert, criadoEm: new Date().toISOString() });
   }
   S.banco.regras = (S.banco.regras || []).filter(r => r.tipo !== 'previsto').concat(novas);
   // processos com previsto automático (não alterado por você) passam a usar o novo padrão
   (S.processos || []).forEach(p => aplicarPrevistos(p));
-  try { if (typeof ensureTabs2 === 'function') await ensureTabs2(); await gravarAba2('REGRAS', S.banco.regras); await saveToSheets(); showToast('✅ Padrões dos previstos salvos'); } catch (e) { showToast('⚠️ ' + e.message); }
+  try { if (typeof ensureTabs2 === 'function') await ensureTabs2(); await gravarAba2('REGRAS', S.banco.regras); await saveToSheets(); showToast('✅ Padrões dos estimados salvos'); } catch (e) { showToast('⚠️ ' + e.message); }
   render();
 }
 
@@ -1738,7 +1812,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '67';
+const VERSAO_TESTE = '77';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
