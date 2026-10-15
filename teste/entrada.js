@@ -589,17 +589,36 @@ function lerGuia91(texto, nome) {
   if (mp) { const i = MESES91.findIndex(x => semAc91(x) === semAc91(mp[1])); out.periodo = MESES91[i] + '/' + mp[2]; out.pa = mp[2] + '-' + String(i + 1).padStart(2, '0'); }
   else { const m = U.match(/\bPA\s*:?\s*(\d{2})\/(\d{4})\b/i) || U.match(/Per[ií]odo de Apura[cç][aã]o\s*:?\s*(\d{2})\/(\d{4})/i); if (m && Number(m[1]) >= 1 && Number(m[1]) <= 12) { out.pa = m[2] + '-' + m[1]; out.periodo = MESES91[Number(m[1]) - 1] + '/' + m[2]; } }
   out.pagarAte = g(/Pagar (?:este documento )?at[eé]\s*:?\s*(\d{2}\/\d{2}\/\d{4})/i);
-  out.vencimento = g(/Data de Vencimento[\s\S]{0,90}?(\d{2}\/\d{2}\/\d{4})/i) || g(/Vencimento\s*:?\s*(\d{2}\/\d{2}\/\d{4})/i) || out.pagarAte;
+  // vencimento original (o da composição "Vencimento:dd/mm/aaaa"; senão a data logo depois do período) — no pdf.js a
+  // "Data de Vencimento" fica longe da data dela
+  out.vencimento = g(/\bVencimento\s*:\s*(\d{2}\/\d{2}\/\d{4})/i) || g(/\b(?:janeiro|fevereiro|mar[cç]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s*\/\s*\d{4}\s+(\d{2}\/\d{2}\/\d{4})/i)
+    || g(/Data de Vencimento[\s\S]{0,90}?(\d{2}\/\d{2}\/\d{4})/i) || out.pagarAte;
   out.emissao = brToIso(g(/(\d{2}\/\d{2}\/\d{4})\s+\d{2}:\d{2}(?::\d{2})?\b/));
   out.total = numBR(g(/Valor Total do Documento\s*:?\s*(?:R\$\s*)?([\d.]+,\d{2})/i) || g(/\bValor\s*:\s*(?:R\$\s*)?([\d.]+,\d{2})/i) || g(/Valor (?:a pagar|do documento)\s*:?\s*(?:R\$\s*)?([\d.]+,\d{2})/i)) || 0;
-  // "Totais principal multa juros total" (sem atraso vem só "principal total")
-  const tot = U.match(/\bTotais\s+([\d.]+,\d{2})((?:\s+[\d.]+,\d{2}){1,3})/i);
-  if (tot) {
-    const vs = [tot[1], ...tot[2].trim().split(/\s+/)].map(numBR), ult = vs[vs.length - 1];
-    out.principal = vs[0];
-    if (vs.length === 4) { out.multa = vs[1]; out.juros = vs[2]; }
-    else if (vs.length === 3) { if (Math.abs(vs[0] + vs[1] - ult) < 0.01) out.multa = vs[1]; else out.juros = vs[1]; }
-    if (!out.total) out.total = ult;
+  // principal + multa + juros: pela soma das linhas da composição ("código denominação principal multa juros total";
+  // sem atraso vem só "principal total"). A linha "Totais" não serve para separar multa e juros: no PDF real o pdf.js
+  // do navegador lê os juros antes da multa ("Totais 502,51 22,05 100,50 625,06") — visto nas guias de 15/10/2026
+  const ini = U.search(/Composi[cç][aã]o do Documento/i), fim = U.search(/\bTotais\b/i);
+  if (ini >= 0 && fim > ini) {
+    let p = 0, m = 0, j = 0, n = 0;
+    for (const x of U.slice(ini, fim).matchAll(/\b\d{4}\s+(?:[^\s\d]\S*\s+)+?((?:\d{1,3}(?:\.\d{3})*,\d{2}\s*){2,4})/g)) {
+      const vs = x[1].trim().split(/\s+/).map(numBR);
+      p += vs[0]; n++;
+      if (vs.length === 4) { m += vs[1]; j += vs[2]; }
+      else if (vs.length === 3) { if (Math.abs(vs[0] + vs[1] - vs[2]) < 0.01) m += vs[1]; else j += vs[1]; }
+    }
+    const r = v => Math.round(v * 100) / 100;
+    if (n && (!out.total || Math.abs(p + m + j - out.total) < 0.05)) { out.principal = r(p); out.multa = r(m); out.juros = r(j); if (!out.total) out.total = r(p + m + j); }
+  }
+  if (out.principal == null) {   // sem as linhas: pela linha "Totais" (multa = a que não passa de 20% do principal, o teto da multa de mora)
+    const tot = U.match(/\bTotais\s+([\d.]+,\d{2})((?:\s+[\d.]+,\d{2}){1,3})/i);
+    if (tot) {
+      const vs = [tot[1], ...tot[2].trim().split(/\s+/)].map(numBR), ult = vs[vs.length - 1];
+      out.principal = vs[0];
+      if (vs.length === 4) { const [a, b] = [vs[1], vs[2]], teto = vs[0] * 0.2 + 0.01; if (b > teto && a <= teto) { out.multa = a; out.juros = b; } else { out.multa = b; out.juros = a; } }   // no pdf.js os juros vêm antes
+      else if (vs.length === 3) out.juros = vs[1];
+      if (!out.total) out.total = ult;
+    }
   }
   // código de barras da arrecadação: 4 blocos de 11 dígitos (+ 1 dígito de conferência cada)
   const cb = U.match(/\b(8\d{10})\s?-?\s?(\d)\s+(\d{11})\s?-?\s?(\d)\s+(\d{11})\s?-?\s?(\d)\s+(\d{11})\s?-?\s?(\d)\b/);
