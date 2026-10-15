@@ -7,7 +7,8 @@
 setTimeout(()=>{console.log('TIMEOUT');process.exit(1)},400000);
 const fs=require('fs'); const {mk}=require('./h.js');
 const store=JSON.parse(fs.readFileSync(__dirname+'/dados/store.json','utf8')); const H=mk(store);
-const G=JSON.parse(fs.readFileSync(__dirname+'/dados/fixtures/guias_reais.json','utf8'));
+const G=JSON.parse(fs.readFileSync(__dirname+'/dados/fixtures/guias_reais.json','utf8'));   // texto como o Drive lê
+const P=JSON.parse(fs.readFileSync(__dirname+'/dados/fixtures/guias_pdfjs.json','utf8'));   // texto como o pdf.js do navegador lê o PDF real (outra ordem: juros antes da multa nos Totais)
 const BOL=fs.readFileSync(__dirname+'/dados/fixtures/boleto_art.txt','utf8'), CBOL=fs.readFileSync(__dirname+'/dados/fixtures/boleto_cota.txt','utf8');
 const nomes=Object.keys(G);
 const dados=t=>{ const U=t.replace(/\s+/g,' '); const cb=U.match(/\b(8\d{10}) (\d) (\d{11}) (\d) (\d{11}) (\d) (\d{11}) (\d)\b/);
@@ -30,7 +31,8 @@ const CB=CBOL.replace(/\d{5}\.\d{5} \d{5}\.\d{6} \d{5}\.\d{6} \d \d{14}/, linhaB
 (async()=>{
  const R={}; const {b,pg,errs}=await H.open({wait:20000});
  const ent=await pg.evaluate(async()=>await getTesteFolder(ENTRADA_FOLDER));
- nomes.forEach(n=>H.pdf(n,ent,G[n]));
+ await pg.evaluate(()=>{ window.__PDFRAW=true; });   // o texto já vem do pdf.js real
+ nomes.forEach(n=>H.pdf(n,ent,P[n]));
  H.png('Comprovante receita federal.png',ent,comp.A); H.png('Comprovante receita federal 4.png',ent,comp.A); H.png('Comprovante receita federal 2.png',ent,comp.B);
  H.png('Comprovante receita federal 3.png',ent,comp.C); H.png('Imagem PNG.png',ent,comp.D);
  H.pdf('DCTFWEBGUIAPAGAMENTO-ABRIL.pdf',ent,GD);
@@ -46,6 +48,7 @@ const CB=CBOL.replace(/\d{5}\.\d{5} \d{5}\.\d{6} \d{5}\.\d{6} \d \d{14}/, linhaB
  R.sobrou=await pg.evaluate(()=>S.entrada.itens.map(i=>i.nome+' ['+i.confianca+']'));
  R.linhas=await pg.evaluate(()=>S.lancamentos.filter(l=>l.docs&&l.docs._guia).map(l=>({id:l.id==='bancoX'?'bancoX':'novo',desc:l.descricao,valor:l.valor,data:l.data,status:l.status,cat:l.categoria,guia:!!l.docs.fatura,comp:!!l.docs.comprovante,banco:!!l.docs._banco,obs:l.observacao.replace(/\d{4}-\d{2}_ADM_[^ ]+/g,'<arquivo>').slice(0,160)})));
  R.novas=await pg.evaluate(n0=>S.lancamentos.length-n0,n0);
+ { const f=v=>'R$ '+v; R.multaJuros=nomes.map(n=>{ const t=G[n].replace(/\s+/g,' ').match(/Totais ([\d.]+,\d{2}) ([\d.]+,\d{2}) ([\d.]+,\d{2}) ([\d.]+,\d{2})/); if(!t) return 'sem multa'; const per=dados(G[n]).per; const l=R.linhas.find(x=>x.desc.includes(per)); return !!(l && l.obs.includes('multa '+f(t[2])+' + juros '+f(t[3]))); }); }
  R.inicio=await pg.evaluate(()=>{ S._iniAberto={pagar:true}; const t=renderInicio().replace(/<[^>]+>/g,' ').replace(/\s+/g,' '); return (t.match(/Guias e boletos do mês.{0,160}/)||[''])[0]; });
  R.card=await pg.evaluate(()=>{ const l=S.lancamentos.find(x=>x.docs&&x.docs._guia&&x.docs.comprovante); const h=renderLancCard(l); return {guia:/✅ 📋 Guia/.test(h), comp:/✅ 🧾 Comprov/.test(h)}; });
  await pg.waitForTimeout(3500);
