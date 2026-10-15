@@ -597,7 +597,7 @@ function lerGuia91(texto, nome) {
   out.total = numBR(g(/Valor Total do Documento\s*:?\s*(?:R\$\s*)?([\d.]+,\d{2})/i) || g(/\bValor\s*:\s*(?:R\$\s*)?([\d.]+,\d{2})/i) || g(/Valor (?:a pagar|do documento)\s*:?\s*(?:R\$\s*)?([\d.]+,\d{2})/i)) || 0;
   // principal + multa + juros: pela soma das linhas da composição ("código denominação principal multa juros total";
   // sem atraso vem só "principal total"). A linha "Totais" não serve para separar multa e juros: no PDF real o pdf.js
-  // do navegador lê os juros antes da multa ("Totais 502,51 22,05 100,50 625,06") — visto nas guias de 15/10/2026
+  // do navegador lê os juros antes da multa ("Totais principal juros multa total") — visto nas guias de 15/10/2026
   const ini = U.search(/Composi[cç][aã]o do Documento/i), fim = U.search(/\bTotais\b/i);
   if (ini >= 0 && fim > ini) {
     let p = 0, m = 0, j = 0, n = 0;
