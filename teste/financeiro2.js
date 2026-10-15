@@ -243,7 +243,8 @@ function comprovantesPagamento(incluirUsados) {
   (S.processos || []).forEach(p => {
     (((p.docs || {})._files || {}).pagamento || []).forEach(f => out.push({ processo: p.id, valor: Number(f.valor) || 0, data: f.data || '', categoria: f.categoria || '', nome: f.name, url: f.url, idTransacao: f.pagamento && f.pagamento.idTransacao }));
   });
-  (S.banco.docs || []).forEach(d => out.push({ processo: '', valor: Number(d.valor) || 0, data: d.data || '', categoria: d.categoria || '', nome: d.nome, url: d.url }));
+  // guia / boleto é a conta, não o pagamento (v91)
+  (S.banco.docs || []).filter(d => !/^(guia|boleto)$/.test(d.tipo || '')).forEach(d => out.push({ processo: '', valor: Number(d.valor) || 0, data: d.data || '', categoria: d.categoria || '', nome: d.nome, url: d.url }));
   if (incluirUsados) return out;
   const usados = comprovantesUsados();
   return out.filter(c => !c.url || !usados.has(c.url));
@@ -288,6 +289,17 @@ function sugestaoLinha(l) {
     if (jaPago.length) {
       const e = buildAllEntries().find(x => !x._computed && String(x.id) === String(jaPago[0].id));
       if (e) return { acao: 'baixar', entry: e, unico: jaPago.length === 1, texto: `Já lançado pelo comprovante: "${jaPago[0].descricao}"` + (jaPago.length > 1 ? ` (+${jaPago.length - 1} com o mesmo valor — confira)` : '') };
+    }
+  }
+  // 0b) guia / boleto em aberto (v91): o banco pagou entre a emissão e o vencimento (a linha fica com a data do vencimento)
+  if (l.valor < 0) {
+    const gs = (S.lancamentos || []).filter(x => x.tipo === 'Despesa' && x.status === 'Em Aberto' && x.docs && x.docs._guia && !x.docs._banco && Math.abs((Number(x.valor) || 0) - v) < 0.01).filter(x => {
+      const g = x.docs._guia, em = g.emissao || '', ate = brToIso2(g.vencimento || x.data) || '';
+      return (!em || l.data >= em || diasEntre(em, l.data) <= 3) && (!ate || l.data <= ate || diasEntre(ate, l.data) <= 10);
+    });
+    if (gs.length) {
+      const e = buildAllEntries().find(x => !x._computed && String(x.id) === String(gs[0].id));
+      if (e) return { acao: 'baixar', entry: e, unico: gs.length === 1, texto: `Pagamento da ${gs[0].docs._guia.tipo === 'boleto' ? 'conta' : 'guia'} em aberto "${gs[0].descricao}"` + (gs.length > 1 ? ` (+${gs.length - 1} com o mesmo valor — confira)` : '') };
     }
   }
   // 1) já há um lançamento em aberto com o mesmo valor → dar baixa
