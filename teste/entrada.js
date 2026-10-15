@@ -620,6 +620,13 @@ function lerGuia91(texto, nome) {
       if (!out.total) out.total = ult;
     }
   }
+  // conferência: a multa de mora é 0,33% ao dia (até 20% do principal), do vencimento até o "pagar até";
+  // se o valor dos juros é o que bate com essa conta, os dois vieram trocados
+  if (out.multa > 0 && out.juros > 0 && out.vencimento && out.pagarAte && out.vencimento !== out.pagarAte) {
+    const dias = Math.round((new Date(brToIso(out.pagarAte)) - new Date(brToIso(out.vencimento))) / 864e5);
+    const esp = dias > 0 ? out.principal * Math.min(0.2, 0.0033 * dias) : 0;
+    if (esp > 0 && Math.abs(out.juros - esp) < Math.abs(out.multa - esp)) { const t = out.multa; out.multa = out.juros; out.juros = t; }
+  }
   // código de barras da arrecadação: 4 blocos de 11 dígitos (+ 1 dígito de conferência cada)
   const cb = U.match(/\b(8\d{10})\s?-?\s?(\d)\s+(\d{11})\s?-?\s?(\d)\s+(\d{11})\s?-?\s?(\d)\s+(\d{11})\s?-?\s?(\d)\b/);
   if (cb) { out.blocos = [cb[1], cb[3], cb[5], cb[7]]; out.barras = cb.slice(1, 9).join(''); }
