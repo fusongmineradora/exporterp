@@ -1056,3 +1056,88 @@ if (typeof renderProcesso2 === 'function' && !renderProcesso2._v86) {
   };
   renderProcesso2._v86 = true;
 }
+
+// ── 14. GUIA / BOLETO NA LINHA DO EXTRATO DE CAIXA (v91 · 15/10/2026) ──
+// A guia (ou o boleto) fica no anexo "Fatura / Boleto" do lançamento, junto com o comprovante. Na linha aparece "Guia".
+// Linha sem guia: o anexo abre a lista das guias e boletos que estão na Caixa de Entrada, para escolher.
+if (typeof renderLancCard === 'function' && !renderLancCard._v91) {
+  const baseCard91 = renderLancCard;
+  renderLancCard = function (l) {
+    let h = baseCard91(l);
+    try {
+      const g = l && l.docs && l.docs._guia;
+      if (g) h = h.replace('📋 Fatura', g.tipo === 'boleto' ? '📋 Boleto' : '📋 Guia');
+      if (l && !l._computed && l.tipo === 'Despesa') h = h.replace(`abrirDocLanc('${l.id}','fatura')`, `abrirGuiaLanc91('${l.id}')`);
+    } catch (e) {}
+    return h;
+  };
+  renderLancCard._v91 = true;
+}
+async function abrirGuiaLanc91(id) {
+  const l = (S.lancamentos || []).find(x => String(x.id) === String(id)); if (!l) return;
+  if (l.docs && l.docs.fatura) { window.open(sanitizeUrl(l.docs.fatura), '_blank', 'noopener,noreferrer'); return; }
+  const velho = document.getElementById('guia91-modal'); if (velho) velho.remove();
+  const modal = document.createElement('div'); modal.id = 'guia91-modal'; modal.className = 'modal-overlay';
+  const pintar = () => {
+    const E = S.entrada || { itens: [] };
+    const lista = (E.itens || []).filter(it => (it.tipo === 'guia' || it.tipo === 'boleto') && !it.salvando);
+    const v = Number(l.valor) || 0;
+    lista.sort((a, b) => (Math.abs((Number(a.info.valor) || 0) - v) < 0.01 ? 0 : 1) - (Math.abs((Number(b.info.valor) || 0) - v) < 0.01 ? 0 : 1));
+    modal.innerHTML = `<div class="modal" style="max-width:560px;width:95%;max-height:90vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div class="modal-title" style="margin-bottom:0">📋 Anexar guia ou boleto</div>
+        <button class="btn btn-secondary btn-xs" onclick="document.getElementById('guia91-modal').remove()">✕</button></div>
+      <div style="font-size:12.5px;color:var(--muted2);margin-bottom:12px">${escHtml(l.descricao || '')} · R$ ${fmt(l.valor)} · ${escHtml(l.data || '—')}</div>
+      ${E.carregando ? `<div style="font-size:13px;color:var(--muted)">⏳ Lendo a Caixa de Entrada...</div>`
+        : lista.length ? lista.map(it => { const igual = Math.abs((Number(it.info.valor) || 0) - v) < 0.01; return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">
+          <div style="min-width:0"><div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml((it.info.guia && it.info.guia.descricao) || it.info.emitNome || it.nome)}</div>
+          <div style="font-size:11.5px;color:var(--muted2)">${escHtml(it.nome)} · R$ ${fmt(it.info.valor || 0)}${it.info.vencimento ? ' · vence ' + escHtml(it.info.vencimento) : ''}${igual ? ' · <span style="color:var(--green)">mesmo valor</span>' : ''}</div></div>
+          <button class="btn ${igual ? 'btn-primary' : 'btn-secondary'} btn-xs" onclick="anexarGuiaNaLinha91('${escHtml(String(l.id))}','${escHtml(it.fileId)}')">Anexar nesta linha</button></div>`; }).join('')
+        : `<div style="font-size:13px;color:var(--muted2)">Nenhuma guia ou boleto na Caixa de Entrada. Salve o PDF na pasta ${escHtml(typeof ENTRADA_FOLDER !== 'undefined' ? ENTRADA_FOLDER : 'Entrada')} e abra esta lista de novo.</div>`}
+      <div style="display:flex;justify-content:space-between;gap:8px;margin-top:14px;flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('guia91-modal').remove();abrirModalLancamento('${escHtml(String(l.id))}')">Colar um link do Drive</button>
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('guia91-modal').remove()">Fechar</button></div></div>`;
+  };
+  pintar(); document.body.appendChild(modal);
+  if (S.entrada && !S.entrada.lido && !S.entrada.carregando && typeof lerEntrada === 'function') { S.entrada.carregando = false; await lerEntrada(); if (document.getElementById('guia91-modal')) pintar(); }
+}
+async function anexarGuiaNaLinha91(id, fileId) {
+  const l = (S.lancamentos || []).find(x => String(x.id) === String(id));
+  const it = ((S.entrada && S.entrada.itens) || []).find(x => x.fileId === fileId);
+  if (!l || !it) return;
+  try {
+    showSyncIndicator('Anexando...');
+    it.salvando = true;
+    const mes = (brToIso(l.data) || it.info.data || new Date().toISOString()).slice(0, 7);
+    const [upd] = await guardarNoMes91([it], mes);
+    const d = descConta91(it), comp = composicao91(it.info.guia);
+    l.docs = l.docs || {}; l.docs.fatura = upd.webViewLink; l.docs._guia = metaConta91(it);
+    if (it.tipo === 'guia' || /^(Despesas administrativas|Outras despesas|Impostos)?$/.test(l.categoria || '')) { l.categoria = d.categoria; l.descricao = d.descricao; }
+    l.observacao = juntaObs91(l.observacao, rotuloConta91(it) + ': ' + nomeCurto91(it, upd) + (comp ? ' · ' + comp : ''));
+    logAction('anexar', 'EXTRATO_CAIXA', l.id, `${rotuloConta91(it)} anexada à linha ${l.descricao} R$ ${Number(l.valor).toFixed(2)}`);
+    S.entrada.itens = S.entrada.itens.filter(x => x !== it);
+    try { juntarGuias91(S.entrada.itens); } catch (e) {}
+    await saveToSheets();
+    hideSyncIndicator();
+    const m = document.getElementById('guia91-modal'); if (m) m.remove();
+    showToast('✅ ' + rotuloConta91(it) + ' anexada na linha do extrato'); render();
+  } catch (e) { it.salvando = false; hideSyncIndicator(); showToast('⚠️ ' + (e.message || e)); }
+}
+// Editar uma linha pelo ✏️ trocava a caixa de anexos inteira: sumiam a ligação com a linha do banco (_banco), os dados
+// da guia, o ID do PIX, a nota... Agora o que a janela não mostra continua na linha (só muda o que você editou).
+if (typeof salvarLancamento === 'function' && !salvarLancamento._v91) {
+  const baseSalvar91 = salvarLancamento;
+  salvarLancamento = async function (idx) {
+    const antes = idx ? (S.lancamentos || []).find(l => String(l.id) === String(idx)) : null;
+    const docsAntes = antes && antes.docs ? Object.assign({}, antes.docs) : null;
+    const r = await baseSalvar91.apply(this, arguments);
+    const depois = docsAntes ? (S.lancamentos || []).find(l => String(l.id) === String(idx)) : null;
+    if (depois && depois !== antes) {
+      depois.docs = depois.docs || {};
+      Object.keys(docsAntes).forEach(k => { if (!(k in depois.docs)) depois.docs[k] = docsAntes[k]; });
+      if (docsAntes.fatura && !depois.docs.fatura) delete depois.docs._guia;   // tirou a guia: tira os dados dela
+      scheduleAutoSave(); render();
+    }
+    return r;
+  };
+  salvarLancamento._v91 = true;
+}

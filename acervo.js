@@ -942,7 +942,7 @@ async function executarImportacaoTudo() {
     });
     const existe = id => id === '__ADM' || (S.processos || []).some(p => p.id === id);
     const seguro = it => {
-      if (!it.tipo || !it.processo || it.duplicado || it.confianca === 'nenhuma' || !existe(it.processo)) return false;
+      if (!it || !it.tipo || !it.processo || it.duplicado || it.confianca === 'nenhuma' || !existe(it.processo)) return false;
       if (it.info && it.info.pagamento && it.info.pagamento.valorIncerto) return false;
       if (DOCS_COM_CUSTO.includes(it.tipo) && !(Number(it.info && it.info.valor) > 0)) return false;
       if (it.confianca === 'alta') return true;
@@ -1899,7 +1899,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '90';
+const VERSAO_TESTE = '91';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
@@ -2146,11 +2146,13 @@ function despesasDuplicadas() {
   const perto = (a, b) => datas(a).some(x => datas(b).some(y => Math.abs((new Date(x) - new Date(y)) / 864e5) <= 7));
   const comBanco = (S.lancamentos || []).filter(l => l.tipo === 'Despesa' && l.docs && l.docs._banco && l.vinculo !== 'processo');
   const fora = new Set();
-  (S.lancamentos || []).filter(l => l.tipo === 'Despesa' && l.vinculo !== 'processo' && !(l.docs && l.docs._banco) && /^(Comprovante|Nota):/.test(l.observacao || '')).forEach(b => {
-    const cands = comBanco.filter(a => !fora.has(a) && Math.abs((Number(a.valor) || 0) - (Number(b.valor) || 0)) < 0.01 && perto(a, b) && !(a.docs.comprovante && a.docs.comprovante !== b.docs.comprovante));
+  (S.lancamentos || []).filter(l => l.tipo === 'Despesa' && l.vinculo !== 'processo' && !(l.docs && l.docs._banco) && /^(Comprovante|Nota|Guia|Boleto):/.test(l.observacao || '')).forEach(b => {
+    const cands = comBanco.filter(a => !fora.has(a) && Math.abs((Number(a.valor) || 0) - (Number(b.valor) || 0)) < 0.01 && perto(a, b) && !(a.docs.comprovante && a.docs.comprovante !== b.docs.comprovante) && !(a.docs.fatura && b.docs && b.docs.fatura && a.docs.fatura !== b.docs.fatura));
     if (cands.length !== 1) return;
     const a = cands[0]; a.docs.comprovante = a.docs.comprovante || (b.docs || {}).comprovante || (b.docs || {}).nota;
     if (a.categoria !== b.categoria && /^Comprovante/.test(b.observacao || '')) a.categoria = b.categoria;
+    // v91: guia / boleto (a conta) vai junto para a linha do banco
+    if (b.docs && b.docs.fatura && !a.docs.fatura) { a.docs.fatura = b.docs.fatura; if (b.docs._guia) a.docs._guia = b.docs._guia; if (/^(Guia|Boleto):/.test(b.observacao || '')) { a.categoria = b.categoria; a.descricao = b.descricao; } }
     a.observacao = (a.observacao || '') + ' · ' + b.observacao; fora.add(b); fora.add(a);
     logAction('editar', 'EXTRATO_CAIXA', a.id, `Despesa repetida juntada: ${b.descricao} R$ ${b.valor} (comprovante) = linha do extrato`);
   });
