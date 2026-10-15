@@ -1122,3 +1122,22 @@ async function anexarGuiaNaLinha91(id, fileId) {
     showToast('✅ ' + rotuloConta91(it) + ' anexada na linha do extrato'); render();
   } catch (e) { it.salvando = false; hideSyncIndicator(); showToast('⚠️ ' + (e.message || e)); }
 }
+// Editar uma linha pelo ✏️ trocava a caixa de anexos inteira: sumiam a ligação com a linha do banco (_banco), os dados
+// da guia, o ID do PIX, a nota... Agora o que a janela não mostra continua na linha (só muda o que você editou).
+if (typeof salvarLancamento === 'function' && !salvarLancamento._v91) {
+  const baseSalvar91 = salvarLancamento;
+  salvarLancamento = async function (idx) {
+    const antes = idx ? (S.lancamentos || []).find(l => String(l.id) === String(idx)) : null;
+    const docsAntes = antes && antes.docs ? Object.assign({}, antes.docs) : null;
+    const r = await baseSalvar91.apply(this, arguments);
+    const depois = docsAntes ? (S.lancamentos || []).find(l => String(l.id) === String(idx)) : null;
+    if (depois && depois !== antes) {
+      depois.docs = depois.docs || {};
+      Object.keys(docsAntes).forEach(k => { if (!(k in depois.docs)) depois.docs[k] = docsAntes[k]; });
+      if (docsAntes.fatura && !depois.docs.fatura) delete depois.docs._guia;   // tirou a guia: tira os dados dela
+      scheduleAutoSave(); render();
+    }
+    return r;
+  };
+  salvarLancamento._v91 = true;
+}

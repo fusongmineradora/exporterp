@@ -79,6 +79,8 @@ const CB=CBOL.replace(/\d{5}\.\d{5} \d{5}\.\d{6} \d{5}\.\d{6} \d \d{14}/, linhaB
  R.semData=await pg.evaluate(async()=>{ const c=S.entrada.itens.find(x=>/sem data/.test(x.nome)), g=S.entrada.itens.find(x=>/FEV/.test(x.nome)); const a={conf:c.confianca, gconf:g.confianca, aviso:/preencha a data/.test(c.aviso||''), par:!!c._par91};
    setInfoEntrada(S.entrada.itens.indexOf(c),'data','2026-10-13'); a.depois={conf:c.confianca, gconf:g.confianca, aviso:/preencha a data/.test(c.aviso||'')};
    const n=S.lancamentos.length; await confirmarEntrada(S.entrada.itens.indexOf(g)); const l=S.lancamentos.find(x=>/fevereiro/.test(x.descricao)); a.linha={mais:S.lancamentos.length-n, data:l&&l.data, status:l&&l.status, comp:!!(l&&l.docs.comprovante)}; a.naEntrada=S.entrada.itens.map(x=>x.nome); return a; });
+ // ── rodada 5: editar a linha pelo ✏️ não pode apagar a ligação com o banco nem a guia ──
+ R.editar=await pg.evaluate(async()=>{ const l=S.lancamentos.find(x=>x.id==='bancoX'); abrirModalLancamento('bancoX'); document.getElementById('lf_observacao').value='editado'; await salvarLancamento('bancoX'); const d=S.lancamentos.find(x=>x.id==='bancoX'); return {banco:d.docs._banco, guia:!!d.docs.fatura, dadosGuia:!!d.docs._guia, obs:d.observacao, rotulo:/📋 Guia/.test(renderLancCard(d))}; });
  R.writesProd=H.writes; R.errs=errs.filter(e=>!/X-Frame|frame-ancestors|ERR_FAILED|404/.test(e)).slice(0,8);
  fs.writeFileSync(__dirname+'/r91.json',JSON.stringify(R,null,1));
  console.log(JSON.stringify(R,null,1));
