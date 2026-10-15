@@ -253,7 +253,7 @@ const ENTRADA_TIPOS = [
   ['due', 'DU-E'], ['nfe', 'NF-E Entrada'], ['nfeSaida', 'NF-E Saída'], ['cte', 'CT-e (frete)'],
   ['mdfe', 'MDF-e'], ['booking', 'Booking (reserva)'], ['nfse', 'NFS-e (serviço)'], ['recibo', 'Recibo / RPA'], ['comprovantes', 'Comprovantes Câmbio'], ['certOrigem', 'Cert. Origem'],
   ['seguro', 'Seguro de Carga'], ['pesagem', 'Pesagem'], ['pagamento', 'Comprovante de Pagamento'],
-  ['faturaFrete', 'Fatura de frete (agente)'], ['planilhaCambio', 'Planilha de câmbio (banco)'], ['boleto', 'Boleto (cobrança)'], ['outros', 'Outros Documentos'],
+  ['faturaFrete', 'Fatura de frete (agente)'], ['planilhaCambio', 'Planilha de câmbio (banco)'], ['boleto', 'Boleto (cobrança)'], ['guia', 'Guia de imposto (DARF)'], ['outros', 'Outros Documentos'],
 ];
 const tipoLabel = k => (ENTRADA_TIPOS.find(t => t[0] === k) || [k, k])[1];
 
@@ -464,6 +464,7 @@ const REGRAS_NOME = [
   ['recibo', /\bRECIBO\b|\bRPA\b/],
   ['pagamento', /^(?:(?:ADM|FS\d{6}S?)[\s\-+_]*)*(COMPROVANTE|PAGAMENTO|PIX|ADIANTAMENTO|TRANSFER)/],
   ['comprovantes', /C[AÂ]MBIO/],
+  ['guia', /DCTFWEB|\bDARF\b|GUIA\s*(?:DE\s*)?(?:PAGAMENTO|IMPOSTO|INSS|DAS)\b/],
   ['cte', /\bDACTE\b|\bCT-?E\b/],
   ['mdfe', /\bMDF-?E?\b|DAMDFE/],
   ['packingList', /PACKING/],
@@ -575,6 +576,295 @@ function completarPagamento(pag, texto) {
   return pag;
 }
 
+// ── v91: guia de imposto / boleto (a conta) + comprovante do banco (o pagamento) = uma linha só no extrato de caixa ──
+const MESES91 = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+const semAc91 = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+// Guia da Receita (DARF / DCTFWeb / DAS): valor, período, vencimento, número, código de barras, principal + multa + juros
+function lerGuia91(texto, nome) {
+  const U = String(texto || '').replace(/\s+/g, ' ');
+  const g = re => { const m = U.match(re); return m ? m[1] : ''; };
+  const out = { orgao: /SIMPLES NACIONAL/i.test(U) ? 'Simples Nacional' : 'Receita Federal' };
+  out.numero = g(/\b(\d{2}\.\d{2}\.\d{5}\.\d{7}-\d)\b/);
+  const mp = U.match(/\b(janeiro|fevereiro|mar[cç]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s*\/\s*(\d{4})\b/i);
+  if (mp) { const i = MESES91.findIndex(x => semAc91(x) === semAc91(mp[1])); out.periodo = MESES91[i] + '/' + mp[2]; out.pa = mp[2] + '-' + String(i + 1).padStart(2, '0'); }
+  else { const m = U.match(/\bPA\s*:?\s*(\d{2})\/(\d{4})\b/i) || U.match(/Per[ií]odo de Apura[cç][aã]o\s*:?\s*(\d{2})\/(\d{4})/i); if (m && Number(m[1]) >= 1 && Number(m[1]) <= 12) { out.pa = m[2] + '-' + m[1]; out.periodo = MESES91[Number(m[1]) - 1] + '/' + m[2]; } }
+  out.pagarAte = g(/Pagar (?:este documento )?at[eé]\s*:?\s*(\d{2}\/\d{2}\/\d{4})/i);
+  // vencimento original (o da composição "Vencimento:dd/mm/aaaa"; senão a data logo depois do período) — no pdf.js a
+  // "Data de Vencimento" fica longe da data dela
+  out.vencimento = g(/\bVencimento\s*:\s*(\d{2}\/\d{2}\/\d{4})/i) || g(/\b(?:janeiro|fevereiro|mar[cç]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s*\/\s*\d{4}\s+(\d{2}\/\d{2}\/\d{4})/i)
+    || g(/Data de Vencimento[\s\S]{0,90}?(\d{2}\/\d{2}\/\d{4})/i) || out.pagarAte;
+  out.emissao = brToIso(g(/(\d{2}\/\d{2}\/\d{4})\s+\d{2}:\d{2}(?::\d{2})?\b/));
+  out.total = numBR(g(/Valor Total do Documento\s*:?\s*(?:R\$\s*)?([\d.]+,\d{2})/i) || g(/\bValor\s*:\s*(?:R\$\s*)?([\d.]+,\d{2})/i) || g(/Valor (?:a pagar|do documento)\s*:?\s*(?:R\$\s*)?([\d.]+,\d{2})/i)) || 0;
+  // principal + multa + juros: pela soma das linhas da composição ("código denominação principal multa juros total";
+  // sem atraso vem só "principal total"). A linha "Totais" não serve para separar multa e juros: no PDF real o pdf.js
+  // do navegador lê os juros antes da multa ("Totais principal juros multa total") — visto nas guias de 15/10/2026
+  const ini = U.search(/Composi[cç][aã]o do Documento/i), fim = U.search(/\bTotais\b/i);
+  if (ini >= 0 && fim > ini) {
+    let p = 0, m = 0, j = 0, n = 0;
+    for (const x of U.slice(ini, fim).matchAll(/\b\d{4}\s+(?:[^\s\d]\S*\s+)+?((?:\d{1,3}(?:\.\d{3})*,\d{2}\s*){2,4})/g)) {
+      const vs = x[1].trim().split(/\s+/).map(numBR);
+      p += vs[0]; n++;
+      if (vs.length === 4) { m += vs[1]; j += vs[2]; }
+      else if (vs.length === 3) { if (Math.abs(vs[0] + vs[1] - vs[2]) < 0.01) m += vs[1]; else j += vs[1]; }
+    }
+    const r = v => Math.round(v * 100) / 100;
+    if (n && (!out.total || Math.abs(p + m + j - out.total) < 0.05)) { out.principal = r(p); out.multa = r(m); out.juros = r(j); if (!out.total) out.total = r(p + m + j); }
+  }
+  if (out.principal == null) {   // sem as linhas: pela linha "Totais" (multa = a que não passa de 20% do principal, o teto da multa de mora)
+    const tot = U.match(/\bTotais\s+([\d.]+,\d{2})((?:\s+[\d.]+,\d{2}){1,3})/i);
+    if (tot) {
+      const vs = [tot[1], ...tot[2].trim().split(/\s+/)].map(numBR), ult = vs[vs.length - 1];
+      out.principal = vs[0];
+      if (vs.length === 4) { const [a, b] = [vs[1], vs[2]], teto = vs[0] * 0.2 + 0.01; if (b > teto && a <= teto) { out.multa = a; out.juros = b; } else { out.multa = b; out.juros = a; } }   // no pdf.js os juros vêm antes
+      else if (vs.length === 3) out.juros = vs[1];
+      if (!out.total) out.total = ult;
+    }
+  }
+  // conferência: a multa de mora é 0,33% ao dia (até 20% do principal), do vencimento até o "pagar até";
+  // se o valor dos juros é o que bate com essa conta, os dois vieram trocados
+  if (out.multa > 0 && out.juros > 0 && out.vencimento && out.pagarAte && out.vencimento !== out.pagarAte) {
+    const dias = Math.round((new Date(brToIso(out.pagarAte)) - new Date(brToIso(out.vencimento))) / 864e5);
+    const esp = dias > 0 ? out.principal * Math.min(0.2, 0.0033 * dias) : 0;
+    if (esp > 0 && Math.abs(out.juros - esp) < Math.abs(out.multa - esp)) { const t = out.multa; out.multa = out.juros; out.juros = t; }
+  }
+  // código de barras da arrecadação: 4 blocos de 11 dígitos (+ 1 dígito de conferência cada)
+  const cb = U.match(/\b(8\d{10})\s?-?\s?(\d)\s+(\d{11})\s?-?\s?(\d)\s+(\d{11})\s?-?\s?(\d)\s+(\d{11})\s?-?\s?(\d)\b/);
+  if (cb) { out.blocos = [cb[1], cb[3], cb[5], cb[7]]; out.barras = cb.slice(1, 9).join(''); }
+  // o que a guia paga (pelos códigos da composição)
+  const N = semAc91(U + ' ' + (nome || ''));
+  const partes = [];
+  if (/SIMPLES NACIONAL|\bDAS\b/.test(N)) partes.push('Simples Nacional (DAS)');
+  else {
+    if (/PREVIDENCI|\bCP\s+(?:DESCONTADA|PATRONAL|SEGURADO)|CONTRIBUINTES?\s+INDIVIDUA|\bINSS\b/.test(N)) partes.push('INSS');
+    if (/\bIRRF\b/.test(N)) partes.push('IRRF');
+    if (/\bPIS\b/.test(N)) partes.push('PIS');
+    if (/\bCOFINS\b/.test(N)) partes.push('COFINS');
+    if (/\bCSLL\b/.test(N)) partes.push('CSLL');
+    if (/\bIRPJ\b/.test(N)) partes.push('IRPJ');
+  }
+  out.descricao = (partes.join(' + ') || 'DARF') + (/DCTF/.test(N) && !/DAS/.test(partes[0] || '') ? ' (DCTFWeb)' : '') + (out.periodo ? ' ' + out.periodo : '');
+  out.categoria = 'Impostos federais';
+  return out;
+}
+// linha digitável do boleto bancário: os pedaços que aparecem iguais no comprovante (linha digitável ou código de barras)
+function blocosConta91(it) {
+  const gu = it && it.info && it.info.guia;
+  if (gu && gu.blocos && gu.blocos.length) return gu.blocos;
+  const U = String((it && it.texto) || '').replace(/\s+/g, ' ');
+  const b = U.match(/\b(\d{5})\.?(\d{5})\s+(\d{5})\.?(\d{6})\s+(\d{5})\.?(\d{6})\s+(\d)\s+(\d{14})\b/);
+  if (b) return [b[3] + b[4].slice(0, 5), b[5] + b[6].slice(0, 5), b[8]];
+  const a = U.match(/\b(8\d{10})\s?-?\s?\d\s+(\d{11})\s?-?\s?\d\s+(\d{11})\s?-?\s?\d\s+(\d{11})\s?-?\s?\d\b/);
+  return a ? [a[1], a[2], a[3], a[4]] : [];
+}
+const digitos91 = t => String(t || '').replace(/(\d)[\s.\-]+(?=\d)/g, '$1');
+// o comprovante tem o código de barras desta conta? Precisa de TODOS os pedaços: as guias da mesma empresa repetem alguns
+// (o 1º e o 3º bloco da DCTFWeb são iguais em guias de valores parecidos)
+function bateBarras91(bl, texto) { if (!bl || bl.length < 3) return false; const dig = digitos91(texto); return bl.every(b => dig.includes(b)); }
+function vencConta91(it) { const gu = (it.info && it.info.guia) || {}; return gu.pagarAte || gu.vencimento || (it.info && it.info.vencimento) || ''; }
+function somaDias91(iso, n) { if (!iso) return ''; const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
+// valores que aparecem no comprovante (o lido + todos os "0,00" do texto)
+function valoresComp91(c) {
+  const vs = (String(c.texto || '').match(/(?<![\d,.])\d{1,3}(?:\.\d{3})*,\d{2}(?![\d])/g) || []).map(numBR);
+  if (Number(c.info && c.info.valor) > 0) vs.push(Number(c.info.valor));
+  return vs;
+}
+// data do pagamento no comprovante: a do rótulo; senão a data do texto que cabe (depois da emissão da guia, até hoje)
+function dataPagamento91(c, minIso) {
+  const T = String(c.texto || '');
+  const m = T.match(/(?:data\s+d[oe]\s+pagamento|pago\s+em|pagamento\s+(?:realizado|efetuado)\s+em|data\s+da\s+(?:opera[cç][aã]o|transa[cç][aã]o)|efetuad[oa]\s+em|realizad[oa]\s+em|data\s+de\s+d[eé]bito)\s*:?\s*\n?\s*(\d{2}\/\d{2}\/\d{4})/i);
+  if (m) return brToIso(m[1]);
+  const hoje = new Date().toISOString().slice(0, 10);
+  const MM = { jan: '01', fev: '02', mar: '03', abr: '04', mai: '05', jun: '06', jul: '07', ago: '08', set: '09', out: '10', nov: '11', dez: '12' };
+  const ds = [...T.matchAll(/\b(\d{2})\/(\d{2})\/(20\d{2})\b/g)].map(x => `${x[3]}-${x[2]}-${x[1]}`)
+    .concat([...T.matchAll(/\b(\d{1,2})\s+(?:de\s+)?(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[a-zç]*\.?\s+(?:de\s+)?(20\d{2})\b/gi)].map(x => `${x[3]}-${MM[x[2].toLowerCase()]}-${x[1].padStart(2, '0')}`))
+    .filter(d => d <= hoje && (!minIso || d >= minIso));
+  if (ds.length) { const cont = {}; ds.forEach(d => { cont[d] = (cont[d] || 0) + 1; }); return Object.keys(cont).sort((a, b) => cont[b] - cont[a] || b.localeCompare(a))[0]; }
+  return (c.info && c.info.data) || '';
+}
+// nota do quanto é principal, multa e juros
+function composicao91(gu) {
+  if (!gu || !(gu.multa > 0 || gu.juros > 0)) return '';
+  const f = v => 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return 'principal ' + f(gu.principal) + (gu.multa > 0 ? ' + multa ' + f(gu.multa) : '') + (gu.juros > 0 ? ' + juros ' + f(gu.juros) : '');
+}
+// Na Caixa de Entrada: junta cada guia / boleto (despesa do mês) com o comprovante dele
+function juntarGuias91(lista) {
+  lista = lista || (S.entrada && S.entrada.itens) || [];
+  lista.forEach(it => { delete it._par91; if (it._avisoPar91) { it.aviso = String(it.aviso || '').replace(it._avisoPar91, '').trim(); delete it._avisoPar91; } });
+  const contas = lista.filter(it => (it.tipo === 'guia' || it.tipo === 'boleto') && (!it.processo || it.processo === '__ADM'));
+  const comps = lista.filter(it => it.tipo === 'pagamento' && !(it.info && it.info.cambio) && (!it.processo || it.processo === '__ADM'));
+  if (!contas.length || !comps.length) return lista;
+  const pares = [];
+  contas.forEach(g => comps.forEach(c => {
+    const vg = Number(g.info.valor) || 0, vc = Number(c.info.valor) || 0;
+    const vcConfiavel = vc > 0 && (c.valorManual || !(c.info.pagamento && c.info.pagamento.valorIncerto));
+    if (bateBarras91(blocosConta91(g), c.texto) && !(vg && vcConfiavel && Math.abs(vc - vg) >= 0.01)) { pares.push({ g, c, s: 100, por: 'código de barras' }); return; }
+    if (!vg || !valoresComp91(c).some(x => Math.abs(x - vg) < 0.01)) return;
+    const emis = (g.info.guia && g.info.guia.emissao) || g.info.data || '', ate = brToIso(vencConta91(g));
+    const dp = dataPagamento91(c, emis ? somaDias91(emis, -3) : '');
+    if (dp && emis && dp < somaDias91(emis, -3)) return;
+    if (dp && ate && dp > somaDias91(ate, 10)) return;
+    const txt = semAc91(c.texto + ' ' + c.nome + ' ' + ((c.info && c.info.emitNome) || ''));
+    const quem = g.tipo === 'guia' ? /RECEITA|DARF|TRIBUT|ARRECADA|FEDERA|INSS|DCTF|PREVIDEN|SIMPLES/.test(txt)
+      : !!(g.info.emitNome && semAc91(g.info.emitNome).replace(/[^A-Z ]/g, '').split(/\s+/).filter(w => w.length >= 4).slice(0, 2).some(w => txt.includes(w)));
+    pares.push({ g, c, s: quem ? 80 : 60, por: 'valor' + (quem ? (g.tipo === 'guia' ? ' e Receita Federal' : ' e beneficiário') : '') });
+  }));
+  pares.sort((a, b) => b.s - a.s);
+  const usada = new Set();
+  pares.forEach(x => {
+    if (usada.has(x.g) || usada.has(x.c)) return;
+    usada.add(x.g); usada.add(x.c);
+    x.g._par91 = { fileId: x.c.fileId, nome: x.c.nome, por: x.por };
+    x.c._par91 = { fileId: x.g.fileId, nome: (x.g.info.guia && x.g.info.guia.descricao) || x.g.nome, por: x.por, daConta: true, tipoConta: x.g.tipo };
+    const c = x.c, g = x.g;
+    if (c.processo !== '__ADM' || c.admAuto) { c.processo = '__ADM'; c.admAuto = false; c.aviso = String(c.aviso || '').replace(/Não cita nenhum processo:[^.]*\.[^.]*\./, '').trim(); }
+    if (!c.categoriaManual) c.categoria = g.categoria || c.categoria;
+    const emis = (g.info.guia && g.info.guia.emissao) || g.info.data || '';
+    if (!c._dataManual91) { const dp = dataPagamento91(c, emis ? somaDias91(emis, -3) : ''); if (dp) c.info.data = dp; }
+    const vg = Number(g.info.valor) || 0;
+    if (vg && (!(Number(c.info.valor) > 0) || (c.info.pagamento && c.info.pagamento.valorIncerto)) && !c.valorManual && (x.s === 100 || valoresComp91(c).some(v => Math.abs(v - vg) < 0.01))) { c.info.valor = vg; if (c.info.pagamento) { c.info.pagamento.valor = vg; c.info.pagamento.valorIncerto = false; } }
+    if (x.s >= 80) { if (c.confianca !== 'manual') c.confianca = 'alta'; if (g.confianca !== 'manual' && Number(g.info.valor) > 0) g.confianca = 'alta'; }
+    else if (c.confianca === 'alta') c.confianca = 'media';
+    if (!c.info.data) {   // sem a data do pagamento a linha ficaria "sem data": pede para preencher antes de anexar
+      const a = 'Não achei a data do pagamento no comprovante: preencha a data antes de anexar.';
+      c._avisoPar91 = a; c.aviso = (c.aviso ? c.aviso + ' ' : '') + a; if (c.confianca === 'alta') c.confianca = 'media';
+      if (g.confianca === 'alta') g.confianca = 'media';
+    }
+  });
+  // segundo comprovante com o mesmo valor de uma guia que já tem o dela: pode ser o mesmo pagamento repetido
+  pares.filter(x => !usada.has(x.c) && x.g._par91).forEach(x => {
+    if (x.c._avisoPar91) return;
+    const a = `Mesmo pagamento da ${x.g.tipo === 'boleto' ? 'conta' : 'guia'} ${(x.g.info.guia && x.g.info.guia.descricao) || x.g.nome}, que já tem o comprovante ${x.g._par91.nome}: confira se não é o mesmo comprovante repetido.`;
+    x.c._avisoPar91 = a; x.c.aviso = (x.c.aviso ? x.c.aviso + ' ' : '') + a; if (x.c.confianca === 'alta') x.c.confianca = 'media';
+  });
+  return lista;
+}
+function preencherGuia91(item) {
+  const gu = lerGuia91(item.texto, item.nome);
+  item.info = item.info || {};
+  item.info.guia = gu;
+  if (!(Number(item.info.valor) > 0) && gu.total) item.info.valor = gu.total;
+  if (!item.info.data && gu.emissao) item.info.data = gu.emissao;
+  item.info.vencimento = gu.pagarAte || gu.vencimento || item.info.vencimento || '';
+  item.info.emitNome = gu.orgao === 'Simples Nacional' ? 'RECEITA FEDERAL (SIMPLES NACIONAL)' : 'RECEITA FEDERAL';
+  if (!item.categoriaManual) item.categoria = gu.categoria;
+  return item;
+}
+// dados da guia / boleto que ficam no lançamento (para ligar o comprovante e o banco depois)
+function metaConta91(g) {
+  const gu = (g.info && g.info.guia) || {};
+  const m = { tipo: g.tipo === 'boleto' ? 'boleto' : 'guia', numero: gu.numero || '', blocos: blocosConta91(g), periodo: gu.periodo || '', vencimento: vencConta91(g), emissao: gu.emissao || (g.info && g.info.data) || '' };
+  if (gu.principal != null) { m.principal = gu.principal; m.multa = gu.multa || 0; m.juros = gu.juros || 0; }
+  return m;
+}
+function descConta91(g) {
+  const cat = g.categoria || (g.tipo === 'guia' ? 'Impostos federais' : 'Despesas administrativas');
+  const gu = (g.info && g.info.guia) || {};
+  return { categoria: cat, empresa: g.tipo === 'guia' ? 'RECEITA FEDERAL' : ((g.info && g.info.emitNome) || ''),
+    descricao: cat + ' — ' + (g.tipo === 'guia' ? (gu.descricao || 'DARF') : ((g.info && g.info.emitNome) || String(g.nome || '').replace(/\.[a-z0-9]+$/i, ''))) };
+}
+const rotuloConta91 = g => (g.tipo === 'boleto' ? 'Boleto' : 'Guia');
+// a data da linha cabe nesta guia? (com comprovante: até 7 dias da data do pagamento; sem: entre a emissão e o vencimento)
+function dataCabe91(dLinha, dPg, emis, vencBr) {
+  if (!dLinha) return false;
+  const dif = (a, b) => Math.abs((new Date(a) - new Date(b)) / 864e5);
+  if (dPg) return dif(dLinha, dPg) <= 7;
+  const ate = brToIso(vencBr);
+  if (!emis && !ate) return false;
+  return (!emis || dLinha >= somaDias91(emis, -3)) && (!ate || dLinha <= somaDias91(ate, 10));
+}
+// despesa já lançada (pelo comprovante ou pela linha do banco) que é o pagamento desta guia
+function linhaDaConta91(g, c, compUrl) {
+  const L = S.lancamentos || [];
+  const valorG = Number(g.info.valor) || 0, valorC = c ? Number(c.info.valor) || 0 : 0;
+  const valor = valorC && !(c.info.pagamento && c.info.pagamento.valorIncerto) ? valorC : (valorG || valorC);
+  const meta = metaConta91(g);
+  const mesma = L.find(l => l.docs && l.docs._guia && meta.blocos.length && (l.docs._guia.blocos || []).join() === meta.blocos.join());
+  if (mesma) return { linha: mesma, valor };
+  const cands = L.filter(l => l.tipo === 'Despesa' && l.vinculo !== 'processo' && l.status === 'Pago' && !(l.docs && l.docs.fatura)
+    && Math.abs((Number(l.valor) || 0) - valor) < 0.01 && !(compUrl && l.docs && l.docs.comprovante && l.docs.comprovante !== compUrl)
+    && dataCabe91(brToIso(l.data), c ? (c.info.data || '') : '', meta.emissao, meta.vencimento));
+  return { linha: cands.length === 1 ? cands[0] : null, valor, varias: cands.length > 1 };
+}
+// na observação: a guia pelo que ela é ("DCTFWeb setembro/2026"), o boleto pelo nome do arquivo (o link abre o arquivo)
+const nomeCurto91 = (g, upd) => (g.info && g.info.guia && g.info.guia.descricao) || (upd && upd.name) || g.nome;
+const juntaObs91 = (a, b) => [String(a || '').trim(), b].filter(Boolean).join(' · ');
+// A guia / boleto entra no extrato: com o comprovante → uma linha paga (na data do pagamento) com os dois anexos;
+// sem comprovante → conta a pagar (Em Aberto, no vencimento). Se o pagamento já está lançado, a guia vai para essa linha.
+function lancarConta91(g, updG, c, updC) {
+  S.lancamentos = S.lancamentos || [];
+  const meta = metaConta91(g), d = descConta91(g), comp = composicao91(g.info.guia), rot = rotuloConta91(g);
+  const { linha, valor } = linhaDaConta91(g, c, updC && updC.webViewLink);
+  if (!valor) return null;
+  const dataPg = c ? (c.info.data || '') : '';
+  const idTx = (c && c.info.pagamento && c.info.pagamento.idTransacao) || '';
+  if (linha) {
+    linha.docs = linha.docs || {};
+    linha.docs.fatura = updG.webViewLink; linha.docs._guia = meta;
+    if (c && updC && !linha.docs.comprovante) { linha.docs.comprovante = updC.webViewLink; if (idTx) linha.docs.idTransacao = idTx; }
+    if (c && linha.status !== 'Pago') { linha.status = 'Pago'; if (dataPg) linha.data = isoToBr(dataPg); }
+    if (/^(Despesas administrativas|Outras despesas|Impostos federais|Impostos)?$/.test(linha.categoria || '') || g.tipo === 'guia') { linha.categoria = d.categoria; linha.descricao = d.descricao; }
+    linha.observacao = juntaObs91(linha.observacao, rot + ': ' + nomeCurto91(g, updG) + (c && updC ? ' · Comprovante: ' + updC.name : '') + (comp ? ' · ' + comp : ''));
+    logAction('editar', 'EXTRATO_CAIXA', linha.id, `${rot} anexada ao lançamento ${linha.descricao} R$ ${Number(linha.valor).toFixed(2)}`);
+    return linha;
+  }
+  const obj = {
+    id: genId(), tipo: 'Despesa', status: c ? 'Pago' : 'Em Aberto', descricao: d.descricao, valor,
+    data: c ? (dataPg ? isoToBr(dataPg) : '') : meta.vencimento, empresa: d.empresa, categoria: d.categoria, vinculo: 'avulso', vinculoId: 'ADM',
+    observacao: rot + ': ' + nomeCurto91(g, updG) + (c && updC ? ' · Comprovante: ' + updC.name : ' · vence ' + meta.vencimento) + (comp ? ' · ' + comp : '') + (c && !dataPg ? ' · data do pagamento não lida (confira)' : ''),
+    docs: { fatura: updG.webViewLink, comprovante: c && updC ? updC.webViewLink : '', idTransacao: idTx, _guia: meta, _origem: 'entrada' },
+  };
+  S.lancamentos.unshift(obj);
+  logAction('criar', 'EXTRATO_CAIXA', obj.id, `Despesa ${obj.descricao} R$ ${valor.toFixed(2)} (${c ? rot.toLowerCase() + ' + comprovante' : rot.toLowerCase() + ' a pagar'})`);
+  return obj;
+}
+// o que vai acontecer com a guia / boleto / comprovante (aparece no cartão da Caixa de Entrada)
+function linhaPar91(it) {
+  const box = (cor, html) => `<div style="margin-top:10px;font-size:12px;color:${cor}">${html}</div>`;
+  const ehConta = it.tipo === 'guia' || it.tipo === 'boleto';
+  if (it._par91) {
+    const nomeConta = (it._par91.daConta ? it._par91.tipoConta : it.tipo) === 'boleto' ? 'do boleto' : 'da guia';
+    return box('var(--green)', (it._par91.daConta ? `🔗 Comprovante do pagamento ${nomeConta} <b>${escHtml(it._par91.nome)}</b>` : `🔗 Junto com o comprovante <b>${escHtml(it._par91.nome)}</b>`)
+      + ` (pelo ${escHtml(it._par91.por)}). Os dois vão anexados na mesma linha do extrato de caixa.`);
+  }
+  if (it.processo !== '__ADM') return '';
+  try {
+    if (ehConta) {
+      const r = linhaDaConta91(it, null, '');
+      if (r.linha) return box('var(--green)', `🔗 O pagamento já está no extrato de caixa: ${escHtml(r.linha.descricao)} (${escHtml(r.linha.data || '—')}). A ${it.tipo === 'boleto' ? 'conta' : 'guia'} vai anexada nessa linha.`);
+      const v = vencConta91(it);
+      return box('var(--yellow)', `🟡 Sem comprovante na Entrada: vira conta a pagar${v ? ' (vence ' + escHtml(v) + ')' : ''}. Quando o comprovante chegar, essa mesma linha fica paga.`);
+    }
+    if (it.tipo === 'pagamento') {
+      const l = contaAbertaDoComprovante91(it);
+      if (l) return box('var(--green)', `🔗 Paga a conta em aberto: ${escHtml(l.descricao)}. Essa mesma linha fica paga, com o comprovante.`);
+    }
+  } catch (e) {}
+  return '';
+}
+// Comprovante que chega depois: acha a guia em aberto dele (código de barras; ou valor + data que cabe)
+function contaAbertaDoComprovante91(c) {
+  const abertas = (S.lancamentos || []).filter(l => l.tipo === 'Despesa' && l.status === 'Em Aberto' && l.docs && l.docs._guia && !l.docs.comprovante);
+  if (!abertas.length) return null;
+  const porBarras = abertas.filter(l => bateBarras91(l.docs._guia.blocos, c.texto));
+  if (porBarras.length === 1) return porBarras[0];
+  const vs = valoresComp91(c);
+  const porValor = abertas.filter(l => vs.some(v => Math.abs(v - (Number(l.valor) || 0)) < 0.01) && (() => {
+    const g = l.docs._guia, dp = dataPagamento91(c, g.emissao ? somaDias91(g.emissao, -3) : '');
+    return !dp || dataCabe91(dp, '', g.emissao, g.vencimento);
+  })());
+  return porValor.length === 1 ? porValor[0] : null;
+}
+function baixarContaPeloComprovante91(item, upd) {
+  const l = contaAbertaDoComprovante91(item); if (!l) return null;
+  const g = l.docs._guia, dp = dataPagamento91(item, g.emissao ? somaDias91(g.emissao, -3) : '') || item.info.data || '';
+  l.status = 'Pago'; if (dp) l.data = isoToBr(dp);
+  l.docs.comprovante = upd.webViewLink; const idTx = item.info.pagamento && item.info.pagamento.idTransacao; if (idTx) l.docs.idTransacao = idTx;
+  l.observacao = juntaObs91(String(l.observacao || '').replace(/ · vence \d{2}\/\d{2}\/\d{4}/, ''), 'Comprovante: ' + upd.name + (dp ? '' : ' · data do pagamento não lida (confira)'));
+  logAction('editar', 'EXTRATO_CAIXA', l.id, `Pago: ${l.descricao} R$ ${Number(l.valor).toFixed(2)} (comprovante ${upd.name})`);
+  return l;
+}
+
 // "FS260098 99 01" ou "FS2600989901" = FS260098, FS260099 e FS260101 (só os 2 últimos dígitos; se diminuir, vira a centena seguinte)
 // Também a forma curta do PIX (campo de 30 caracteres): "FS 113 114" = FS260113 e FS260114; "109S"; "113x2" = 2 containers
 // (o "xN" logo depois do número é a quantidade de containers daquele processo: o PIX é dividido por container)
@@ -637,6 +927,12 @@ function classificarDocumento(texto, nome) {
   }
   if (/WAYBILL|BILLOFLADING/.test(C) && /SHIPPEDONBOARD|BOOKINGNO|PORTOFLOADING/.test(C) && !chavesDoTexto(String(texto || '')).length) {
     return { tipo: 'bl', confianca: 'alta', motivo: 'BL / waybill' };
+  }
+  // v91: guia de imposto (DARF / DCTFWeb / DAS) — a conta a pagar. Ela tem "AUTENTICAÇÃO MECÂNICA" no rodapé (o espaço do
+  // carimbo do banco) e antes era lida como comprovante; o comprovante do banco é outro documento
+  if (/DOCUMENTO DE ARRECADA[CÇ][AÃ]O (?:DE RECEITAS FEDERAIS|DO SIMPLES NACIONAL)|\bDARF\b[\s\S]{0,600}(?:PAGAR ESTE DOCUMENTO|PER[IÍ]ODO DE APURA)/.test(T)
+      && !/COMPROVANTE DE (?:PAGAMENTO|ARRECADA)|VALOR PAGO|PAGAMENTO (?:EFETUADO|REALIZADO)|DATA D[OE] PAGAMENTO|AUTENTICA[CÇ][AÃ]O NO COMPROVANTE/.test(T)) {
+    return { tipo: 'guia', confianca: 'alta', motivo: 'guia de imposto (Receita Federal)' };
   }
   // boleto de cobrança (conta a pagar) — diferente do comprovante de pagamento do boleto
   if (/REPRESENTA[CÇ][AÃ]O NUM[EÉ]RICA|PAG[AÁ]VEL (?:EM QUALQUER BANCO|PREFERENCIALMENTE)|LINHA DIGIT[AÁ]VEL/.test(T) && !/VALOR DO PAGAMENTO|COMPROVANTE DE PAGAMENTO|AUTENTICA[CÇ][AÃ]O NO COMPROVANTE/.test(T)) {
@@ -791,6 +1087,7 @@ async function lerEntrada() {
     if (gen !== window._lerEntradaGen) return;   // uma leitura mais nova já está valendo
     E.itens = itens; E.lido = true;
     try { ligarPeloLote(E.itens); } catch (e) { console.warn('lote', e); }
+    try { juntarGuias91(E.itens); } catch (e) { console.warn('guias', e); }
     const planilhas = itens.filter(it => it.tipo === 'planilhaCambio');
     if (planilhas.length && typeof aplicarMapaCambio === 'function') {
       E.progresso = 'Aplicando a planilha de câmbio do banco...'; render();
@@ -805,6 +1102,7 @@ async function lerEntrada() {
       E.itens = itens.filter(it => it.tipo !== 'planilhaCambio');
       E.itens.forEach(it => { try { identificarItem(it); } catch (e) {} });
       try { ligarPeloLote(E.itens); } catch (e) {}
+      try { juntarGuias91(E.itens); } catch (e) {}
       try { await saveToSheets(); } catch (e) {}
     }
   } catch (e) {
@@ -853,6 +1151,7 @@ async function analisarArquivo(f) {
     if (c.categoria) item.categoria = c.categoria;
   }
   if (typeof enriquecerInfo === 'function') { try { enriquecerInfo(item); } catch (e) { console.warn('enriquecer', e); } }
+  if (item.tipo === 'guia') preencherGuia91(item);
   if (/ADIANTAMENTO|ANTECIPA/i.test(nome + ' ' + ((item.info.pagamento && item.info.pagamento.identificacao) || ''))) item.info.adiantamento = true;
   // o que o documento não traz, o nome do arquivo diz (valor, data, favorecido, reembolso ao sócio)
   {
@@ -866,7 +1165,7 @@ async function analisarArquivo(f) {
     if (pn.cancelada) item.info.cancelada = true;
     if (usado.length) { item.info.peloNome = usado; item.motivo = (item.motivo ? item.motivo + ' · ' : '') + usado.join(', ') + ' pelo nome do arquivo'; }
   }
-  if (['nfse', 'boleto', 'recibo'].includes(item.tipo) && Number(item.info.valor) > 0 && item.info.emitNome && item.info.data && item.confianca !== 'alta') { item.confianca = 'alta'; item.motivo = (item.motivo ? item.motivo + ' · ' : '') + 'valor, data e emitente lidos'; }
+  if (['nfse', 'boleto', 'recibo', 'guia'].includes(item.tipo) && Number(item.info.valor) > 0 && item.info.emitNome && item.info.data && item.confianca !== 'alta') { item.confianca = 'alta'; item.motivo = (item.motivo ? item.motivo + ' · ' : '') + 'valor, data e emitente lidos'; }
   item._base = { tipo: item.tipo, confianca: item.confianca, motivo: item.motivo };
   return identificarItem(item);
 }
@@ -954,6 +1253,8 @@ function identificarItem(item) {
   // decisão sua sobre este arquivo (ex.: Recibo Mineração WL é do FS260096)
   { const d = typeof DECISOES_ENTRADA !== 'undefined' && DECISOES_ENTRADA.find(([re]) => re.test(item.nome || ''));
     if (d && (S.processos || []).some(p => p.id === d[1])) { item.processo = d[1]; item.processosExtras = []; delete item.pastaErrada; delete item.corrigido; item.aviso = ''; item.confianca = 'alta'; item.motivo = (item.motivo ? item.motivo + ' · ' : '') + 'decisão sua: ' + d[1]; } }
+  // v91: guia de imposto da empresa (DCTFWeb, DAS...) é despesa do mês — só vai para um processo se o nome do arquivo ou a pasta disser
+  if (item.tipo === 'guia' && !item.pastaProcessos.length && !/FS\s?\d{6}/i.test(nomeSemPasta)) { item.processo = '__ADM'; item.candidatos = []; item.processosExtras = []; delete item.pastaErrada; delete item.corrigido; }
   // despesa que nunca é de processo (Embraport: taxa atípica do porto) → comprovantes do mês
   if (typeof FORA_DOS_PROCESSOS !== 'undefined' && FORA_DOS_PROCESSOS.some(re => re.test(String((item.info.emitNome || '') + ' ' + ((item.info.pagamento || {}).recebedor || ''))))) { item.processo = '__ADM'; item.categoria = 'Porto / Taxas'; item.processosExtras = []; delete item.pastaErrada; delete item.corrigido; }
   // Comprovante de pagamento sem nenhuma pista de processo → sugere "despesa do mês" (confira)
@@ -1016,6 +1317,7 @@ function identificarItem(item) {
     }
   }
   if (item.processo === '__ADM' && !item.categoriaManual && typeof categoriaAdm === 'function') { const c = categoriaAdm(item); if (c) item.categoria = c; }
+  if (item.tipo === 'guia' && !item.categoriaManual) item.categoria = (item.info.guia && item.info.guia.categoria) || 'Impostos federais';
   if (item.tipo === 'due') ajustarDue(item);
   item.duplicado = procurarDuplicado(item);
   return item;
@@ -1246,9 +1548,10 @@ function lancarFinanceiroDoDoc(item, p, upd) {
   if (item.tipo !== 'pagamento') return;
   const pag = item.info.pagamento || {};
   const valor = Number(item.info.valor) || 0;
-  if (!valor) return;
   S.lancamentos = S.lancamentos || [];
   if (S.lancamentos.some(x => x.docs && (x.docs.comprovante === upd.webViewLink || (pag.idTransacao && x.docs.idTransacao === pag.idTransacao)))) return;
+  if (!p && baixarContaPeloComprovante91(item, upd)) return;   // v91: comprovante de uma guia / boleto em aberto → a mesma linha fica paga
+  if (!valor) return;
   if (!p && typeof lancamentoParecido === 'function') { const ja = lancamentoParecido(valor, item.info.data, pag.recebedor || item.info.emitNome); if (ja) { ja.docs = ja.docs || {}; ja.docs.comprovante = ja.docs.comprovante || upd.webViewLink; return; } }
   const centroAdm = !p;
   const categoria = item.categoria || (centroAdm ? 'Despesas administrativas' : 'Outros custos do processo');
@@ -1282,31 +1585,54 @@ function lancarCambioDoContrato(item, p, upd) {
 }
 
 // Despesa do mês (sem processo): vai para "Comprovantes AAAA-MM" e entra na lista usada pela conciliação
+// arquivos da despesa do mês → pasta "Comprovantes AAAA-MM", renomeados; uma linha cada na aba DOCUMENTOS
+async function guardarNoMes91(itens, mes) {
+  const E = S.entrada, pasta = await getTesteFolder('Comprovantes ' + mes), upds = [];
+  for (const it of itens) {
+    const novoNome = `${mes}_ADM_${tipoLabel(it.tipo).replace(/[^\wÀ-ú]+/g, '-')}_${it.nome.replace(/^ADM\s*-\s*/i, '')}`;
+    upds.push(await driveAPI('PATCH', '/files/' + it.fileId, { name: novoNome, description: 'Nome original: ' + it.nome }, 'addParents=' + pasta + '&removeParents=' + E.folderId + '&fields=id,name,webViewLink'));
+  }
+  if (typeof gravarAba2 === 'function') {
+    await ensureTabs2();
+    const docs = await lerAba2('DOCUMENTOS');
+    itens.forEach((it, k) => docs.push({ id: upds[k].id, nome: upds[k].name, url: upds[k].webViewLink, tipo: it.tipo, categoria: it.categoria || '', valor: it.info.valor || '', data: it.info.data || '', centro: 'ADM', md5: it.md5, criadoEm: new Date().toISOString() }));
+    await gravarAba2('DOCUMENTOS', docs);
+    if (S.banco) S.banco.docs = docs;
+  }
+  upds.forEach(u => logAction('anexar', 'DOCUMENTOS', u.id, 'ADM: ' + u.name + ' (Caixa de Entrada)'));
+  return upds;
+}
 async function confirmarAdm(i, silencioso) {
   const E = S.entrada, item = E.itens[i];
-  item.salvando = true; if (!silencioso) render();
+  // v91: guia / boleto e o comprovante dele vão juntos (a mesma linha do extrato)
+  const par = item._par91 ? E.itens.find(x => x !== item && x.fileId === item._par91.fileId && !x.salvando) : null;
+  const ehConta = it => it && (it.tipo === 'guia' || it.tipo === 'boleto');
+  const conta = ehConta(item) ? item : (ehConta(par) ? par : null);
+  const comp = conta ? (conta === item ? par : item) : null;
+  const juntos = [item, par].filter(Boolean);
+  juntos.forEach(it => { it.salvando = true; }); if (!silencioso) render();
   try {
-    const mes = (item.info.data || new Date().toISOString()).slice(0, 7);
-    const pasta = await getTesteFolder('Comprovantes ' + mes);
-    const novoNome = `${mes}_ADM_${tipoLabel(item.tipo).replace(/[^\wÀ-ú]+/g, '-')}_${item.nome.replace(/^ADM\s*-\s*/i, '')}`;
-    const upd = await driveAPI('PATCH', '/files/' + item.fileId, { name: novoNome, description: 'Nome original: ' + item.nome }, 'addParents=' + pasta + '&removeParents=' + E.folderId + '&fields=id,name,webViewLink');
-    if (typeof gravarAba2 === 'function') {
-      await ensureTabs2();
-      const docs = await lerAba2('DOCUMENTOS');
-      docs.push({ id: upd.id, nome: upd.name, url: upd.webViewLink, tipo: item.tipo, categoria: item.categoria || '', valor: item.info.valor || '', data: item.info.data || '', centro: 'ADM', md5: item.md5, criadoEm: new Date().toISOString() });
-      await gravarAba2('DOCUMENTOS', docs);
-      if (S.banco) S.banco.docs = docs;
+    const mes = ((comp && comp.info.data) || item.info.data || new Date().toISOString()).slice(0, 7);
+    const ordem = conta ? [conta, comp].filter(Boolean) : [item];
+    const upds = await guardarNoMes91(ordem, mes);
+    const upd = upds[ordem.indexOf(item)];
+    ordem.forEach(it => {   // despesa geral: quem emitiu vira cadastro de "Despesas gerais (ADM)" (se ainda não existe)
+      it._adm = true;
+      if (typeof cadastrarPeloDoc === 'function') { try { cadastrarPeloDoc(it); } catch (e) { console.warn('cadastro', e); } }
+    });
+    let msg = '✅ Guardado como despesa do mês ' + mes.slice(5) + '/' + mes.slice(0, 4);
+    if (conta) {
+      const l = lancarConta91(conta, upds[0], comp, comp ? upds[1] : null);
+      msg = comp ? `✅ ${rotuloConta91(conta)} e comprovante guardados juntos: ${l ? l.descricao + ' (pago em ' + (l.data || '—') + ')' : 'despesa do mês'}`
+        : (l && l.status === 'Pago' ? `✅ ${rotuloConta91(conta)} anexada ao pagamento já lançado: ${l.descricao}` : `✅ ${rotuloConta91(conta)} guardada como conta a pagar${l && l.data ? ' (vence ' + l.data + ')' : ''}`);
     }
-    logAction('anexar', 'DOCUMENTOS', upd.id, 'ADM: ' + upd.name + ' (Caixa de Entrada)');
-    item._adm = true;   // despesa geral: quem emitiu vira cadastro de "Despesas gerais (ADM)" (se ainda não existe)
-    if (typeof cadastrarPeloDoc === 'function') { try { cadastrarPeloDoc(item); } catch (e) { console.warn('cadastro', e); } }
-    if (item.pagoPor === 'socio' && typeof lancarReembolsoSocio === 'function') lancarReembolsoSocio(item, null, upd);
+    else if (item.pagoPor === 'socio' && typeof lancarReembolsoSocio === 'function') lancarReembolsoSocio(item, null, upd);
     else if (['nfse', 'recibo'].includes(item.tipo) && typeof lancarDespesaDaNota === 'function') lancarDespesaDaNota(item, upd);
     else lancarFinanceiroDoDoc(item, null, upd);
-    E.itens.splice(i, 1);
-    if (!silencioso) { showToast('✅ Guardado como despesa do mês ' + mes.slice(5) + '/' + mes.slice(0, 4)); render(); }
+    E.itens = E.itens.filter(x => !ordem.includes(x));
+    if (!silencioso) { await saveToSheets(); showToast(msg); render(); }   // grava já a linha do extrato (antes ficava para o próximo salvamento)
     return true;
-  } catch (e) { item.salvando = false; item.erro = e.message || String(e); if (!silencioso) render(); return false; }
+  } catch (e) { juntos.forEach(it => { it.salvando = false; }); item.erro = e.message || String(e); if (!silencioso) render(); return false; }
 }
 
 async function confirmarTodosEntrada(incluirConfira, semPerguntar) {
@@ -1323,7 +1649,7 @@ async function confirmarTodosEntrada(incluirConfira, semPerguntar) {
     achou = false;
     for (let i = E.itens.length - 1; i >= 0; i--) {
       const it = E.itens[i];
-      if (ok1(it)) { if (await confirmarEntrada(i, true)) { ok++; achou = true; } }
+      if (it && ok1(it)) { if (await confirmarEntrada(i, true)) { ok++; achou = true; } }   // guia + comprovante saem juntos (a lista diminui 2)
     }
   }
   await saveToSheets();
@@ -1350,6 +1676,8 @@ function setInfoEntrada(i, campo, valor) {
   it.info = it.info || {};
   if (campo === 'valor') { it.info.valor = numEntrada(valor) || 0; it.valorManual = true; if (it.info.pagamento) it.info.pagamento.valor = it.info.valor; }
   else it.info[campo] = valor;
+  if (campo === 'data') it._dataManual91 = true;
+  try { juntarGuias91(S.entrada.itens); } catch (e) {}
   render();
 }
 function setEntrada(i, campo, valor) {
@@ -1357,7 +1685,9 @@ function setEntrada(i, campo, valor) {
   if (!it) return;
   it[campo] = valor;
   if (campo === 'tipo' || campo === 'processo') { it.confianca = 'manual'; it.duplicado = procurarDuplicado(it); }
+  if (campo === 'tipo' && valor === 'guia' && !(it.info && it.info.guia)) { preencherGuia91(it); if (!it.processo) it.processo = '__ADM'; }
   if (campo === 'processo' || campo === 'tipo') { try { ligarPeloLote(S.entrada.itens); } catch (e) {} }   // quem cita este documento acompanha
+  try { juntarGuias91(S.entrada.itens); } catch (e) {}
   render();
 }
 
@@ -1381,6 +1711,8 @@ function renderEntrada() {
     if (it.info.cambio) det.push('USD ' + fmt(it.info.cambio.valorMoeda) + ' × ' + String(it.info.cambio.taxa).replace('.', ',') + (it.info.cambio.contratoExtrato ? ' · extrato LIQ EXPORT ' + it.info.cambio.contratoExtrato : ''));
     if (it.info.pagamento && it.info.pagamento.identificacao) det.push('identificação "' + it.info.pagamento.identificacao + '"');
     if (it.categoria) det.push('categoria sugerida: ' + it.categoria);
+    if (it.info.guia && it.info.guia.periodo) det.push('período ' + it.info.guia.periodo);
+    if ((it.tipo === 'guia' || it.tipo === 'boleto') && it.info.vencimento) det.push('vence ' + it.info.vencimento);
     const motivoProc = it.candidatos && it.candidatos.find(c => c.id === it.processo);
     return `<div class="card" style="padding:14px 16px;margin-bottom:10px;border-left:3px solid ${cor}">
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">
@@ -1395,6 +1727,7 @@ function renderEntrada() {
       ${it.erro ? `<div style="margin-top:10px;font-size:12px;color:var(--red)">⚠️ ${escHtml(it.erro)}</div>` : ''}
       ${it.aviso ? `<div style="margin-top:10px;font-size:12px;color:var(--yellow)">⚠️ ${escHtml(it.aviso)}</div>` : ''}
       ${it.corrigido ? `<div style="margin-top:10px;font-size:12px;color:var(--green)">↪️ ${escHtml(it.corrigido)}</div>` : ''}
+      ${linhaPar91(it)}
       ${it.processo && it.processo !== '__ADM' && !(S.processos || []).some(p => p.id === it.processo) ? `<div style="margin-top:10px;font-size:12px;color:var(--red)">⚠️ O processo ${escHtml(it.processo)} não existe no ERP. Escolha o processo correto.</div>` : ''}
       ${it.info.cambio && it.info.cambio.faturas.length ? `<div style="margin-top:10px;font-size:12px;color:var(--muted2)">Faturas pagas por este câmbio: ${it.info.cambio.faturas.map(f => `<b style="color:var(--text)">${escHtml(f.processo)}</b> USD ${fmt(f.usd)}`).join(' · ')}${it.processosExtras && it.processosExtras.length ? ' — será anexado a todos' : ''}</div>` : ''}
       <div class="g2" style="margin-top:12px">
@@ -1426,11 +1759,11 @@ function renderEntrada() {
       ${it.processo === '__ADM' && typeof categOpts === 'function' ? `
       <div class="ig" style="margin-top:10px;margin-bottom:0"><label class="lbl" for="ent-cat-${i}">Categoria da despesa${it.categoria ? '' : ' <span style="color:var(--yellow)">· escolha</span>'}</label>
         <select id="ent-cat-${i}" onchange="setCategoriaAdm(${i},this.value)">${categOpts(it.categoria || '')}</select></div>` : ''}
-      ${['pagamento', 'recibo', 'nfse', 'nfe', 'boleto', 'outros'].includes(it.tipo) && it.processo === '__ADM' ? `
+      ${['pagamento', 'recibo', 'nfse', 'nfe', 'boleto', 'guia', 'outros'].includes(it.tipo) && it.processo === '__ADM' ? `
       <div class="g2" style="margin-top:10px">
         <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-val-${i}">Valor (R$)${!Number(it.info.valor) ? ' <span style="color:var(--red)">· não lido</span>' : ''}</label>
           <input id="ent-val-${i}" type="text" inputmode="decimal" value="${Number(it.info.valor) ? fmt(it.info.valor) : ''}" placeholder="0,00" onchange="setInfoEntrada(${i},'valor',this.value)"/></div>
-        <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-dat-${i}">${it.tipo === 'boleto' ? 'Data do documento' + (it.info.vencimento ? ' · vence ' + escHtml(it.info.vencimento) : '') : 'Data do pagamento'}</label>
+        <div class="ig" style="margin-bottom:0"><label class="lbl" for="ent-dat-${i}">${it.tipo === 'boleto' || it.tipo === 'guia' ? 'Data do documento' + (it.info.vencimento ? ' · vence ' + escHtml(it.info.vencimento) : '') : 'Data do pagamento'}</label>
           <input id="ent-dat-${i}" type="date" value="${escHtml(it.info.data || '')}" onchange="setInfoEntrada(${i},'data',this.value)"/></div>
       </div>` : ''}
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
