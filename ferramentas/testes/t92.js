@@ -84,6 +84,13 @@ const linha=(o)=>Object.assign({tipo:'Despesa',vinculo:'avulso',vinculoId:'ADM',
    const it=S.entrada.itens.find(x=>x.formato==='xml'&&Math.abs(x.info.valor-77)<0.01); const n=S.lancamentos.length; await anexarXmlNaLinha92('manualX',it.fileId); const l=S.lancamentos.find(x=>x.id==='manualX'); const h=renderLancCard(l);
    return {lista:(t.match(/Anexar nesta linha/g)||[]).length, mesmoValor:/mesmo valor/.test(t), mais:S.lancamentos.length-n, xml:!!l.docs.xml, nfe:!!l.docs.nfe, chave:!!(l.docs._nota&&l.docs._nota.chave), chips:/✅ 📑 XML/.test(h)&&/✅ 📄 NF-e/.test(h), naEntrada:S.entrada.itens.map(x=>x.nome), modalFechou:!document.getElementById('xml92-modal')}; });
  R.abrirXml=await pg.evaluate(async()=>{ window.__abertos=[]; await abrirXmlLanc92('manualX'); return window.__abertos.length===1; });
+ // ── rodada 3b: comprovante + PDF + XML juntos na Caixa de Entrada, sem linha antes → "Anexar todos" = UMA linha com os três ──
+ const E5=nota({base:'446667770001',num:3141,nome:'QUINTA SISTEMAS DE GESTAO LTDA',email:'cobranca@quintaplus.com.br',desc:'Quintaplus - mensalidade do sistema',valor:59.9});
+ H.png('ADM - Comprovante sistema.png',ent,`Comprovante de pagamento\n\nnome do recebedor: QUINTAPLUS\nvalor: R$ ${brl(E5.valor)}\ndata do pagamento: 16/10/2026\n\nID da transação: E000TESTE92QUINTA92TESTE92\n`);
+ H.pdf('NFSe'+E5.num+'.pdf',ent,danfse(E5)); H.add({name:'NFSe'+E5.num+'.xml',mimeType:'text/xml',parents:[ent],body:xml(E5)});
+ await pg.evaluate(()=>{ S.entrada.lido=false; return lerEntrada(); });
+ R.juntos3=await pg.evaluate(async c=>{ const n=S.lancamentos.length; const ok=await confirmarTodosEntrada(false,true); const ls=S.lancamentos.filter(x=>x.valor==59.9);
+   return {anexou:ok, mais:S.lancamentos.length-n, linhas:ls.map(l=>({desc:l.descricao, comp:!!l.docs.comprovante, nfe:!!l.docs.nfe, xml:!!l.docs.xml, chave:!!(l.docs._nota&&l.docs._nota.chave===c)})), naEntrada:S.entrada.itens.map(x=>x.nome+' ['+x.confianca+' '+x.processo+']')}; },E5.chave);
  // ── rodada 4: nota antiga em docs.nota (botão NF-e) e XML do custo do processo ──
  R.notaAntiga=await pg.evaluate(()=>{ const l={id:'antigaN',data:'01/10/2026',tipo:'Despesa',descricao:'Contabilidade — escritorio teste',valor:10,vinculo:'avulso',vinculoId:'ADM',categoria:'Contabilidade',status:'Pago',observacao:'',docs:{nota:'https://drive/notaAntiga'}}; S.lancamentos.unshift(l);
    const h=renderLancCard(l); window.__abertos=[]; abrirNotaLanc92('antigaN'); return {chip:/✅ 📄 NF-e/.test(h), onclick:/abrirNotaLanc92\('antigaN'\)/.test(h), abriu:window.__abertos[0]==='https://drive/notaAntiga'}; });
