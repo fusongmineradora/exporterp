@@ -91,6 +91,36 @@ const linha=(o)=>Object.assign({tipo:'Despesa',vinculo:'avulso',vinculoId:'ADM',
  await pg.evaluate(()=>{ S.entrada.lido=false; return lerEntrada(); });
  R.juntos3=await pg.evaluate(async c=>{ const n=S.lancamentos.length; const ok=await confirmarTodosEntrada(false,true); const ls=S.lancamentos.filter(x=>x.valor==59.9);
    return {anexou:ok, mais:S.lancamentos.length-n, linhas:ls.map(l=>({desc:l.descricao, comp:!!l.docs.comprovante, nfe:!!l.docs.nfe, xml:!!l.docs.xml, chave:!!(l.docs._nota&&l.docs._nota.chave===c)})), naEntrada:S.entrada.itens.map(x=>x.nome+' ['+x.confianca+' '+x.processo+']')}; },E5.chave);
+ // ── rodada 6: nota feita à mão (foto) → pede confirmação do valor; "É este pagamento" vai para a linha do banco ──
+ await pg.evaluate(l=>{ S.lancamentos.unshift(l); }, linha({id:'bancoM',data:'14/10/2026',descricao:'Equipamentos — FULANO DE TAL TESTE',valor:600,empresa:'FULANO DE TAL TESTE',categoria:'Equipamentos',observacao:'Extrato: PIX ENVIADO FULANO DE TAL TESTE',docs:{_banco:'kM'}}));
+ H.png('ADM - 2026-10-14 - Fulano de Tal Teste - R$ 1.500,00 - Ferramentas - Nota manual.png',ent,'OFICINA TESTE\nNOTA DE SERVIÇO\nCliente: EMPRESA TOMADORA TESTE\nDISCRIMINACAO\n02 Cabos 200,00\nValor pago: R$ Obrigado\nTOTAL:\n1500,00\nValor restando: R$\n600,00\n');
+ H.png('ADM - 2026-10-15 - Beltrano Teste - Recibo manual.png',ent,'RECIBO\nRecebi de Empresa Tomadora Teste a quantia de trezentos e cinquenta reais referente a frete\n');
+ await pg.evaluate(()=>{ S.entrada.lido=false; return lerEntrada(); });
+ R.manual=await pg.evaluate(async()=>{ const t=renderEntrada().replace(/<[^>]+>/g,' ').replace(/\s+/g,' '); const a=S.entrada.itens.find(x=>/Fulano/.test(x.nome)), c=S.entrada.itens.find(x=>/Beltrano/.test(x.nome));
+   const r={itens:S.entrada.itens.map(x=>x.nome.slice(0,40)+' ['+x.tipo+' '+x.confianca+' manual:'+!!x.manual92+']'), aviso:(t.match(/Nota feita à mão — confirme o valor pago\.[^]*?Digitar outro valor/)||[''])[0].slice(0,330)};
+   const n=S.lancamentos.length; r.semConfirmar={anexou:await confirmarTodosEntrada(true,true), mais:S.lancamentos.length-n, bloqueia:await confirmarEntrada(S.entrada.itens.indexOf(a),true)===false};
+   await confirmarManual92(a.fileId,'bancoM'); const l=S.lancamentos.find(x=>x.id==='bancoM');
+   r.escolheu={mais:S.lancamentos.length-n, nfe:!!l.docs.nfe, valor:l.valor, obs:l.observacao.replace(/\d{4}-\d{2}_ADM_[^(]+/g,'<arquivo> '), naEntrada:S.entrada.itens.map(x=>x.nome.slice(0,30))};
+   window.uiPrompt=async()=>'350,00'; await valorManual92(c.fileId); const t2=renderEntrada().replace(/<[^>]+>/g,' ').replace(/\s+/g,' ');
+   r.digitou={valor:c.info.valor, ok:!!c.manualOk92, conf:c.confianca, aviso:/valor confirmado por você: R\$ 350,00/.test(t2)};
+   const n2=S.lancamentos.length; await confirmarEntrada(S.entrada.itens.indexOf(c),true); const nova=S.lancamentos[0];
+   r.depoisDigitar={mais:S.lancamentos.length-n2, valor:nova.valor, desc:nova.descricao}; return r; });
+ // ── rodada 7: nota com desconto de centavos e "reembolsar" no nome, mas a empresa pagou pelo banco → confirma o desconto, sem reembolso ──
+ const PT=nota({base:'557778880001',num:567,nome:'POSTO TESTE ESTRADA LTDA',email:'nf@postoteste.com.br',desc:'Oleo diesel',valor:650.04});
+ const SQ=nota({base:'668889990001',num:88,nome:'SERRALHERIA TESTE LTDA',email:'nf@serralheriateste.com.br',desc:'Portao',valor:1000});
+ await pg.evaluate(([a,b])=>{ S.lancamentos.unshift(a,b); }, [linha({id:'bancoP',data:'13/10/2026',descricao:'Combustível — POSTO TESTE ESTRADA',valor:650,empresa:'POSTO TESTE ESTRADA',categoria:'Combustível',observacao:'Extrato: PIX ENVIADO POSTO TESTE ESTRADA '+fmtC(PT.cnpj),docs:{_banco:'kP'}}),
+   linha({id:'bancoQ',data:'13/10/2026',descricao:'Despesas administrativas — SERRALHERIA TESTE',valor:700,empresa:'SERRALHERIA TESTE',categoria:'Despesas administrativas',observacao:'Extrato: PIX ENVIADO SERRALHERIA TESTE '+fmtC(SQ.cnpj),docs:{_banco:'kQ'}})]);
+ H.pdf('ADM - 2026-10-13 - Posto Teste - R$ 650,04 - Diesel - Reembolsar Klismann (cartão PF).pdf',ent,danfse(PT).replace(/16\/10\/2026/g,'13/10/2026'));
+ H.pdf('NFSe'+SQ.num+'.pdf',ent,danfse(SQ).replace(/16\/10\/2026/g,'13/10/2026'));
+ await pg.evaluate(()=>{ S.entrada.lido=false; return lerEntrada(); });
+ R.desconto=await pg.evaluate(async c=>{ const it=S.entrada.itens.find(x=>/Posto Teste/.test(x.nome)), q=S.entrada.itens.find(x=>/NFSe88/.test(x.nome)); const txt=()=>renderEntrada().replace(/<[^>]+>/g,' ').replace(/\s+/g,' ');
+   const r={item:{proc:it.processo, conf:it.confianca, pagoPor:it.pagoPor, linha:it._linha92&&(it._linha92.id+' dif '+it._linha92.dif)}, aviso:(txt().match(/🟡 Nota com desconto:[^.]*\.[^.]*\./)||[''])[0].slice(0,220), semReembolso:/não vira reembolso ao sócio/.test(txt()), mais5:{linha:!!q._linha92, conf:q.confianca}};
+   const n=S.lancamentos.length, nr=S.lancamentos.filter(l=>l.docs&&l.docs.reembolsoSocio).length;
+   r.bloqueia=await confirmarEntrada(S.entrada.itens.indexOf(it),true)===false;
+   aceitarDif92(it.fileId); r.aceito={conf:it.confianca, aviso:/Desconto confirmado/.test(txt())};
+   await confirmarEntrada(S.entrada.itens.indexOf(it),true); const l=S.lancamentos.find(x=>x.id==='bancoP');
+   r.anexou={mais:S.lancamentos.length-n, reembolsos:S.lancamentos.filter(l=>l.docs&&l.docs.reembolsoSocio).length-nr, valor:l.valor, nfe:!!l.docs.nfe, obs:l.observacao.replace(/Extrato: [^·]+· /,'')};
+   return r; },PT.chave);
  // ── rodada 4: nota antiga em docs.nota (botão NF-e) e XML do custo do processo ──
  R.notaAntiga=await pg.evaluate(()=>{ const l={id:'antigaN',data:'01/10/2026',tipo:'Despesa',descricao:'Contabilidade — escritorio teste',valor:10,vinculo:'avulso',vinculoId:'ADM',categoria:'Contabilidade',status:'Pago',observacao:'',docs:{nota:'https://drive/notaAntiga'}}; S.lancamentos.unshift(l);
    const h=renderLancCard(l); window.__abertos=[]; abrirNotaLanc92('antigaN'); return {chip:/✅ 📄 NF-e/.test(h), onclick:/abrirNotaLanc92\('antigaN'\)/.test(h), abriu:window.__abertos[0]==='https://drive/notaAntiga'}; });
