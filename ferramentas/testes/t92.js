@@ -106,7 +106,7 @@ const linha=(o)=>Object.assign({tipo:'Despesa',vinculo:'avulso',vinculoId:'ADM',
    const n2=S.lancamentos.length; await confirmarEntrada(S.entrada.itens.indexOf(c),true); const nova=S.lancamentos[0];
    r.depoisDigitar={mais:S.lancamentos.length-n2, valor:nova.valor, desc:nova.descricao}; return r; });
  // ── rodada 7: nota com desconto de centavos e "reembolsar" no nome, mas a empresa pagou pelo banco → confirma o desconto, sem reembolso ──
- const PT=nota({base:'557778880001',num:567,nome:'POSTO TESTE ESTRADA LTDA',email:'nf@postoteste.com.br',desc:'Oleo diesel',valor:650.04});
+ const PT=nota({base:'557778880001',num:4321,nome:'POSTO TESTE ESTRADA LTDA',email:'nf@postoteste.com.br',desc:'Oleo diesel',valor:650.04});
  const SQ=nota({base:'668889990001',num:88,nome:'SERRALHERIA TESTE LTDA',email:'nf@serralheriateste.com.br',desc:'Portao',valor:1000});
  await pg.evaluate(([a,b])=>{ S.lancamentos.unshift(a,b); }, [linha({id:'bancoP',data:'13/10/2026',descricao:'Combustível — POSTO TESTE ESTRADA',valor:650,empresa:'POSTO TESTE ESTRADA',categoria:'Combustível',observacao:'Extrato: PIX ENVIADO POSTO TESTE ESTRADA '+fmtC(PT.cnpj),docs:{_banco:'kP'}}),
    linha({id:'bancoQ',data:'13/10/2026',descricao:'Despesas administrativas — SERRALHERIA TESTE',valor:700,empresa:'SERRALHERIA TESTE',categoria:'Despesas administrativas',observacao:'Extrato: PIX ENVIADO SERRALHERIA TESTE '+fmtC(SQ.cnpj),docs:{_banco:'kQ'}})]);
