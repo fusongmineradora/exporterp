@@ -894,14 +894,22 @@ function linhaDaNota92(it, par) {
   const cands = L.filter(l => l.tipo === 'Despesa' && l.vinculo !== 'processo' && Math.abs((Number(l.valor) || 0) - v) < 0.01
     && !(l.docs && (l.docs.nfe || l.docs.nota || l.docs.xml || l.docs._nota))
     && (!d || !l.data || Math.abs((new Date(brToIso(l.data)) - new Date(d)) / 864e5) <= 10));
-  const forte = cands.filter(l => {
+  const mesmaEmpresa = l => {
     const lt = [l.empresa, l.descricao, l.observacao].join(' ');
     if (cnpj && cnpjsDoTexto92(lt).includes(cnpj)) return true;
     const nomes = palavras92(l.empresa || String(l.descricao || '').split('—').pop());
     if (nomes.some(w => txt.includes(w))) return true;
     return !!(forn && palavras92(forn.nome).some(w => semAc91(lt).includes(w)));
-  });
+  };
+  const forte = cands.filter(mesmaEmpresa);
   if (forte.length === 1) return { linha: forte[0], forte: true, por: cnpj && cnpjsDoTexto92([forte[0].empresa, forte[0].descricao, forte[0].observacao].join(' ')).includes(cnpj) ? 'CNPJ' : 'empresa, valor e data' };
+  // nota com desconto (ou acréscimo): a mesma empresa recebeu um valor até 5% diferente, perto da data — sempre pede confirmação
+  if (!forte.length) {
+    const quase = L.filter(l => l.tipo === 'Despesa' && l.vinculo !== 'processo' && Math.abs((Number(l.valor) || 0) - v) >= 0.01 && Math.abs((Number(l.valor) || 0) - v) <= v * 0.05
+      && !(l.docs && (l.docs.nfe || l.docs.nota || l.docs.xml || l.docs._nota))
+      && (!d || !l.data || Math.abs((new Date(brToIso(l.data)) - new Date(d)) / 864e5) <= 10) && mesmaEmpresa(l));
+    if (quase.length === 1) return { linha: quase[0], forte: true, dif: Math.round((v - Number(quase[0].valor)) * 100) / 100, por: cnpj && cnpjsDoTexto92([quase[0].empresa, quase[0].descricao, quase[0].observacao].join(' ')).includes(cnpj) ? 'CNPJ' : 'empresa e data' };
+  }
   if (!forte.length && cands.length === 1) return { linha: cands[0], forte: false, por: 'valor e data' };
   return null;
 }
@@ -909,7 +917,7 @@ function linhaDaNota92(it, par) {
 function juntarNotas92(lista) {
   lista = lista || (S.entrada && S.entrada.itens) || [];
   lista.forEach(it => { delete it._parXml92; delete it._linha92; });
-  const notas = lista.filter(ehNotaAdm92);
+  const notas = lista.filter(it => ehNotaAdm92(it) && !it.manual92);
   const xmls = notas.filter(it => it.formato === 'xml'), pdfs = notas.filter(it => it.formato !== 'xml');
   xmls.forEach(x => {
     const ch = chaveNota92(x);
@@ -925,14 +933,125 @@ function juntarNotas92(lista) {
     const par = it._parXml92 ? lista.find(y => y.fileId === it._parXml92) : null;
     const r = it.semLinha92 || (par && par.semLinha92) ? null : linhaDaNota92(it, par);   // "Não é esse pagamento"
     if (!r) return;
-    it._linha92 = { id: r.linha.id, forte: r.forte, por: r.por };
+    it._linha92 = { id: r.linha.id, forte: r.forte, por: r.por, dif: r.dif || 0 };
     if (r.forte && !it.processo) it.processo = '__ADM';   // nota sem processo que é de um pagamento do mês já lançado
     if (r.forte && !it.categoriaManual && r.linha.categoria && !/^(Despesas administrativas|Outras despesas)$/.test(r.linha.categoria)) it.categoria = r.linha.categoria;
-    if (it.confianca !== 'manual') it.confianca = r.forte ? 'alta' : 'media';
+    if (it.confianca !== 'manual') it.confianca = r.forte && !(r.dif && !difAceito92(it, lista)) ? 'alta' : 'media';
   });
   return lista;
 }
-function juntarTudo92(lista) { juntarGuias91(lista); juntarNotas92(lista); return lista; }
+const difAceito92 = (it, lista) => { const par = it._parXml92 ? (lista || (S.entrada && S.entrada.itens) || []).find(y => y.fileId === it._parXml92) : null; return !!(it.difOk92 || (par && par.difOk92)); };
+// "Sim, foi desconto": a nota vai para o pagamento do banco (a linha fica com o valor que saiu do banco)
+function aceitarDif92(fileId) {
+  const E = S.entrada || { itens: [] };
+  const it = E.itens.find(x => x.fileId === fileId); if (!it) return;
+  const par = it._parXml92 ? E.itens.find(y => y.fileId === it._parXml92) : null;
+  [it, par].filter(Boolean).forEach(x => { x.difOk92 = true; });
+  try { juntarTudo92(E.itens); } catch (e) {}
+  render();
+}
+const rotDif92 = dif => dif > 0 ? 'desconto' : 'acréscimo';
+function juntarTudo92(lista) { marcarManuais92(lista); juntarGuias91(lista); juntarNotas92(lista); return lista; }
+
+// ── v92: nota / recibo feito à mão (foto): nunca entra sozinho — você confirma o valor pago ──
+// (ex.: nota manual com o total da compra e um "valor restando": o que saiu do banco foi só o restante)
+const BANCO92 = /\bPIX\b|ID\s*D[AE]\s*TRANSA|AUTENTICA[CÇ]|COMPROVANTE\s+DE\s+(?:PAGAMENTO|TRANSFER|PIX)|AG[EÊ]NCIA|SISPAG|C[OÓ]DIGO\s+DE\s+BARRAS|LINHA\s+DIGIT|TRANSFER[EÊ]NCIA|\bTED\b|ITA[UÚ]|BRADESCO|SANTANDER|NUBANK|SICOOB|SICREDI|BANCO\s+DO\s+BRASIL|CAIXA\s+ECON|MERCADO\s*PAGO|PICPAY|PAGADOR|RECEBEDOR|FAVORECIDO|DATA\s+DO\s+PAGAMENTO/i;
+const NOTAMAO92 = /NOTA\s+DE\s+SERVI|RECIBO|VALOR\s+REST|RESTANTE|DISCRIMINA|OR[CÇ]AMENTO|PRE[CÇ]O\s+UNIT|\bQUANT/i;
+function ehManual92(it) {
+  if (!it || ['nfe', 'nfeSaida', 'cte', 'mdfe', 'guia', 'boleto', 'invoice', 'contrato', 'bl', 'booking', 'due', 'packingList', 'faturaFrete', 'cambio'].includes(it.tipo)) return false;
+  const i = it.info || {};
+  if (it.formato === 'xml' || i.cambio || /^\d{44}$/.test(i.chave || '') || i.chaveNfse) return false;
+  if (/\bmanual\b|[aà]\s+m[aã]o\b/i.test(String(it.nome || ''))) return true;
+  const t = String(it.texto || '');
+  return !!it.ocr && !BANCO92.test(t) && !/NOTA\s+FISCAL|NFS-?E|DANFS?E/i.test(t) && NOTAMAO92.test(t);
+}
+function valoresManual92(it) {
+  const T = String(it.texto || '').replace(/\s+/g, ' ');
+  const n = '(\\d{1,3}(?:\\.\\d{3})+,\\d{2}|\\d+,\\d{2})';
+  const num = re => { const m = T.match(new RegExp(re + '\\s*:?\\s*(?:R\\$\\s*)?' + n, 'i')); return m ? numBR(m[1]) : 0; };
+  return { pago: num('VALOR\\s+PAGO'), total: num('\\bTOTAL\\b'), restando: num('REST(?:ANDO|ANTE)'), nome: lerNomeArquivo(String(it.nome || '').replace(/^ADM\s*-\s*/i, '')).valor || 0 };
+}
+function marcarManuais92(lista) {
+  (lista || []).forEach(it => {
+    if (!ehManual92(it)) { delete it.manual92; return; }
+    it.manual92 = { valores: valoresManual92(it) };
+    if (!it.manualOk92 && it.confianca === 'alta') it.confianca = 'media';
+  });
+}
+// pagamentos do extrato que podem ser desta nota: a pessoa/empresa do nome do arquivo e/ou um dos valores lidos, perto da data
+function candidatosManual92(it) {
+  if (it.processo && it.processo !== '__ADM') return [];
+  const v = (it.manual92 && it.manual92.valores) || valoresManual92(it);
+  const vals = [v.pago, v.restando, v.total, v.nome, Number(it.info.valor) || 0].filter(x => x > 0);
+  const nomeArq = String(it.nome || '').replace(/^ADM\s*-\s*/i, '').replace(/\.[a-z0-9]{2,5}$/i, '').replace(/R\$\s*[\d.,]+/g, ' ').replace(/\d{4}-\d{2}-\d{2}/g, ' ');
+  const quem = palavras92([it.info.emitNome, (it.info.pagamento || {}).recebedor, nomeArq].join(' ')).filter(w => !/^(NOTA|MANUAL|RECIBO|FOTO|IMAGEM)$/.test(w));
+  const d = it.info.data || '';
+  return (S.lancamentos || []).filter(l => l.tipo === 'Despesa' && l.vinculo !== 'processo' && !(l.docs && (l.docs.nota || l.docs.nfe))
+      && !(d && l.data && Math.abs((new Date(brToIso(l.data)) - new Date(d)) / 864e5) > 20))
+    .map(l => {
+      const lt = semAc91([l.empresa, l.descricao, (String(l.observacao || '').match(/Extrato: ([^·]+)/) || [])[1]].join(' '));
+      const nomeOk = quem.some(w => lt.includes(w)), valOk = vals.some(x => Math.abs(x - (Number(l.valor) || 0)) < 0.01);
+      return { l, pts: (nomeOk ? 2 : 0) + (valOk ? 2 : 0) + (l.docs && l.docs._banco ? 1 : 0) };
+    })
+    .filter(x => x.pts >= 4 || (x.pts >= 2 && d))   // só o nome ou só o valor: precisa estar perto da data
+    .sort((a, b) => b.pts - a.pts)
+    .filter((x, i, arr) => arr[0].pts < 4 || x.pts >= 4)   // achou com o nome E o valor: mostra só esses
+    .slice(0, 4).map(x => x.l);
+}
+function linhaManual92(it) {
+  if (!it.manual92) return '';
+  const fid = escHtml(String(it.fileId)), v = it.manual92.valores || {};
+  if (it.manualOk92) return `<div style="margin-top:10px;font-size:12px;color:var(--green)">📝 Nota feita à mão — valor confirmado por você: <b>R$ ${fmt(it.info.valor || 0)}</b>. <a href="#" onclick="valorManual92('${fid}');return false" style="color:var(--accent);font-weight:600">Mudar</a></div>`;
+  const lidos = [['Valor pago', v.pago], ['Total', v.total], ['Valor restando', v.restando], ['Nome do arquivo', v.nome]].filter(([, x]) => x > 0);
+  const ja = lidos.length ? 'Li na nota: ' + lidos.map(([k, x]) => `${k} R$ ${fmt(x)}`).join(' · ') + '.' : 'Não consegui ler o valor na nota.';
+  const cands = candidatosManual92(it);
+  const lista = cands.map(l => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border)"><span>${l.docs && l.docs._banco ? '🏦 Banco' : '🧾 Comprovante'}: <b>R$ ${fmt(l.valor)}</b> em ${escHtml(l.data || '—')} — ${escHtml(l.descricao)}</span><button class="btn btn-primary btn-xs" onclick="confirmarManual92('${fid}','${escHtml(String(l.id))}')">É este pagamento</button></div>`).join('');
+  return `<div style="margin-top:10px;font-size:12px;color:var(--yellow)">📝 <b>Nota feita à mão — confirme o valor pago.</b> ${ja}
+    ${cands.length ? `<div style="margin-top:4px;color:var(--text)">${lista}</div>` : `<div style="margin-top:4px;color:var(--muted2)">Nenhum pagamento parecido no extrato para essa pessoa ou empresa.</div>`}
+    <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">${Number(it.info.valor) > 0 ? `<button class="btn btn-secondary btn-xs" onclick="valorManual92('${fid}',${Number(it.info.valor)})">Foi pago R$ ${fmt(it.info.valor)}</button>` : ''}<button class="btn btn-secondary btn-xs" onclick="valorManual92('${fid}')">Digitar outro valor</button></div></div>`;
+}
+// "É este pagamento": a nota vai para a linha do extrato (sem linha nova)
+async function confirmarManual92(fileId, lancId) {
+  const E = S.entrada || { itens: [] };
+  const it = E.itens.find(x => x.fileId === fileId), l = (S.lancamentos || []).find(x => String(x.id) === String(lancId));
+  if (!it || !l || it.salvando) return;
+  try {
+    it.salvando = true; render(); showSyncIndicator('Anexando...');
+    const [upd] = await guardarNoMes91([it], (brToIso(l.data) || it.info.data || new Date().toISOString()).slice(0, 7));
+    l.docs = l.docs || {};
+    if (!l.docs.nfe) l.docs.nfe = upd.webViewLink; else if (!l.docs.outros) l.docs.outros = upd.webViewLink;
+    l.observacao = juntaObs91(l.observacao, `Nota feita à mão: ${upd.name} (valor confirmado: R$ ${fmt(l.valor)})`);
+    logAction('anexar', 'EXTRATO_CAIXA', l.id, `Nota feita à mão anexada ao pagamento ${l.descricao} R$ ${Number(l.valor).toFixed(2)} (valor confirmado)`);
+    E.itens = E.itens.filter(x => x !== it);
+    try { juntarTudo92(E.itens); } catch (e) {}
+    await saveToSheets(); hideSyncIndicator();
+    showToast('✅ Nota feita à mão anexada ao pagamento: ' + l.descricao); render();
+  } catch (e) { it.salvando = false; hideSyncIndicator(); it.erro = e.message || String(e); render(); }
+}
+// "Digitar outro valor" / "Foi pago R$ …": o valor fica confirmado e a nota segue o caminho normal ao anexar
+async function valorManual92(fileId, valor) {
+  const E = S.entrada || { itens: [] };
+  const it = E.itens.find(x => x.fileId === fileId); if (!it) return;
+  let v = valor;
+  if (v === undefined) {
+    const r = await uiPrompt('Quanto foi pago (R$)?', Number(it.info.valor) > 0 ? fmt(it.info.valor) : '', 'Nota feita à mão');
+    if (r === null || r === undefined || String(r).trim() === '') return;
+    v = numEntrada(r);
+  }
+  v = Math.round(Number(v) * 100) / 100;
+  if (!(v > 0)) { showToast('Valor inválido'); return; }
+  it.info.valor = v; if (it.info.pagamento) it.info.pagamento.valor = v;
+  it.valorManual = true; it.manualOk92 = true;
+  if (it.processo && it.confianca !== 'manual') it.confianca = 'alta';
+  try { juntarTudo92(E.itens); } catch (e) {}
+  render();
+}
+// o que falta você confirmar antes de anexar
+function falteConfirmar92(it) {
+  if (it.manual92 && !it.manualOk92) return 'Nota feita à mão: confirme o valor pago (escolha o pagamento ou digite o valor)';
+  if (ehNotaAdm92(it) && it.processo === '__ADM' && it._linha92 && it._linha92.dif && !difAceito92(it) && !it.semLinha92) return `Nota com ${rotDif92(it._linha92.dif)}: confirme ou toque em "Não é esse pagamento"`;
+  return '';
+}
 // "Não é esse pagamento": a nota (e o PDF/XML par dela) não liga na linha sugerida
 function semLinhaNota92(fileId, voltar) {
   const E = S.entrada || { itens: [] };
@@ -944,7 +1063,7 @@ function semLinhaNota92(fileId, voltar) {
 }
 // o que vai acontecer com a nota (aparece no cartão da Caixa de Entrada)
 function linhaNota92(it) {
-  if (!ehNotaAdm92(it) || it.processo !== '__ADM') return '';
+  if (!ehNotaAdm92(it) || it.processo !== '__ADM' || it.manual92) return '';
   const box = (cor, html) => `<div style="margin-top:10px;font-size:12px;color:${cor}">${html}</div>`;
   const E = S.entrada || { itens: [] };
   const par = it._parXml92 ? E.itens.find(y => y.fileId === it._parXml92) : null;
@@ -953,7 +1072,14 @@ function linhaNota92(it) {
   const fid = escHtml(String(it.fileId));
   const link = (txt, voltar) => ` <a href="#" onclick="semLinhaNota92('${fid}'${voltar ? ',true' : ''});return false" style="color:var(--accent);font-weight:600">${txt}</a>`;
   if (it.semLinha92 || (par && par.semLinha92)) return h + box('var(--yellow)', `🟡 Você marcou que a nota não é do pagamento parecido: ${it.tipo === 'nfse' ? 'ela vira uma despesa nova do mês (paga).' : 'ela fica guardada nos documentos do mês.'}${link('Ligar de novo', true)}`);
-  if (l) h += it._linha92.forte ? box('var(--green)', `🔗 Vai para o pagamento já lançado: <b>${escHtml(l.descricao)}</b> (${escHtml(l.data || '—')}, pelo ${escHtml(it._linha92.por)}). Não cria outra linha.${link('Não é esse pagamento')}`)
+  const reemb = it.pagoPor === 'socio' && l && it._linha92.forte ? box('var(--green)', '💳 A empresa já pagou essa nota (está no extrato): <b>não vira reembolso ao sócio</b>.') : '';
+  if (l && it._linha92.dif) {
+    const dif = it._linha92.dif, notaV = Number(it.info.valor) || Number(par && par.info.valor) || 0;
+    const txt = `nota R$ ${fmt(notaV)} · pago R$ ${fmt(l.valor)} (${escHtml(l.data || '—')}, ${escHtml(l.descricao)}) · <b>${rotDif92(dif)} de R$ ${fmt(Math.abs(dif))}</b>`;
+    return h + (difAceito92(it) ? box('var(--green)', `✅ ${rotDif92(dif) === 'desconto' ? 'Desconto' : 'Acréscimo'} confirmado: ${txt}. A nota vai para esse pagamento e a linha fica com R$ ${fmt(l.valor)}.${link('Não é esse pagamento')}`)
+      : box('var(--yellow)', `🟡 <b>Nota com ${rotDif92(dif)}:</b> ${txt}. Confirme antes de anexar.<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-primary btn-xs" onclick="aceitarDif92('${fid}')">Sim, foi ${rotDif92(dif)}</button><button class="btn btn-secondary btn-xs" onclick="semLinhaNota92('${fid}')">Não é esse pagamento</button></div>`)) + reemb;
+  }
+  if (l) h += it._linha92.forte ? box('var(--green)', `🔗 Vai para o pagamento já lançado: <b>${escHtml(l.descricao)}</b> (${escHtml(l.data || '—')}, pelo ${escHtml(it._linha92.por)}). Não cria outra linha.${link('Não é esse pagamento')}`) + reemb
     : box('var(--yellow)', `🟡 Parece o pagamento <b>${escHtml(l.descricao)}</b> (${escHtml(l.data || '—')}): mesmo valor e data, mas a empresa não aparece na nota. Confira antes de anexar.${link('Não é esse pagamento')}`);
   else h += box('var(--yellow)', it.tipo === 'nfse' ? `🟡 Nenhum pagamento de R$ ${fmt(it.info.valor || 0)} lançado perto dessa data: a nota vira despesa do mês (paga). Quando o comprovante ou o extrato chegar, liga nessa mesma linha.` : `🟡 Nenhum pagamento de R$ ${fmt(it.info.valor || 0)} lançado perto dessa data: a nota fica guardada nos documentos do mês.`);
   return h;
@@ -972,7 +1098,7 @@ function lancarNota92(pdf, updPdf, xml, updXml) {
     const mesma = !!(l.docs._nota && meta.chave && l.docs._nota.chave === meta.chave);   // o PDF / XML que faltava da mesma nota
     l.docs._nota = Object.assign({}, l.docs._nota, meta);
     if (/^(Despesas administrativas|Outras despesas)?$/.test(l.categoria || '') && base.categoria) { l.categoria = base.categoria; l.descricao = base.categoria + ' — ' + (l.empresa || meta.emitente); }
-    if (!mesma) l.observacao = juntaObs91(l.observacao, 'Nota: ' + rot.trim());
+    if (!mesma) l.observacao = juntaObs91(l.observacao, 'Nota: ' + rot.trim() + (r.dif ? ` · nota R$ ${fmt(Number(i.valor) || 0)} — ${rotDif92(r.dif)} R$ ${fmt(Math.abs(r.dif))}` : ''));
     // a empresa do pagamento (cadastro com o nome fantasia) passa a ter o CNPJ da nota: a próxima nota acha sozinha
     if (meta.cnpj && typeof fmtCnpj === 'function') {
       const f = (S.fornecedores || []).find(x => !String(x.cnpj || '').replace(/\D/g, '') && palavras92(x.nome).some(w => semAc91(l.empresa || '').includes(w)));
@@ -1600,6 +1726,7 @@ async function confirmarEntrada(i, silencioso) {
   const E = S.entrada, item = E.itens[i];
   if (!item || item.salvando) return;
   if (!item.tipo) { if (!silencioso) showToast('Escolha o tipo de documento'); return false; }
+  { const falta = falteConfirmar92(item); if (falta) { if (!silencioso) showToast(falta); return false; } }
   if (item.processo === '__ADM') return confirmarAdm(i, silencioso);
   const p = S.processos.find(x => x.id === item.processo);
   if (!p) { if (!silencioso) showToast('Escolha o processo'); return false; }
@@ -1763,6 +1890,8 @@ async function confirmarAdm(i, silencioso) {
   const parNota = nota && item._parXml92 ? E.itens.find(x => x !== item && x.fileId === item._parXml92 && !x.salvando) : null;
   const notaPdf = nota ? (item.formato === 'xml' ? parNota : item) : null, notaXml = nota ? (item.formato === 'xml' ? item : parNota) : null;
   const juntos = [item, par, parNota].filter(Boolean);
+  // a empresa já pagou essa nota pelo banco / comprovante: não vira reembolso ao sócio
+  const pagoPelaEmpresa = nota && [item, parNota].some(x => x && x._linha92 && x._linha92.forte) && ![item, parNota].some(x => x && x.semLinha92);
   juntos.forEach(it => { it.salvando = true; }); if (!silencioso) render();
   try {
     const mes = ((comp && comp.info.data) || item.info.data || new Date().toISOString()).slice(0, 7);
@@ -1780,14 +1909,14 @@ async function confirmarAdm(i, silencioso) {
       msg = comp ? `✅ ${rotuloConta91(conta)} e comprovante guardados juntos: ${l ? l.descricao + ' (pago em ' + (l.data || '—') + ')' : 'despesa do mês'}`
         : (l && l.status === 'Pago' ? `✅ ${rotuloConta91(conta)} anexada ao pagamento já lançado: ${l.descricao}` : `✅ ${rotuloConta91(conta)} guardada como conta a pagar${l && l.data ? ' (vence ' + l.data + ')' : ''}`);
     }
-    else if (item.pagoPor === 'socio' && typeof lancarReembolsoSocio === 'function') { if (nota) cadastrar(notaXml || notaPdf); lancarReembolsoSocio(item, null, upd); }
+    else if (item.pagoPor === 'socio' && !pagoPelaEmpresa && typeof lancarReembolsoSocio === 'function') { if (nota) cadastrar(notaXml || notaPdf); lancarReembolsoSocio(item, null, upd); }
     else if (nota) {
       const updPdf = notaPdf ? upds[ordem.indexOf(notaPdf)] : null, updXml = notaXml ? upds[ordem.indexOf(notaXml)] : null;
       const antes = (S.lancamentos || []).length;
       const l = lancarNota92(notaPdf, updPdf, notaXml, updXml);
       cadastrar(notaXml || notaPdf);   // depois de ligar: a empresa do pagamento já tem o CNPJ da nota (não cria cadastro repetido)
       if (l && (S.lancamentos || []).length === antes) {
-        msg = `✅ Nota anexada ao pagamento já lançado: ${l.descricao}` + (notaPdf && notaXml ? ' (PDF e XML)' : '');
+        msg = `✅ Nota anexada ao pagamento já lançado: ${l.descricao}` + (notaPdf && notaXml ? ' (PDF e XML)' : '') + (item.pagoPor === 'socio' ? ' — pago pela empresa, sem reembolso' : '');
         // aprende a categoria para as próximas notas dessa empresa (a categoria da linha do pagamento)
         try {
           const base = notaXml || notaPdf, k = typeof chaveCategAdm === 'function' ? chaveCategAdm(base) : '';
@@ -1901,6 +2030,7 @@ function renderEntrada() {
       ${it.corrigido ? `<div style="margin-top:10px;font-size:12px;color:var(--green)">↪️ ${escHtml(it.corrigido)}</div>` : ''}
       ${linhaPar91(it)}
       ${linhaNota92(it)}
+      ${linhaManual92(it)}
       ${it.processo && it.processo !== '__ADM' && !(S.processos || []).some(p => p.id === it.processo) ? `<div style="margin-top:10px;font-size:12px;color:var(--red)">⚠️ O processo ${escHtml(it.processo)} não existe no ERP. Escolha o processo correto.</div>` : ''}
       ${it.info.cambio && it.info.cambio.faturas.length ? `<div style="margin-top:10px;font-size:12px;color:var(--muted2)">Faturas pagas por este câmbio: ${it.info.cambio.faturas.map(f => `<b style="color:var(--text)">${escHtml(f.processo)}</b> USD ${fmt(f.usd)}`).join(' · ')}${it.processosExtras && it.processosExtras.length ? ' — será anexado a todos' : ''}</div>` : ''}
       <div class="g2" style="margin-top:12px">
