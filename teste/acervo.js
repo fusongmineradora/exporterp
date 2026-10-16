@@ -324,6 +324,19 @@ function enriquecerInfo(item) {
     if (!info.transpNome) info.transpNome = mx(/TRANSPORTADOR[\s\S]{0,140}?CNPJ \/ CPF\s+([A-ZÀ-Ú][A-ZÀ-Ú .&-]{3,60}?)\s+\d-/i);
   }
   if (item.tipo === 'nfse') {
+    // v92: NFS-e nacional (DANFSe v2): chave de acesso de 50 dígitos (traz o CNPJ e o número) e o bloco do prestador
+    // ("NOME / NOME EMPRESARIAL MUNICÍPIO / SIGLA UF CÓDIGO IBGE / CEP <nome> <cidade> / <UF>…"); antes o nome saía "MUNICÍPIO / SIGLA UF…"
+    if (/DANFSe|CHAVE DE ACESSO DA NFS-?E/i.test(U)) {
+      const ch = (U.match(/CHAVE DE ACESSO DA NFS-?E\s*(\d{50})\b/i) || U.match(/(?<!\d)(\d{50})(?!\d)/) || [])[1];
+      if (ch) { info.chaveNfse = ch; if (!info.chave) info.chave = ch; if (!info.numero) info.numero = String(Number(ch.slice(23, 36))); if (!info.emitCnpj) info.emitCnpj = ch.slice(9, 23); }
+      const pr = U.match(/PRESTADOR\s*\/\s*FORNECEDOR([\s\S]{0,900}?)TOMADOR/i);
+      if (pr) {
+        if (!info.emitCnpj) { const c = pr[1].match(/\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/); if (c) info.emitCnpj = c[0].replace(/\D/g, ''); }
+        if (!info.emitNome) { const n = pr[1].match(/NOME\s*\/\s*NOME EMPRESARIAL\s+MUNIC[IÍ]PIO\s*\/\s*SIGLA UF\s+C[OÓ]DIGO IBGE\s*\/\s*CEP\s+(.+?\b(?:LTDA|S\.?\s?A|EIRELI|ME|EPP|MEI)\b\.?)/i); if (n) info.emitNome = n[1].trim(); }
+        if (!info.emitEmail) { const e = pr[1].match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/); if (e) info.emitEmail = e[0]; }
+      }
+      if (!info.descricao) info.descricao = mx(/DESCRI[CÇ][AÃ]O DO SERVI[CÇ]O\s+(.{3,120}?)\s+TRIBUTA[CÇ][AÃ]O/i);
+    }
     // NFS-e de prefeitura (hotéis etc.): vale o VALOR LÍQUIDO; a DATA FATO GERADOR é o dia do pagamento
     if (!info.valor) { const w = U.match(/VALOR L[IÍ]QUIDO\s*\(R\$\)([\s\S]{0,400})/i); if (w) { const vs = (w[1].match(/\d{1,3}(?:\.\d{3})*,\d{2}/g) || []).map(numBR); if (vs.length && Math.max(...vs) > 0) info.valor = Math.max(...vs); } }
     if (!info.data) { const d = mx(/DATA FATO GERADOR[\s\S]{0,250}?(\d{2}\/\d{2}\/\d{4})/i); if (d) info.data = brToIso(d); }
@@ -341,6 +354,7 @@ function enriquecerInfo(item) {
     if (!info.emitCnpj) { const c = [...U.matchAll(/CPF\/CNPJ:\s*([\d.\/-]{14,18})/gi)].map(m => m[1].replace(/\D/g, '')).filter(x => x.length === 14 && x !== FU_SONG_CNPJ); if (c.length) info.emitCnpj = c[c.length - 1]; }
     if (!info.data) { const d = mx(/EMITID[OA] EM\s+(\d{2}\/\d{2}\/\d{4})/i); if (d) info.data = brToIso(d); }
     if (!info.data) { const d = mx(/EMITIDA EM\s+(\d{2}\/\d{2}\/\d{4})/i) || mx(/Data da emiss[aã]o da NFS-?e\s+(\d{2}\/\d{2}\/\d{4})/i) || dataBrDe(U); if (d) info.data = brToIso(d); }
+    if (/MUNIC[IÍ]PIO\s*\/|SIGLA UF|C[OÓ]DIGO IBGE/i.test(info.emitNome || '')) info.emitNome = '';   // rótulo do formulário, não é nome
   }
   if (item.tipo === 'recibo') {
     const J = U.replace(/\b([A-ZÀ-Ú]) (?=[A-ZÀ-Ú]\b)/g, '$1');   // "V A L O R T O T A L" → "VALORTOTAL"
@@ -1899,7 +1913,7 @@ function notasDuplicadasEmCustos() {
 }
 
 // versão publicada (aparece na faixa laranja: assim dá para ver se o navegador já pegou a atualização)
-const VERSAO_TESTE = '91';
+const VERSAO_TESTE = '92';
 setTimeout(() => { const f = document.getElementById('teste-faixa'); if (f && !/versão/.test(f.textContent)) f.textContent += ' · versão ' + VERSAO_TESTE; const o = document.getElementById('versao-oficial'); if (o) o.textContent = 'versão ' + VERSAO_TESTE; }, 500);
 
 // Tarifas de câmbio já lançadas nos processos: passam para o Câmbio (uma por contrato, fora do custo do processo)
