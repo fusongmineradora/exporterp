@@ -1115,7 +1115,7 @@ async function anexarGuiaNaLinha91(id, fileId) {
     l.observacao = juntaObs91(l.observacao, rotuloConta91(it) + ': ' + nomeCurto91(it, upd) + (comp ? ' · ' + comp : ''));
     logAction('anexar', 'EXTRATO_CAIXA', l.id, `${rotuloConta91(it)} anexada à linha ${l.descricao} R$ ${Number(l.valor).toFixed(2)}`);
     S.entrada.itens = S.entrada.itens.filter(x => x !== it);
-    try { juntarGuias91(S.entrada.itens); } catch (e) {}
+    try { juntarTudo92(S.entrada.itens); } catch (e) {}
     await saveToSheets();
     hideSyncIndicator();
     const m = document.getElementById('guia91-modal'); if (m) m.remove();
@@ -1140,4 +1140,104 @@ if (typeof salvarLancamento === 'function' && !salvarLancamento._v91) {
     return r;
   };
   salvarLancamento._v91 = true;
+}
+
+// ── 15. BOTÃO XML EM TODAS AS LINHAS DO EXTRATO DE CAIXA (v92 · 16/10/2026) ──
+// Despesa do mês: o XML da nota fica em docs.xml (tocar em "+ XML" mostra os XMLs da Caixa de Entrada).
+// Custo de processo: o botão abre o XML da NF-e / CT-e que já está anexado ao processo.
+// O botão NF-e também mostra as notas de serviço antigas (guardadas em docs.nota).
+function xmlDoProcesso92(l) {
+  const p = l && l._sourceProcessoId && (S.processos || []).find(x => x.id === l._sourceProcessoId);
+  if (!p || !p.docs) return '';
+  const campo = l._sourceField, files = p.docs._files || {};
+  const urlsCusto = new Set((((p.docs._custoDocs || {})[campo] || {}).fiscais || []).map(d => d.url).filter(Boolean));
+  for (const k of Object.keys(files)) for (const f of files[k] || []) {
+    if (f && f.url && f.formato === 'xml' && (urlsCusto.has(f.url) || f.campoCusto === campo)) return f.url;
+  }
+  // a nota em PDF está no custo e o XML dela (mesma chave) está nos arquivos
+  const chaves = new Set((((p.docs._custoDocs || {})[campo] || {}).fiscais || []).map(d => d.k).filter(k => /^\d{44}$/.test(k || '')));
+  for (const k of Object.keys(files)) for (const f of files[k] || []) { if (f && f.url && f.formato === 'xml' && chaves.has(f.chave)) return f.url; }
+  return '';
+}
+function abrirNotaLanc92(id) {
+  const l = (S.lancamentos || []).find(x => String(x.id) === String(id));
+  const u = l && l.docs && (l.docs.nfe || l.docs.nota);
+  if (u) { window.open(sanitizeUrl(u), '_blank', 'noopener,noreferrer'); return; }
+  abrirDocLanc(id, 'nfe');
+}
+if (typeof renderLancCard === 'function' && !renderLancCard._v92) {
+  const baseCard92 = renderLancCard;
+  renderLancCard = function (l) {
+    if (!l) return baseCard92(l);
+    const docs = l.docs || {};
+    const notaSo = !l._computed && !docs.nfe && docs.nota;
+    let h = baseCard92(notaSo ? Object.assign({}, l, { docs: Object.assign({}, docs, { nfe: docs.nota }) }) : l);
+    try {
+      if (!l._computed) h = h.replace(`abrirDocLanc('${l.id}','nfe')`, `abrirNotaLanc92('${l.id}')`);
+      const xml = l._computed ? xmlDoProcesso92(l) : (docs.xml || '');
+      const chip = `<span class="doc-chip ${xml ? 'has-doc' : ''}" onclick="abrirXmlLanc92('${escHtml(String(l.id))}')" style="font-size:9.5px;padding:2px 7px" title="XML da nota${xml ? ' (anexado)' : ''}">${xml ? '✅' : '+'} 📑 XML</span>`;
+      const k = h.indexOf(`abrirDocLanc('${l.id}','outros')`);
+      const ini = k >= 0 ? h.lastIndexOf('<span class="doc-chip', k) : -1;
+      if (ini >= 0) h = h.slice(0, ini) + chip + '\n        ' + h.slice(ini);
+    } catch (e) {}
+    return h;
+  };
+  renderLancCard._v92 = true;
+}
+async function abrirXmlLanc92(id) {
+  const l = (S.lancamentos || []).find(x => String(x.id) === String(id));
+  if (!l) {   // custo do processo (linha automática)
+    const e = typeof buildAllEntries === 'function' ? buildAllEntries().find(x => String(x.id) === String(id)) : null;
+    const u = e ? xmlDoProcesso92(e) : '';
+    if (u) window.open(sanitizeUrl(u), '_blank', 'noopener,noreferrer');
+    else showToast(e && e._sourceProcessoId ? 'Este custo ainda não tem XML. Salve o XML da nota na Caixa de Entrada: ele vai para o processo.' : 'Esta linha ainda não tem XML.');
+    return;
+  }
+  if (l.docs && l.docs.xml) { window.open(sanitizeUrl(l.docs.xml), '_blank', 'noopener,noreferrer'); return; }
+  const velho = document.getElementById('xml92-modal'); if (velho) velho.remove();
+  const modal = document.createElement('div'); modal.id = 'xml92-modal'; modal.className = 'modal-overlay';
+  const pintar = () => {
+    const E = S.entrada || { itens: [] };
+    const lista = (E.itens || []).filter(it => it.formato === 'xml' && !it.salvando);
+    const v = Number(l.valor) || 0, igual = it => Math.abs((Number(it.info.valor) || 0) - v) < 0.01;
+    lista.sort((a, b) => (igual(a) ? 0 : 1) - (igual(b) ? 0 : 1));
+    modal.innerHTML = `<div class="modal" style="max-width:560px;width:95%;max-height:90vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div class="modal-title" style="margin-bottom:0">📑 Anexar XML da nota</div>
+        <button class="btn btn-secondary btn-xs" onclick="document.getElementById('xml92-modal').remove()">✕</button></div>
+      <div style="font-size:12.5px;color:var(--muted2);margin-bottom:12px">${escHtml(l.descricao || '')} · R$ ${fmt(l.valor)} · ${escHtml(l.data || '—')}</div>
+      ${E.carregando ? `<div style="font-size:13px;color:var(--muted)">⏳ Lendo a Caixa de Entrada...</div>`
+        : lista.length ? lista.map(it => `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">
+          <div style="min-width:0"><div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(it.info.emitNome || it.nome)}</div>
+          <div style="font-size:11.5px;color:var(--muted2)">${escHtml(it.nome)}${it.info.numero ? ' · nº ' + escHtml(String(it.info.numero)) : ''} · R$ ${fmt(it.info.valor || 0)}${igual(it) ? ' · <span style="color:var(--green)">mesmo valor</span>' : ''}</div></div>
+          <button class="btn ${igual(it) ? 'btn-primary' : 'btn-secondary'} btn-xs" onclick="anexarXmlNaLinha92('${escHtml(String(l.id))}','${escHtml(it.fileId)}')">Anexar nesta linha</button></div>`).join('')
+        : `<div style="font-size:13px;color:var(--muted2)">Nenhum XML na Caixa de Entrada. Salve o XML na pasta ${escHtml(typeof ENTRADA_FOLDER !== 'undefined' ? ENTRADA_FOLDER : 'Entrada')} e abra esta lista de novo.</div>`}
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px"><button class="btn btn-secondary btn-sm" onclick="document.getElementById('xml92-modal').remove()">Fechar</button></div></div>`;
+  };
+  pintar(); document.body.appendChild(modal);
+  if (S.entrada && !S.entrada.lido && !S.entrada.carregando && typeof lerEntrada === 'function') { await lerEntrada(); if (document.getElementById('xml92-modal')) pintar(); }
+}
+async function anexarXmlNaLinha92(id, fileId) {
+  const l = (S.lancamentos || []).find(x => String(x.id) === String(id));
+  const E = S.entrada || { itens: [] };
+  const it = (E.itens || []).find(x => x.fileId === fileId);
+  if (!l || !it) return;
+  const pdf = it._parXml92 ? E.itens.find(x => x.fileId === it._parXml92) : null;   // o PDF da mesma nota vai junto para o botão NF-e
+  const ordem = [it].concat(pdf && !(l.docs && (l.docs.nfe || l.docs.nota)) ? [pdf] : []);
+  try {
+    showSyncIndicator('Anexando...');
+    ordem.forEach(x => { x.salvando = true; });
+    const mes = (brToIso(l.data) || it.info.data || new Date().toISOString()).slice(0, 7);
+    const upds = await guardarNoMes91(ordem, mes);
+    l.docs = l.docs || {}; l.docs.xml = upds[0].webViewLink; if (upds[1]) l.docs.nfe = upds[1].webViewLink;
+    const i = it.info || {};
+    l.docs._nota = Object.assign({}, l.docs._nota, { tipo: it.tipo || '', numero: i.numero || '', chave: chaveNota92(it), cnpj: String(i.emitCnpj || '').replace(/\D/g, ''), emitente: i.emitNome || '', nomes: palavras92([i.emitNome, i.descricao, i.emitEmail].join(' ')).slice(0, 12) });
+    l.observacao = juntaObs91(l.observacao, 'XML: ' + upds[0].name + (upds[1] ? ' · Nota: ' + upds[1].name : ''));
+    logAction('anexar', 'EXTRATO_CAIXA', l.id, `XML anexado à linha ${l.descricao} R$ ${Number(l.valor).toFixed(2)}`);
+    E.itens = E.itens.filter(x => !ordem.includes(x));
+    try { juntarTudo92(E.itens); } catch (e) {}
+    await saveToSheets();
+    hideSyncIndicator();
+    const m = document.getElementById('xml92-modal'); if (m) m.remove();
+    showToast('✅ XML anexado na linha do extrato' + (upds[1] ? ' (e o PDF da nota)' : '')); render();
+  } catch (e) { ordem.forEach(x => { x.salvando = false; }); hideSyncIndicator(); showToast('⚠️ ' + (e.message || e)); }
 }

@@ -415,14 +415,18 @@ function lerXmlNfse(txt) {
   const first = (...names) => { for (const n of names) { const el = doc.getElementsByTagNameNS('*', n)[0]; if (el && el.textContent.trim()) return el.textContent.trim(); } return ''; };
   const prest = doc.getElementsByTagNameNS('*', 'PrestadorServico')[0] || doc.getElementsByTagNameNS('*', 'Prestador')[0] || doc.getElementsByTagNameNS('*', 'emit')[0];
   const sub = (root, ...names) => { if (!root) return ''; for (const n of names) { const el = root.getElementsByTagNameNS('*', n)[0]; if (el) return el.textContent.trim(); } return ''; };
+  // v92: NFS-e nacional — chave de acesso de 50 dígitos no Id do infNFSe (a mesma impressa no PDF / DANFSe)
+  const infN = doc.getElementsByTagNameNS('*', 'infNFSe')[0];
+  const ch50 = ((infN && infN.getAttribute('Id')) || '').match(/\d{50}/);
   return {
+    chaveNfse: ch50 ? ch50[0] : '', emitEmail: sub(prest, 'email', 'Email'),
     origem: 'xml', tipo: 'nfse', modelo: 'NFS-e',
     numero: first('Numero', 'nNFSe', 'nDFSe'),
     emitCnpj: sub(prest, 'Cnpj', 'CNPJ'), emitNome: sub(prest, 'RazaoSocial', 'xNome', 'NomeFantasia'),
     valor: Number(String(first('ValorLiquidoNfse', 'ValorServicos', 'vLiq', 'vServ')).replace(',', '.')) || 0,
     data: first('DataEmissao', 'dhEmi', 'dhProc').slice(0, 10),
     descricao: first('Discriminacao', 'xDescServ').slice(0, 200),
-    chave: (first('CodigoVerificacao') ? 'NFSE-' + sub(prest, 'Cnpj', 'CNPJ') + '-' + first('Numero', 'nNFSe') : ''),
+    chave: (first('CodigoVerificacao') ? 'NFSE-' + sub(prest, 'Cnpj', 'CNPJ') + '-' + first('Numero', 'nNFSe') : (ch50 ? ch50[0] : '')),
     refs: [],
   };
 }
@@ -865,6 +869,142 @@ function baixarContaPeloComprovante91(item, upd) {
   return l;
 }
 
+// ── v92: nota fiscal (PDF + XML) vai para o pagamento que já está no extrato (botões NF-e e XML) ──
+// Ex.: a nota sai com a razão social da empresa e o pagamento foi lançado com o nome fantasia: acha pelo CNPJ do extrato do banco ou pelo nome fantasia na descrição / e-mail da nota.
+const chaveNota92 = it => { const i = (it && it.info) || {}; return i.chaveNfse || (/^\d{44}$/.test(i.chave || '') ? i.chave : ''); };
+const ehNotaAdm92 = it => it && (it.tipo === 'nfse' || it.tipo === 'nfe') && (!it.processo || it.processo === '__ADM');
+const NAO_NOME92 = /^(LTDA|EIRELI|EPP|COMERCIO|SERVICOS|SERVICO|PAGAMENTOS|PAGAMENTO|EMPRESA|BRASIL|BRAZIL|SISTEMAS|TECNOLOGIA|DESENVOLVIMENTO|INDUSTRIA|PRESTACAO|ENVIADO|BOLETO|DESPESAS|ADMINISTRATIVAS|SOFTWARE|OUTRAS|COMPROVANTE|REEMBOLSO|SOCIO)$/;
+const palavras92 = t => [...new Set(semAc91(t).replace(/[^A-Z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length >= 4 && !/^\d+$/.test(w) && !NAO_NOME92.test(w)))];
+const cnpjsDoTexto92 = t => (String(t || '').match(/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g) || []).map(x => x.replace(/\D/g, '')).filter(x => x !== FU_SONG_CNPJ);
+function textoNota92(it) {
+  const i = it.info || {};
+  // só quem emitiu, o serviço e o e-mail (o resto do PDF tem o tomador, endereços e cidade: daria falso "mesma empresa")
+  return semAc91([i.emitNome, i.descricao, i.emitEmail].filter(Boolean).join(' '));
+}
+// o pagamento já lançado desta nota: mesma nota (chave), ou mesmo valor + data perto + mesma empresa (CNPJ, nome ou cadastro)
+function linhaDaNota92(it, par) {
+  const L = S.lancamentos || [];
+  const ch = chaveNota92(it) || chaveNota92(par);
+  if (ch) { const m = L.find(l => l.docs && l.docs._nota && l.docs._nota.chave === ch); if (m) return { linha: m, forte: true, por: 'mesma nota' }; }
+  const v = Number(it.info.valor) || Number(par && par.info.valor) || 0; if (!v) return null;
+  const d = it.info.data || (par && par.info.data) || '';
+  const cnpj = String(it.info.emitCnpj || (par && par.info.emitCnpj) || '').replace(/\D/g, '');
+  const txt = textoNota92(it) + ' ' + (par ? textoNota92(par) : '');
+  const forn = cnpj ? (S.fornecedores || []).find(f => String(f.cnpj || '').replace(/\D/g, '') === cnpj) : null;
+  const cands = L.filter(l => l.tipo === 'Despesa' && l.vinculo !== 'processo' && Math.abs((Number(l.valor) || 0) - v) < 0.01
+    && !(l.docs && (l.docs.nfe || l.docs.nota || l.docs.xml || l.docs._nota))
+    && (!d || !l.data || Math.abs((new Date(brToIso(l.data)) - new Date(d)) / 864e5) <= 10));
+  const forte = cands.filter(l => {
+    const lt = [l.empresa, l.descricao, l.observacao].join(' ');
+    if (cnpj && cnpjsDoTexto92(lt).includes(cnpj)) return true;
+    const nomes = palavras92(l.empresa || String(l.descricao || '').split('—').pop());
+    if (nomes.some(w => txt.includes(w))) return true;
+    return !!(forn && palavras92(forn.nome).some(w => semAc91(lt).includes(w)));
+  });
+  if (forte.length === 1) return { linha: forte[0], forte: true, por: cnpj && cnpjsDoTexto92([forte[0].empresa, forte[0].descricao, forte[0].observacao].join(' ')).includes(cnpj) ? 'CNPJ' : 'empresa, valor e data' };
+  if (!forte.length && cands.length === 1) return { linha: cands[0], forte: false, por: 'valor e data' };
+  return null;
+}
+// Na Caixa de Entrada: PDF e XML da mesma nota andam juntos; e cada nota mostra o pagamento que vai receber
+function juntarNotas92(lista) {
+  lista = lista || (S.entrada && S.entrada.itens) || [];
+  lista.forEach(it => { delete it._parXml92; delete it._linha92; });
+  const notas = lista.filter(ehNotaAdm92);
+  const xmls = notas.filter(it => it.formato === 'xml'), pdfs = notas.filter(it => it.formato !== 'xml');
+  xmls.forEach(x => {
+    const ch = chaveNota92(x);
+    const p = pdfs.find(y => !y._parXml92 && y.tipo === x.tipo && ((ch && chaveNota92(y) === ch)
+      || (!chaveNota92(y) && x.info.numero && String(Number(y.info.numero || 0)) === String(Number(x.info.numero)) && Math.abs((Number(y.info.valor) || 0) - (Number(x.info.valor) || 0)) < 0.01)));
+    if (!p) return;
+    x._parXml92 = p.fileId; p._parXml92 = x.fileId;
+    ['emitNome', 'emitCnpj', 'numero', 'chaveNfse', 'descricao', 'emitEmail'].forEach(k => { if (x.info[k]) p.info[k] = x.info[k]; });   // o XML é a fonte certa
+    if (!(Number(p.info.valor) > 0) && x.info.valor) p.info.valor = x.info.valor;
+    if (!p.info.data && x.info.data) p.info.data = x.info.data;
+  });
+  notas.forEach(it => {
+    const par = it._parXml92 ? lista.find(y => y.fileId === it._parXml92) : null;
+    const r = it.semLinha92 || (par && par.semLinha92) ? null : linhaDaNota92(it, par);   // "Não é esse pagamento"
+    if (!r) return;
+    it._linha92 = { id: r.linha.id, forte: r.forte, por: r.por };
+    if (r.forte && !it.processo) it.processo = '__ADM';   // nota sem processo que é de um pagamento do mês já lançado
+    if (r.forte && !it.categoriaManual && r.linha.categoria && !/^(Despesas administrativas|Outras despesas)$/.test(r.linha.categoria)) it.categoria = r.linha.categoria;
+    if (it.confianca !== 'manual') it.confianca = r.forte ? 'alta' : 'media';
+  });
+  return lista;
+}
+function juntarTudo92(lista) { juntarGuias91(lista); juntarNotas92(lista); return lista; }
+// "Não é esse pagamento": a nota (e o PDF/XML par dela) não liga na linha sugerida
+function semLinhaNota92(fileId, voltar) {
+  const E = S.entrada || { itens: [] };
+  const it = E.itens.find(x => x.fileId === fileId); if (!it) return;
+  const par = it._parXml92 ? E.itens.find(y => y.fileId === it._parXml92) : null;
+  [it, par].filter(Boolean).forEach(x => { if (voltar) delete x.semLinha92; else x.semLinha92 = true; });
+  try { juntarTudo92(E.itens); } catch (e) {}
+  render();
+}
+// o que vai acontecer com a nota (aparece no cartão da Caixa de Entrada)
+function linhaNota92(it) {
+  if (!ehNotaAdm92(it) || it.processo !== '__ADM') return '';
+  const box = (cor, html) => `<div style="margin-top:10px;font-size:12px;color:${cor}">${html}</div>`;
+  const E = S.entrada || { itens: [] };
+  const par = it._parXml92 ? E.itens.find(y => y.fileId === it._parXml92) : null;
+  let h = par ? box('var(--green)', `🔗 ${it.formato === 'xml' ? 'XML' : 'PDF'} da mesma nota que <b>${escHtml(par.nome)}</b>: vão juntos (${it.formato === 'xml' ? 'XML no botão XML, PDF no botão NF-e' : 'PDF no botão NF-e, XML no botão XML'}).`) : '';
+  const l = it._linha92 && (S.lancamentos || []).find(x => x.id === it._linha92.id);
+  const fid = escHtml(String(it.fileId));
+  const link = (txt, voltar) => ` <a href="#" onclick="semLinhaNota92('${fid}'${voltar ? ',true' : ''});return false" style="color:var(--accent);font-weight:600">${txt}</a>`;
+  if (it.semLinha92 || (par && par.semLinha92)) return h + box('var(--yellow)', `🟡 Você marcou que a nota não é do pagamento parecido: ${it.tipo === 'nfse' ? 'ela vira uma despesa nova do mês (paga).' : 'ela fica guardada nos documentos do mês.'}${link('Ligar de novo', true)}`);
+  if (l) h += it._linha92.forte ? box('var(--green)', `🔗 Vai para o pagamento já lançado: <b>${escHtml(l.descricao)}</b> (${escHtml(l.data || '—')}, pelo ${escHtml(it._linha92.por)}). Não cria outra linha.${link('Não é esse pagamento')}`)
+    : box('var(--yellow)', `🟡 Parece o pagamento <b>${escHtml(l.descricao)}</b> (${escHtml(l.data || '—')}): mesmo valor e data, mas a empresa não aparece na nota. Confira antes de anexar.${link('Não é esse pagamento')}`);
+  else h += box('var(--yellow)', it.tipo === 'nfse' ? `🟡 Nenhum pagamento de R$ ${fmt(it.info.valor || 0)} lançado perto dessa data: a nota vira despesa do mês (paga). Quando o comprovante ou o extrato chegar, liga nessa mesma linha.` : `🟡 Nenhum pagamento de R$ ${fmt(it.info.valor || 0)} lançado perto dessa data: a nota fica guardada nos documentos do mês.`);
+  return h;
+}
+// Anexar: a nota (PDF e/ou XML) entra no pagamento já lançado; sem pagamento, a NFS-e vira despesa do mês (como antes)
+function lancarNota92(pdf, updPdf, xml, updXml) {
+  const base = xml || pdf, outro = xml ? pdf : null;
+  const r = base.semLinha92 || (outro && outro.semLinha92) ? null : linhaDaNota92(base, outro);
+  const i = base.info || {};
+  const meta = { tipo: base.tipo, numero: i.numero || '', chave: chaveNota92(base) || chaveNota92(outro), cnpj: String(i.emitCnpj || '').replace(/\D/g, ''), emitente: i.emitNome || '', nomes: palavras92([i.emitNome, i.descricao, i.emitEmail].join(' ')).slice(0, 12) };
+  const rot = (base.tipo === 'nfse' ? 'NFS-e ' : 'NF-e ') + (meta.numero || '') + (meta.emitente ? ' (' + meta.emitente + ')' : '');
+  if (r) {
+    const l = r.linha; l.docs = l.docs || {};
+    if (updPdf && !l.docs.nfe) l.docs.nfe = updPdf.webViewLink;
+    if (updXml && !l.docs.xml) l.docs.xml = updXml.webViewLink;
+    const mesma = !!(l.docs._nota && meta.chave && l.docs._nota.chave === meta.chave);   // o PDF / XML que faltava da mesma nota
+    l.docs._nota = Object.assign({}, l.docs._nota, meta);
+    if (/^(Despesas administrativas|Outras despesas)?$/.test(l.categoria || '') && base.categoria) { l.categoria = base.categoria; l.descricao = base.categoria + ' — ' + (l.empresa || meta.emitente); }
+    if (!mesma) l.observacao = juntaObs91(l.observacao, 'Nota: ' + rot.trim());
+    // a empresa do pagamento (cadastro com o nome fantasia) passa a ter o CNPJ da nota: a próxima nota acha sozinha
+    if (meta.cnpj && typeof fmtCnpj === 'function') {
+      const f = (S.fornecedores || []).find(x => !String(x.cnpj || '').replace(/\D/g, '') && palavras92(x.nome).some(w => semAc91(l.empresa || '').includes(w)));
+      if (f) f.cnpj = fmtCnpj(meta.cnpj);
+    }
+    logAction('editar', 'EXTRATO_CAIXA', l.id, `Nota anexada ao pagamento ${l.descricao} R$ ${Number(l.valor).toFixed(2)}: ${rot.trim()}`);
+    return l;
+  }
+  if (base.tipo !== 'nfse' || typeof lancarDespesaDaNota !== 'function') return null;
+  const obj = lancarDespesaDaNota(pdf || xml, updPdf || updXml);
+  if (obj) {
+    obj.docs = obj.docs || {};
+    if (updPdf && !obj.docs.nfe) obj.docs.nfe = updPdf.webViewLink;
+    if (updXml && !obj.docs.xml) obj.docs.xml = updXml.webViewLink;
+    if (!updPdf && updXml && obj.docs.nota === updXml.webViewLink) delete obj.docs.nota;   // o XML fica no botão XML, não no NF-e
+    obj.docs._nota = Object.assign({}, obj.docs._nota, meta);
+  }
+  return obj;
+}
+// Comprovante que chega depois da nota: acha a linha que a nota criou (CNPJ do recebedor, nome, ou a única com o mesmo valor)
+function linhaDaNotaParaComprovante92(item) {
+  const v = Number(item.info.valor) || 0; if (!v) return null;
+  const pag = item.info.pagamento || {};
+  const cnpjs = [String(pag.documento || '').replace(/\D/g, ''), ...cnpjsDoTexto92(item.texto)].filter(x => x.length === 14);
+  const quem = palavras92([pag.recebedor, item.info.emitNome, item.nome].join(' '));
+  const d = item.info.data || '';
+  const cands = (S.lancamentos || []).filter(l => l.tipo === 'Despesa' && l.vinculo !== 'processo' && l.docs && l.docs._nota && !l.docs.comprovante && !l.docs._banco
+    && Math.abs((Number(l.valor) || 0) - v) < 0.01 && (!d || !l.data || Math.abs((new Date(brToIso(l.data)) - new Date(d)) / 864e5) <= 10));
+  const forte = cands.filter(l => (l.docs._nota.cnpj && cnpjs.includes(l.docs._nota.cnpj)) || quem.some(w => (l.docs._nota.nomes || []).includes(w) || semAc91(l.empresa || '').includes(w)));
+  return forte.length === 1 ? forte[0] : (!forte.length && cands.length === 1 ? cands[0] : null);
+}
+
 // "FS260098 99 01" ou "FS2600989901" = FS260098, FS260099 e FS260101 (só os 2 últimos dígitos; se diminuir, vira a centena seguinte)
 // Também a forma curta do PIX (campo de 30 caracteres): "FS 113 114" = FS260113 e FS260114; "109S"; "113x2" = 2 containers
 // (o "xN" logo depois do número é a quantidade de containers daquele processo: o PIX é dividido por container)
@@ -1087,7 +1227,7 @@ async function lerEntrada() {
     if (gen !== window._lerEntradaGen) return;   // uma leitura mais nova já está valendo
     E.itens = itens; E.lido = true;
     try { ligarPeloLote(E.itens); } catch (e) { console.warn('lote', e); }
-    try { juntarGuias91(E.itens); } catch (e) { console.warn('guias', e); }
+    try { juntarTudo92(E.itens); } catch (e) { console.warn('guias', e); }
     const planilhas = itens.filter(it => it.tipo === 'planilhaCambio');
     if (planilhas.length && typeof aplicarMapaCambio === 'function') {
       E.progresso = 'Aplicando a planilha de câmbio do banco...'; render();
@@ -1102,7 +1242,7 @@ async function lerEntrada() {
       E.itens = itens.filter(it => it.tipo !== 'planilhaCambio');
       E.itens.forEach(it => { try { identificarItem(it); } catch (e) {} });
       try { ligarPeloLote(E.itens); } catch (e) {}
-      try { juntarGuias91(E.itens); } catch (e) {}
+      try { juntarTudo92(E.itens); } catch (e) {}
       try { await saveToSheets(); } catch (e) {}
     }
   } catch (e) {
@@ -1552,6 +1692,15 @@ function lancarFinanceiroDoDoc(item, p, upd) {
   if (S.lancamentos.some(x => x.docs && (x.docs.comprovante === upd.webViewLink || (pag.idTransacao && x.docs.idTransacao === pag.idTransacao)))) return;
   if (!p && baixarContaPeloComprovante91(item, upd)) return;   // v91: comprovante de uma guia / boleto em aberto → a mesma linha fica paga
   if (!valor) return;
+  if (!p) {   // v92: a nota já criou a linha deste pagamento (a nota com a razão social e o comprovante com o nome fantasia)
+    const ln = linhaDaNotaParaComprovante92(item);
+    if (ln) {
+      ln.docs.comprovante = upd.webViewLink; if (pag.idTransacao) ln.docs.idTransacao = pag.idTransacao; ln.status = 'Pago';
+      ln.observacao = juntaObs91(ln.observacao, 'Comprovante: ' + upd.name);
+      logAction('editar', 'EXTRATO_CAIXA', ln.id, `Comprovante anexado à linha da nota: ${ln.descricao} R$ ${Number(ln.valor).toFixed(2)}`);
+      return;
+    }
+  }
   if (!p && typeof lancamentoParecido === 'function') { const ja = lancamentoParecido(valor, item.info.data, pag.recebedor || item.info.emitNome); if (ja) { ja.docs = ja.docs || {}; ja.docs.comprovante = ja.docs.comprovante || upd.webViewLink; return; } }
   const centroAdm = !p;
   const categoria = item.categoria || (centroAdm ? 'Despesas administrativas' : 'Outros custos do processo');
@@ -1609,24 +1758,46 @@ async function confirmarAdm(i, silencioso) {
   const ehConta = it => it && (it.tipo === 'guia' || it.tipo === 'boleto');
   const conta = ehConta(item) ? item : (ehConta(par) ? par : null);
   const comp = conta ? (conta === item ? par : item) : null;
-  const juntos = [item, par].filter(Boolean);
+  // v92: PDF e XML da mesma nota vão juntos (botões NF-e e XML da mesma linha)
+  const nota = !conta && ehNotaAdm92(item);
+  const parNota = nota && item._parXml92 ? E.itens.find(x => x !== item && x.fileId === item._parXml92 && !x.salvando) : null;
+  const notaPdf = nota ? (item.formato === 'xml' ? parNota : item) : null, notaXml = nota ? (item.formato === 'xml' ? item : parNota) : null;
+  const juntos = [item, par, parNota].filter(Boolean);
   juntos.forEach(it => { it.salvando = true; }); if (!silencioso) render();
   try {
     const mes = ((comp && comp.info.data) || item.info.data || new Date().toISOString()).slice(0, 7);
-    const ordem = conta ? [conta, comp].filter(Boolean) : [item];
+    const ordem = conta ? [conta, comp].filter(Boolean) : nota ? [notaPdf, notaXml].filter(Boolean) : [item];
     const upds = await guardarNoMes91(ordem, mes);
     const upd = upds[ordem.indexOf(item)];
-    ordem.forEach(it => {   // despesa geral: quem emitiu vira cadastro de "Despesas gerais (ADM)" (se ainda não existe)
+    const cadastrar = it => {   // despesa geral: quem emitiu vira cadastro de "Despesas gerais (ADM)" (se ainda não existe)
       it._adm = true;
       if (typeof cadastrarPeloDoc === 'function') { try { cadastrarPeloDoc(it); } catch (e) { console.warn('cadastro', e); } }
-    });
+    };
+    if (!nota) ordem.forEach(cadastrar);
     let msg = '✅ Guardado como despesa do mês ' + mes.slice(5) + '/' + mes.slice(0, 4);
     if (conta) {
       const l = lancarConta91(conta, upds[0], comp, comp ? upds[1] : null);
       msg = comp ? `✅ ${rotuloConta91(conta)} e comprovante guardados juntos: ${l ? l.descricao + ' (pago em ' + (l.data || '—') + ')' : 'despesa do mês'}`
         : (l && l.status === 'Pago' ? `✅ ${rotuloConta91(conta)} anexada ao pagamento já lançado: ${l.descricao}` : `✅ ${rotuloConta91(conta)} guardada como conta a pagar${l && l.data ? ' (vence ' + l.data + ')' : ''}`);
     }
-    else if (item.pagoPor === 'socio' && typeof lancarReembolsoSocio === 'function') lancarReembolsoSocio(item, null, upd);
+    else if (item.pagoPor === 'socio' && typeof lancarReembolsoSocio === 'function') { if (nota) cadastrar(notaXml || notaPdf); lancarReembolsoSocio(item, null, upd); }
+    else if (nota) {
+      const updPdf = notaPdf ? upds[ordem.indexOf(notaPdf)] : null, updXml = notaXml ? upds[ordem.indexOf(notaXml)] : null;
+      const antes = (S.lancamentos || []).length;
+      const l = lancarNota92(notaPdf, updPdf, notaXml, updXml);
+      cadastrar(notaXml || notaPdf);   // depois de ligar: a empresa do pagamento já tem o CNPJ da nota (não cria cadastro repetido)
+      if (l && (S.lancamentos || []).length === antes) {
+        msg = `✅ Nota anexada ao pagamento já lançado: ${l.descricao}` + (notaPdf && notaXml ? ' (PDF e XML)' : '');
+        // aprende a categoria para as próximas notas dessa empresa (a categoria da linha do pagamento)
+        try {
+          const base = notaXml || notaPdf, k = typeof chaveCategAdm === 'function' ? chaveCategAdm(base) : '';
+          if (k && l.categoria && S.banco && !(S.banco.regras || []).some(x => x.tipo === 'catAdm' && x.valor === k)) {
+            S.banco.regras = (S.banco.regras || []).concat([{ id: genId(), tipo: 'catAdm', valor: k, categoria: l.categoria, centro: 'ADM', criadoEm: new Date().toISOString() }]);
+            if (typeof gravarAba2 === 'function') { await ensureTabs2(); await gravarAba2('REGRAS', S.banco.regras); }
+          }
+        } catch (e) { console.warn('regra categoria', e); }
+      } else if (l) msg = `✅ Nota guardada como despesa do mês: ${l.descricao}`;
+    }
     else if (['nfse', 'recibo'].includes(item.tipo) && typeof lancarDespesaDaNota === 'function') lancarDespesaDaNota(item, upd);
     else lancarFinanceiroDoDoc(item, null, upd);
     E.itens = E.itens.filter(x => !ordem.includes(x));
@@ -1677,7 +1848,7 @@ function setInfoEntrada(i, campo, valor) {
   if (campo === 'valor') { it.info.valor = numEntrada(valor) || 0; it.valorManual = true; if (it.info.pagamento) it.info.pagamento.valor = it.info.valor; }
   else it.info[campo] = valor;
   if (campo === 'data') it._dataManual91 = true;
-  try { juntarGuias91(S.entrada.itens); } catch (e) {}
+  try { juntarTudo92(S.entrada.itens); } catch (e) {}
   render();
 }
 function setEntrada(i, campo, valor) {
@@ -1687,7 +1858,7 @@ function setEntrada(i, campo, valor) {
   if (campo === 'tipo' || campo === 'processo') { it.confianca = 'manual'; it.duplicado = procurarDuplicado(it); }
   if (campo === 'tipo' && valor === 'guia' && !(it.info && it.info.guia)) { preencherGuia91(it); if (!it.processo) it.processo = '__ADM'; }
   if (campo === 'processo' || campo === 'tipo') { try { ligarPeloLote(S.entrada.itens); } catch (e) {} }   // quem cita este documento acompanha
-  try { juntarGuias91(S.entrada.itens); } catch (e) {}
+  try { juntarTudo92(S.entrada.itens); } catch (e) {}
   render();
 }
 
@@ -1728,6 +1899,7 @@ function renderEntrada() {
       ${it.aviso ? `<div style="margin-top:10px;font-size:12px;color:var(--yellow)">⚠️ ${escHtml(it.aviso)}</div>` : ''}
       ${it.corrigido ? `<div style="margin-top:10px;font-size:12px;color:var(--green)">↪️ ${escHtml(it.corrigido)}</div>` : ''}
       ${linhaPar91(it)}
+      ${linhaNota92(it)}
       ${it.processo && it.processo !== '__ADM' && !(S.processos || []).some(p => p.id === it.processo) ? `<div style="margin-top:10px;font-size:12px;color:var(--red)">⚠️ O processo ${escHtml(it.processo)} não existe no ERP. Escolha o processo correto.</div>` : ''}
       ${it.info.cambio && it.info.cambio.faturas.length ? `<div style="margin-top:10px;font-size:12px;color:var(--muted2)">Faturas pagas por este câmbio: ${it.info.cambio.faturas.map(f => `<b style="color:var(--text)">${escHtml(f.processo)}</b> USD ${fmt(f.usd)}`).join(' · ')}${it.processosExtras && it.processosExtras.length ? ' — será anexado a todos' : ''}</div>` : ''}
       <div class="g2" style="margin-top:12px">
