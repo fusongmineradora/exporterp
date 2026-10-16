@@ -1801,6 +1801,7 @@ async function confirmarAdm(i, silencioso) {
     else if (['nfse', 'recibo'].includes(item.tipo) && typeof lancarDespesaDaNota === 'function') lancarDespesaDaNota(item, upd);
     else lancarFinanceiroDoDoc(item, null, upd);
     E.itens = E.itens.filter(x => !ordem.includes(x));
+    try { juntarTudo92(E.itens); } catch (e) {}   // as notas que sobraram procuram de novo (ex.: o comprovante acabou de criar a linha do pagamento delas)
     if (!silencioso) { await saveToSheets(); showToast(msg); render(); }   // grava já a linha do extrato (antes ficava para o próximo salvamento)
     return true;
   } catch (e) { juntos.forEach(it => { it.salvando = false; }); item.erro = e.message || String(e); if (!silencioso) render(); return false; }
